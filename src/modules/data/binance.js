@@ -3,10 +3,61 @@ const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
 
-const client = axios.create({
-  baseURL: config.binance.baseUrl,
-  timeout: 15_000,
-});
+const FALLBACK_ENDPOINTS = [
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+  'https://api4.binance.com',
+  'https://api-gcp.binance.com',
+  'https://data-api.binance.vision',
+];
+
+/**
+ * Perform a GET request with fallback support for regional blocks (451).
+ *
+ * @param {string} path - API path (e.g. '/api/v3/klines')
+ * @param {Object} params - Query params
+ * @returns {Promise<any>}
+ */
+async function getWithFallback(path, params = {}) {
+  const urls = [config.binance.baseUrl, ...FALLBACK_ENDPOINTS];
+  let lastError;
+
+  for (const baseUrl of urls) {
+    try {
+      const response = await axios.get(`${baseUrl}${path}`, {
+        params,
+        timeout: 10_000,
+      });
+      return response.data;
+    } catch (err) {
+      lastError = err;
+      const status = err.response?.status;
+
+      // 451: Unavailable For Legal Reasons (Region Block)
+      if (status === 451) {
+        logger.warn(`❌ Region blocked at ${baseUrl}, trying next fallback...`);
+        continue;
+      }
+
+      // If it's a rate limit (429), just stop and log it
+      if (status === 429) {
+        logger.error(`⚠️ Rate limited at ${baseUrl}, aborting...`);
+        throw err;
+      }
+
+      // For other errors, log and try next if it's a network issue, otherwise throw
+      if (!err.response) {
+        logger.warn(`⚠️ Network error at ${baseUrl}, trying next...`);
+        continue;
+      }
+
+      break;
+    }
+  }
+
+  throw lastError;
+}
 
 /**
  * Fetch OHLCV candlestick data from Binance.
@@ -21,9 +72,7 @@ const client = axios.create({
  */
 async function fetchOHLCV(symbol, interval, limit = 100) {
   try {
-    const { data } = await client.get('/api/v3/klines', {
-      params: { symbol, interval, limit },
-    });
+    const data = await getWithFallback('/api/v3/klines', { symbol, interval, limit });
 
     return data.map((candle) => ({
       openTime: candle[0],
@@ -71,7 +120,7 @@ async function fetchMultiTimeframe(symbol) {
  */
 async function fetchTopPairs(limit = config.scanner.maxPairs) {
   try {
-    const { data } = await client.get('/api/v3/ticker/24hr');
+    const data = await getWithFallback('/api/v3/ticker/24hr');
 
     const usdtPairs = data
       .filter((t) => t.symbol.endsWith('USDT') && !t.symbol.includes('UP') && !t.symbol.includes('DOWN'))
@@ -95,9 +144,7 @@ async function fetchTopPairs(limit = config.scanner.maxPairs) {
  */
 async function fetch24hTicker(symbol) {
   try {
-    const { data } = await client.get('/api/v3/ticker/24hr', {
-      params: { symbol },
-    });
+    const data = await getWithFallback('/api/v3/ticker/24hr', { symbol });
 
     return {
       symbol: data.symbol,
