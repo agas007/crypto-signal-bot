@@ -32,4 +32,4 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           # Optional envs (you can add more to secrets if needed)
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'openai/gpt-4o-mini' }}
-          MIN_RR_RATIO: ${{ secrets.MIN_RR_RATIO || '3.0' }}
+          MIN_RR_RATIO: ${{ secrets.MIN_RR_RATIO || '2.0' }}

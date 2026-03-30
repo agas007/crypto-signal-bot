@@ -24,10 +24,17 @@ let currentWorkingUrl = config.binance.baseUrl;
  * @returns {Promise<any>}
  */
 async function getWithFallback(path, params = {}) {
-  const urls = [currentWorkingUrl, config.binance.baseUrl, ...FALLBACK_ENDPOINTS];
+  // Most resilient endpoints first
+  const urls = [
+    currentWorkingUrl,
+    'https://data-api.binance.vision',
+    'https://api.binance.me',
+    config.binance.baseUrl,
+    ...FALLBACK_ENDPOINTS,
+  ];
+  
   // Filter unique URLs to avoid redundant attempts
   const uniqueUrls = [...new Set(urls)];
-  
   let lastError;
 
   for (const baseUrl of uniqueUrls) {
@@ -48,27 +55,16 @@ async function getWithFallback(path, params = {}) {
       lastError = err;
       const status = err.response?.status;
 
-      // 451: Unavailable For Legal Reasons (Region Block)
-      if (status === 451) {
-        // Only log if it was our "known working" one or the primary one
-        if (baseUrl === currentWorkingUrl || baseUrl === config.binance.baseUrl) {
-          logger.warn(`❌ Region blocked at ${baseUrl}, searching for working fallback...`);
-        }
-        continue;
-      }
-
-      // If it's a rate limit (429), just stop and log it
+      // Rate limit (429) is a hard stop
       if (status === 429) {
         logger.error(`⚠️ Rate limited at ${baseUrl}, aborting...`);
         throw err;
       }
 
-      // For other errors, try next if it's a network issue
-      if (!err.response) {
-        continue;
-      }
-
-      break;
+      // For any other error (regional block, network issue, 403, 451 etc), try next
+      const code = status || 'NETWORK_ERR';
+      logger.warn(`⚠️ Endpoint ${baseUrl} failed (${code}), trying next fallback...`);
+      continue;
     }
   }
 
