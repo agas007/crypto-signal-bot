@@ -4,13 +4,17 @@ const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
 
 const FALLBACK_ENDPOINTS = [
+  'https://data-api.binance.vision', // Most accessible for public data
+  'https://api.binance.me',          // Often works where .com is blocked
+  'https://api-gcp.binance.com',
   'https://api1.binance.com',
   'https://api2.binance.com',
   'https://api3.binance.com',
   'https://api4.binance.com',
-  'https://api-gcp.binance.com',
-  'https://data-api.binance.vision',
 ];
+
+// Cache the working endpoint to avoid spamming blocked ones
+let currentWorkingUrl = config.binance.baseUrl;
 
 /**
  * Perform a GET request with fallback support for regional blocks (451).
@@ -20,15 +24,25 @@ const FALLBACK_ENDPOINTS = [
  * @returns {Promise<any>}
  */
 async function getWithFallback(path, params = {}) {
-  const urls = [config.binance.baseUrl, ...FALLBACK_ENDPOINTS];
+  const urls = [currentWorkingUrl, config.binance.baseUrl, ...FALLBACK_ENDPOINTS];
+  // Filter unique URLs to avoid redundant attempts
+  const uniqueUrls = [...new Set(urls)];
+  
   let lastError;
 
-  for (const baseUrl of urls) {
+  for (const baseUrl of uniqueUrls) {
     try {
       const response = await axios.get(`${baseUrl}${path}`, {
         params,
         timeout: 10_000,
       });
+      
+      // Success! Update our sticky endpoint
+      if (currentWorkingUrl !== baseUrl) {
+        logger.info(`✨ Successfully connected via ${baseUrl}`);
+        currentWorkingUrl = baseUrl;
+      }
+      
       return response.data;
     } catch (err) {
       lastError = err;
@@ -36,7 +50,10 @@ async function getWithFallback(path, params = {}) {
 
       // 451: Unavailable For Legal Reasons (Region Block)
       if (status === 451) {
-        logger.warn(`❌ Region blocked at ${baseUrl}, trying next fallback...`);
+        // Only log if it was our "known working" one or the primary one
+        if (baseUrl === currentWorkingUrl || baseUrl === config.binance.baseUrl) {
+          logger.warn(`❌ Region blocked at ${baseUrl}, searching for working fallback...`);
+        }
         continue;
       }
 
@@ -46,9 +63,8 @@ async function getWithFallback(path, params = {}) {
         throw err;
       }
 
-      // For other errors, log and try next if it's a network issue, otherwise throw
+      // For other errors, try next if it's a network issue
       if (!err.response) {
-        logger.warn(`⚠️ Network error at ${baseUrl}, trying next...`);
         continue;
       }
 
