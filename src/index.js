@@ -31,7 +31,16 @@ process.on('unhandledRejection', (err) => {
 async function main() {
   try {
     initTelegram();
-    await startScanner();
+
+    if (process.env.MODE === 'oneshot') {
+      logger.info('Running in ONESHOT mode...');
+      const { runScanCycle } = require('./modules/scanner');
+      await runScanCycle();
+      logger.info('Oneshot cycle complete. Exiting.');
+      process.exit(0);
+    } else {
+      await startScanner();
+    }
   } catch (err) {
     logger.error('Fatal error:', err);
     process.exit(1);
