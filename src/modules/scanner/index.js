@@ -5,17 +5,17 @@ const { fetchTopPairs, fetchMultiTimeframe, fetch24hTicker } = require('../data/
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
 const { evaluateSignal } = require('../strategy');
-const { refineSignal } = require('../ai/openrouter');
+const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../telegram');
 const { generateChartImage } = require('../chart');
+const tracker = require('../tracker');
 
 /**
  * Run a single scan cycle:
- * 1. Fetch top pairs
- * 2. Filter by volume/trend/volatility
- * 3. Run strategy evaluation (with hard kill-switches)
- * 4. Send survivors to AI for final validation
- * 5. Send validated signals to Telegram
+ * 1. Monitor active trades for TP/SL
+ * 2. Fetch top pairs
+ * 3. Filter and evaluate
+ * 4. Send to AI and Telegram
  *
  * @returns {Promise<number>} Number of signals sent
  */
@@ -24,7 +24,10 @@ async function runScanCycle() {
   logger.info('═══════════════════════════════════════════════');
   logger.info('🔍 Starting scan cycle...');
 
-  // 1. Fetch top pairs by volume
+  // ─── 0. Monitor Active Trades ──────────────────────────
+  await checkActiveTrades();
+
+  // ─── 1. Fetch top pairs by volume ──────────────────────
   const pairs = await fetchTopPairs();
   if (!pairs.length) {
     logger.warn('No pairs fetched, aborting cycle');
@@ -163,15 +166,31 @@ async function runScanCycle() {
         continue;
       }
 
-      // Mark best-available signals clearly for Telegram formatting
-      if (candidate.lowConfidence) {
-        refined.isFallback = true;
+      refined.isFallback = candidate.lowConfidence;
+
+      // ─── Deduplication / Update Check ───
+      const active = tracker.getActive(candidate.symbol);
+      if (active) {
+        // If same bias and prices are close enough, just send update
+        const diffEntry = Math.abs(refined.entry - active.entry) / active.entry;
+        logger.info(`🧠 [Tracker] Found ${candidate.symbol} active. Price diff: ${(diffEntry*100).toFixed(2)}%`);
+        
+        if (refined.bias === active.bias && diffEntry < 0.01) {
+          logger.info(`🔄 ${candidate.symbol}: Skipping duplicate full signal.`);
+          await sendStatus(`🔄 *UPDATE ${candidate.symbol}*\n_Sinyal sebelumnya masih VALID._\n• *Entry:* \`${refined.entry}\` (±${(diffEntry*100).toFixed(1)}%)\n• *Status:* Ongoing trade.`);
+          continue;
+        } else {
+          // If bias changed or prices shifted significantly, update the tracker
+          logger.info(`⚠️ ${candidate.symbol}: Updating levels shifting by ${(diffEntry*100).toFixed(2)}%. Sending NEW signal message.`);
+          tracker.remove(candidate.symbol, 'UPDATING');
+        }
       }
 
       // ─── Generate and Send Chart ───
       const chartPath = await generateChartImage(candidate.symbol, candidate.candles, refined);
 
       await sendSignal(refined, chartPath);
+      tracker.track(refined); // Save to memory
       sentCount++;
     } catch (err) {
       logger.error(`AI validation failed for ${candidate.symbol}:`, err.message);
@@ -197,7 +216,7 @@ async function runScanCycle() {
 async function startScanner() {
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
-  await sendStatus('🤖 *Crypto Signal Bot v3.0.1* started!\n_Interactive mode — charts, buttons & commands active._\n_Multi-TF: D1 · H4 · H1 — scanning every 1 hour..._');
+  await sendStatus('🤖 *Crypto Signal Bot v3.1* started!\n_Signal Memory, AI Learning & Active Tracker active._\n_Multi-TF: D1 · H4 · H1 — scanning every 1 hour..._');
 
   // Run first cycle immediately
   await runScanCycle();
@@ -210,6 +229,54 @@ async function startScanner() {
       logger.error('Unhandled error in scan cycle:', err);
     }
   }, config.scanner.intervalMs);
+}
+
+/**
+ * Check if active trades have hit SL or TP.
+ */
+async function checkActiveTrades() {
+  const actives = tracker.getAllActive();
+  if (actives.length === 0) return;
+
+  logger.info(`🧠 Monitoring ${actives.length} active trades for SL/TP...`);
+
+  for (const trade of actives) {
+    try {
+      const ticker = await fetch24hTicker(trade.symbol);
+      if (!ticker) continue;
+
+      const currentPrice = parseFloat(ticker.lastPrice);
+      let hit = null;
+
+      if (trade.bias === 'LONG') {
+        if (currentPrice >= trade.take_profit) hit = 'TP';
+        else if (currentPrice <= trade.stop_loss) hit = 'SL';
+      } else {
+        if (currentPrice <= trade.take_profit) hit = 'TP';
+        else if (currentPrice >= trade.stop_loss) hit = 'SL';
+      }
+
+      if (hit) {
+        logger.info(`🎯 ${trade.symbol}: ${hit} HIT! Price: ${currentPrice}`);
+        const emoji = hit === 'TP' ? '✅' : '🚨';
+        
+        let learningInfo = '';
+        if (hit === 'SL') {
+          logger.info(`🧠 Requesting AI post-mortem for ${trade.symbol}...`);
+          learningInfo = `\n\n📖 *PELAJARAN (AI Analysis):*\n_` + await analyzePostMortem(trade, currentPrice) + `_`;
+        }
+
+        const msg = `${emoji} *${hit} HIT: ${trade.symbol}*\n\n` +
+                    `📊 *Bias:* \`${trade.bias}\`\n` +
+                    `💰 *Final Price:* \`${currentPrice}\`` + learningInfo;
+        
+        await sendStatus(msg);
+        tracker.remove(trade.symbol, `${hit}_HIT`);
+      }
+    } catch (err) {
+      logger.error(`Failed to monitor ${trade.symbol}:`, err.message);
+    }
+  }
 }
 
 module.exports = { startScanner, runScanCycle };

@@ -22,7 +22,7 @@ function initTelegram() {
   bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     bot.sendMessage(chatId, 
-      `🤖 *Crypto Signal Bot v3.0.1* is active!\n\n` +
+      `🤖 *Crypto Signal Bot v3.1.0* is active!\n\n` +
       `Commands:\n` +
       `📊 /status - Quick bot health check\n` +
       `📐 /strategy - View current trading logic\n` +
@@ -51,7 +51,7 @@ function initTelegram() {
   // /strategy command
   bot.onText(/\/strategy/, (msg) => {
     bot.sendMessage(msg.chat.id, 
-      `📐 *Current Strategy:* v3.0.1\n\n` +
+      `📐 *Current Strategy:* v3.1.0\n\n` +
       `• *Min Score:* 65/98\n` +
       `• *Min Confluence:* 3 reasons\n` +
       `• *Min R:R Ratio:* ${config.strategy.minRrRatio}\n` +
@@ -154,7 +154,7 @@ async function sendSignal(signal, imagePath = null) {
         caption: message,
         parse_mode: 'Markdown',
         reply_markup: replyMarkup
-      });
+      }, { contentType: false }); // Fix deprecation warning
       // Optionally cleanup the image after sending
       fs.unlinkSync(imagePath);
     } else {

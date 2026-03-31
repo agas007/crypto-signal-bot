@@ -204,4 +204,41 @@ async function refineSignal(signal) {
   }
 }
 
-module.exports = { refineSignal, buildPrompt, buildSystemPrompt };
+/**
+ * AI-driven post-mortem to analyze why a signal hit SL.
+ * 
+ * @param {Object} trade - The signal data
+ * @param {number} finalPrice - Price when SL was hit
+ * @returns {Promise<string>} Educational analysis
+ */
+async function analyzePostMortem(trade, finalPrice) {
+  const prompt = `
+🚨 TRADE FAILED (STOP LOSS HIT)
+Symbol: ${trade.symbol}
+Bias: ${trade.bias}
+Entry: ${trade.entry}
+SL: ${trade.stop_loss}
+TP: ${trade.take_profit}
+Exit Price: ${finalPrice}
+
+Technical Reason for signal: ${trade.reason}
+
+TASK: Provide a very brief (2-3 sentences) "post-mortem" analysis in Indonesian. 
+Explain logically why this trade might have failed based on price action and give a "lesson learned" to the user.
+Keep it simple and educational. Avoid generic advice.
+  `;
+
+  try {
+    const { data } = await client.post('/chat/completions', {
+      model: config.openRouter.model,
+      messages: [{ role: 'user', content: prompt }]
+    });
+
+    return data.choices?.[0]?.message?.content?.trim() || "Analisa gagal: AI tidak memberikan respon.";
+  } catch (err) {
+    logger.error('Post-mortem analysis failed:', err.message);
+    return "Analisa gagal: Koneksi AI terputus. Tetap semangat!";
+  }
+}
+
+module.exports = { refineSignal, analyzePostMortem, buildPrompt, buildSystemPrompt };

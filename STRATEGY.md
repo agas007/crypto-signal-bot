@@ -4,6 +4,26 @@ This document tracks the evolution of trading strategies used in the Crypto Sign
 
 ---
 
+## [v3.1.0] - Intelligence & Memory Upgrade
+*Released: 2026-03-31*
+
+### Major Features:
+- **Active Signal Tracker (Memory)**:
+    - Bot now persists active signals in `active_signals.json`.
+    - Memory is preserved even if the bot is restarted.
+- **AI Post-Mortem Learning**:
+    - When a trade hits its **Stop Loss (SL)**, the bot calls AI to analyze why it failed.
+    - Provides a "Pelajaran" (Lesson) to the user in Indonesian to help them learn from market behavior.
+- **Intelligent Signal Deduplication**:
+    - Prevents sending full signal messages for assets already being tracked.
+    - Sends a brief status update: *"🔄 UPDATE Symbol: Sinyal sebelumnya masih VALID"*.
+    - Only sends new signals if the bias changes or technical levels shift significantly.
+- **Telegram Polish**:
+    - Fixed file `content-type` deprecation warnings.
+    - Standardized symbol casing for more reliable tracking.
+
+---
+
 ## [v3.0.1] - Price Accuracy & Bug Fixes
 *Released: 2026-03-31*
 

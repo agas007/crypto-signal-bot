@@ -1,0 +1,67 @@
+{
+  "HBARUSDT": {
+    "symbol": "HBARUSDT",
+    "bias": "SHORT",
+    "confidence": 72,
+    "quality": "MEDIUM",
+    "entry": 0.0858,
+    "stop_loss": 0.0912,
+    "take_profit": 0.075,
+    "reason": "Strong bearish alignment across D1, H4, and H1 timeframes. H1 structure shows a clear sequence of Lower Highs and Lower Lows. While H4 Stochastic is oversold, the H1 Stochastic has reset to neutral, providing room for the next leg down. The R:R of 2.0 is acceptable given the strong daily trend strength.",
+    "isFallback": false,
+    "timestamp": 1774965915031,
+    "status": "ACTIVE"
+  },
+  "SIGNUSDT": {
+    "symbol": "SIGNUSDT",
+    "bias": "SHORT",
+    "confidence": 65,
+    "quality": "MEDIUM",
+    "entry": 0.0322,
+    "stop_loss": 0.0331,
+    "take_profit": 0.0304,
+    "reason": "Strong bearish alignment across D1 and H4 timeframes. While the pre-calculated R:R was poor, the structural Lower Highs on H1 (0.0325) allow for a refined entry on a minor pullback to improve R:R. The overall trend strength (-7.44% spread) supports a continuation toward new lows below the 0.0316 support.",
+    "isFallback": true,
+    "timestamp": 1774965926536,
+    "status": "ACTIVE"
+  },
+  "XRPUSDT": {
+    "symbol": "XRPUSDT",
+    "bias": "SHORT",
+    "confidence": 65,
+    "quality": "MEDIUM",
+    "entry": 1.335,
+    "stop_loss": 1.359,
+    "take_profit": 1.285,
+    "reason": "Strong D1 bearish trend and H1 bearish structure (lower highs/lows) support a short bias. The pre-calculated R:R was poor (0.28), so the entry is refined to a higher level near H1 resistance and the TP is extended to target the next liquidity zone below H4 support to achieve a 2:1 R:R ratio.",
+    "isFallback": true,
+    "timestamp": 1774965939724,
+    "status": "ACTIVE"
+  },
+  "CHZUSDT": {
+    "symbol": "CHZUSDT",
+    "bias": "LONG",
+    "confidence": 72,
+    "quality": "MEDIUM",
+    "entry": 0.0425,
+    "stop_loss": 0.0418,
+    "take_profit": 0.0441,
+    "reason": "Strong alignment between D1 and H4 bullish trends. Price is currently testing H4 support (0.0421) with H1 stochastic showing oversold conditions, suggesting a potential reversal point. While H1 structure is currently bearish, the high R:R and proximity to major support justify the entry. SL adjusted slightly below the H4 support level for safety.",
+    "isFallback": false,
+    "timestamp": 1774966413345,
+    "status": "ACTIVE"
+  },
+  "DUSDT": {
+    "symbol": "DUSDT",
+    "bias": "SHORT",
+    "confidence": 78,
+    "quality": "MEDIUM",
+    "entry": 0.0063,
+    "stop_loss": 0.00645,
+    "take_profit": 0.006,
+    "reason": "Strong D1 bearish trend aligns with H1 bearish structure. Price is currently rejected at H4 resistance (0.0064) with a favorable R:R. While H4 trend is bullish, the H1 lower highs and lower lows suggest a reversal back into the primary daily trend.",
+    "isFallback": false,
+    "timestamp": 1774966647311,
+    "status": "ACTIVE"
+  }
+}
