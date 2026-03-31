@@ -192,7 +192,7 @@ async function runScanCycle() {
 async function startScanner() {
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
-  await sendStatus('🤖 *Crypto Signal Bot v2.2* started!\n_Strict mode — score ≥ 65, min 3 reasons._\n_Multi-TF: D1 · H4 · H1 — scanning every 1 hour..._');
+  await sendStatus('🤖 *Crypto Signal Bot v2.3* started!\n_Strict mode — score ≥ 65, min 3 reasons._\n_Multi-TF: D1 · H4 · H1 — scanning every 1 hour..._');
 
   // Run first cycle immediately
   await runScanCycle();
