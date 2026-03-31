@@ -263,7 +263,9 @@ async function checkActiveTrades() {
         let learningInfo = '';
         if (hit === 'SL') {
           logger.info(`🧠 Requesting AI post-mortem for ${trade.symbol}...`);
-          learningInfo = `\n\n📖 *PELAJARAN (AI Analysis):*\n_` + await analyzePostMortem(trade, currentPrice) + `_`;
+          const lesson = await analyzePostMortem(trade, currentPrice);
+          learningInfo = `\n\n📖 *PELAJARAN (AI Analysis):*\n_` + lesson + `_`;
+          tracker.saveLesson(trade.symbol, trade.bias, lesson); // Save for future memory
         }
 
         const msg = `${emoji} *${hit} HIT: ${trade.symbol}*\n\n` +

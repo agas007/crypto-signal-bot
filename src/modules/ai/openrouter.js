@@ -1,6 +1,7 @@
 const axios = require('axios');
 const config = require('../../config');
 const logger = require('../../utils/logger');
+const tracker = require('../tracker');
 
 const client = axios.create({
   baseURL: config.openRouter.baseUrl,
@@ -17,9 +18,15 @@ const client = axios.create({
  * Build the system prompt — establishes the AI as a FILTER, not a formatter.
  */
 function buildSystemPrompt() {
+  const lessons = tracker.getRecentLessons();
+  const lessonContext = lessons.length > 0 
+    ? `\nLEARNED LESSONS FROM RECENT FAILURES (Do not repeat these mistakes):\n${lessons.map(l => `- ${l.symbol} (${l.bias}): ${l.analysis}`).join('\n')}`
+    : "";
+
   return `You are a professional crypto trading signal VALIDATOR. Your goal is to assess trade quality and provide actionable signals.
 
 Your job is to VALIDATE pre-screened trade candidates. Be analytical but not overly conservative.
+${lessonContext}
 
 RULES:
 - Evaluate the overall confluence of the setup holistically
