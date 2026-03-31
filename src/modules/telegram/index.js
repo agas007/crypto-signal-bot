@@ -42,8 +42,8 @@ ${biasEmoji} *${signal.symbol}*
 📋 *Quality:* \`${signal.quality || 'N/A'}\`
 
 💰 *Entry:* \`${signal.entry}\`
+🎯 *Take Profit:* \`${signal.take_profit}\`
 🛑 *Stop Loss:* \`${signal.stop_loss}\`
-✅ *Take Profit:* \`${signal.take_profit}\`
 📐 *R:R Ratio:* \`${rrRatio.toFixed(2)}\`
 
 💬 *Reason:*
