@@ -1,0 +1,12 @@
+# Nixpacks configuration for Puppeteer and Chromium dependencies
+[phases.setup]
+nixPkgs = ["nodejs", "google-chrome", "chromium"]
+
+[phases.build]
+cmds = ["npm ci"]
+
+# Ensure chromium is available for puppeteer
+[env]
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD = "true"
+CHROME_PATH = "/usr/bin/google-chrome-stable"
+PUPPETEER_EXECUTABLE_PATH = "/usr/bin/google-chrome-stable"

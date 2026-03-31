@@ -7,6 +7,7 @@ const { applyFilters } = require('../filter');
 const { evaluateSignal } = require('../strategy');
 const { refineSignal } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../telegram');
+const { generateChartImage } = require('../chart');
 
 /**
  * Run a single scan cycle:
@@ -82,6 +83,7 @@ async function runScanCycle() {
       // Run strategy evaluation (includes hard kill-switches + R:R check)
       const signal = evaluateSignal(symbol, mtfData);
       if (signal) {
+        signal.candles = mtfData.H1; // Save candles for the chart later
         candidates.push(signal);
         logger.info(`✅ ${symbol}: ${signal.bias} (score: ${signal.score}, R:R: ${signal.riskReward.rr.toFixed(2)})`);
       } else {
@@ -166,7 +168,10 @@ async function runScanCycle() {
         refined.isFallback = true;
       }
 
-      await sendSignal(refined);
+      // ─── Generate and Send Chart ───
+      const chartPath = await generateChartImage(candidate.symbol, candidate.candles, candidate);
+
+      await sendSignal(refined, chartPath);
       sentCount++;
     } catch (err) {
       logger.error(`AI validation failed for ${candidate.symbol}:`, err.message);

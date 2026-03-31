@@ -2,7 +2,7 @@ name: Crypto Signal Bot Cron
 
 on:
   schedule:
-    - cron: '*/15 * * * *' # Run every 15 minutes
+    - cron: '0 * * * *'    # Run every hour
   workflow_dispatch:      # Allow manual trigger
 
 jobs:
@@ -18,10 +18,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
-          # cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Setup Chrome
+        uses: browser-actions/setup-chrome@v1
 
       - name: Run scanner
         run: npm start

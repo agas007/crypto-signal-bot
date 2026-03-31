@@ -4,6 +4,26 @@ This document tracks the evolution of trading strategies used in the Crypto Sign
 
 ---
 
+## [v2.3.0] - Visual Charts + Interactive Control
+*Released: 2026-03-31*
+
+### Major Features:
+- **High-Quality Chart Generation**:
+    - Integrated **Puppeteer** to render trading charts using **TradingView Lightweight Charts** (v4.1.1).
+    - Features markers for **ENTRY**, **TAKE PROFIT (TP)**, and **STOP LOSS (SL)** directly on the chart image.
+    - Automatic image cleanup after delivery to Telegram.
+- **Interactive Telegram UI**:
+    - Added **Inline Buttons** for rapid access to **TradingView** and **Binance App** (deep link support).
+    - Enabled **Polling Mode** for bot commands:
+        - `/status`: Real-time health check, uptime, and scan intervals.
+        - `/strategy`: Overview of current logical thresholds and timeframes.
+        - `/pairs`: Instant fetch of top volume pairs currently under surveillance.
+- **Improved Deployment**:
+    - Added `nixpacks.toml` for seamless **Railway** deployment (handles Chromium dependencies).
+    - Updated **GitHub Actions** cron job with Chrome setup and hourly schedule sync.
+
+---
+
 ## [v2.2.0] - Stricter Quality + H1 Timeframe Upgrade
 *Released: 2026-03-31*
 
