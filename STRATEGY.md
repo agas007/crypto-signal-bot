@@ -4,7 +4,7 @@ This document tracks the evolution of trading strategies used in the Crypto Sign
 
 ---
 
-## [v2.3.0] - Visual Charts + Interactive Control
+## [v3.0.0] - Visual Charts + Interactive Control
 *Released: 2026-03-31*
 
 ### Major Features:

@@ -22,7 +22,7 @@ function initTelegram() {
   bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     bot.sendMessage(chatId, 
-      `🤖 *Crypto Signal Bot v2.2* is active!\n\n` +
+      `🤖 *Crypto Signal Bot v3.0* is active!\n\n` +
       `Commands:\n` +
       `📊 /status - Quick bot health check\n` +
       `📐 /strategy - View current trading logic\n` +
@@ -51,7 +51,7 @@ function initTelegram() {
   // /strategy command
   bot.onText(/\/strategy/, (msg) => {
     bot.sendMessage(msg.chat.id, 
-      `📐 *Current Strategy:* v2.2.0\n\n` +
+      `📐 *Current Strategy:* v3.0.0\n\n` +
       `• *Min Score:* 65/98\n` +
       `• *Min Confluence:* 3 reasons\n` +
       `• *Min R:R Ratio:* ${config.strategy.minRrRatio}\n` +
