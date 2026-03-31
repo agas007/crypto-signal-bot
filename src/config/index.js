@@ -18,7 +18,7 @@ const config = {
   },
 
   scanner: {
-    intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 900_000, // 15 min
+    intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 3_600_000, // 1 hour
     topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 5,
     maxPairs: parseInt(process.env.MAX_PAIRS, 10) || 30,
   },
@@ -27,7 +27,7 @@ const config = {
   timeframes: {
     D1: '1d',
     H4: '4h',
-    M15: '15m',
+    H1: '1h',
   },
 
   // Indicator parameters

@@ -71,7 +71,7 @@ function calculateRiskReward(bias, currentPrice, support, resistance) {
  * @returns {{ symbol, bias, score, reasons: string[], rejectReasons: string[], analysis: Object, riskReward: Object } | null}
  */
 function evaluateSignal(symbol, data) {
-  const { D1, H4, M15 } = data;
+  const { D1, H4, H1 } = data;
   const emaParams = config.indicators.ema;
   const stochParams = config.indicators.stochastic;
 
@@ -80,9 +80,9 @@ function evaluateSignal(symbol, data) {
   const h4SR = findSupportResistance(H4, config.indicators.swingLookback);
   const h4Stoch = calculateStochastic(H4, stochParams);
   const h4Trend = analyzeTrend(H4, emaParams);
-  const m15Trend = analyzeTrend(M15, emaParams);
-  const m15Structure = analyzeStructure(M15);
-  const m15Stoch = calculateStochastic(M15, stochParams);
+  const h1Trend = analyzeTrend(H1, emaParams);
+  const h1Structure = analyzeStructure(H1);
+  const h1Stoch = calculateStochastic(H1, stochParams);
 
   const pricePosition = classifyPricePosition(h4SR.distToSupport, h4SR.distToResistance);
 
@@ -91,9 +91,9 @@ function evaluateSignal(symbol, data) {
     h4SR,
     h4Stoch,
     h4Trend,
-    m15Trend,
-    m15Structure,
-    m15Stoch,
+    h1Trend,
+    h1Structure,
+    h1Stoch,
     pricePosition,
   };
 
@@ -102,7 +102,7 @@ function evaluateSignal(symbol, data) {
   // ═══════════════════════════════════════════════════════
   
   // Only reject if there is literally zero directional info
-  if (d1Trend.direction === 'neutral' && h4Trend.direction === 'neutral' && m15Trend.direction === 'neutral') {
+  if (d1Trend.direction === 'neutral' && h4Trend.direction === 'neutral' && h1Trend.direction === 'neutral') {
     logger.debug(`${symbol} ✘ All timeframes neutral — no direction at all`);
     return null;
   }
@@ -147,21 +147,21 @@ function evaluateSignal(symbol, data) {
     longScore += 8;
   }
 
-  // M15 Structure (0-15 pts)
-  if (m15Structure.structure === 'bullish') {
-    longReasons.push(`M15 bullish structure (${m15Structure.detail})`);
+  // H1 Structure (0-15 pts)
+  if (h1Structure.structure === 'bullish') {
+    longReasons.push(`H1 bullish structure (${h1Structure.detail})`);
     longScore += 15;
   }
 
-  // M15 Break of Structure (0-15 pts, bonus — not mandatory anymore)
-  if (m15Structure.bos && m15Structure.bosType === 'bullish_bos') {
-    longReasons.push(`M15 bullish BoS detected`);
+  // H1 Break of Structure (0-15 pts, bonus)
+  if (h1Structure.bos && h1Structure.bosType === 'bullish_bos') {
+    longReasons.push(`H1 bullish BoS detected`);
     longScore += 15;
   }
 
-  // M15 Trend confluence (0-10 pts)
-  if (m15Trend.direction === 'bullish') {
-    longReasons.push(`M15 trend bullish (${m15Trend.strengthLabel})`);
+  // H1 Trend confluence (0-10 pts)
+  if (h1Trend.direction === 'bullish') {
+    longReasons.push(`H1 trend bullish (${h1Trend.strengthLabel})`);
     longScore += 10;
   }
 
@@ -170,8 +170,8 @@ function evaluateSignal(symbol, data) {
     longReasons.push(`H4 stoch oversold (K:${h4Stoch.k.toFixed(1)} D:${h4Stoch.d.toFixed(1)})`);
     longScore += 10;
   }
-  if (m15Stoch.signal === 'oversold') {
-    longReasons.push(`M15 stoch oversold (K:${m15Stoch.k.toFixed(1)})`);
+  if (h1Stoch.signal === 'oversold') {
+    longReasons.push(`H1 stoch oversold (K:${h1Stoch.k.toFixed(1)})`);
     longScore += 5;
   }
 
@@ -220,21 +220,21 @@ function evaluateSignal(symbol, data) {
     shortScore += 8;
   }
 
-  // M15 Structure (0-15 pts)
-  if (m15Structure.structure === 'bearish') {
-    shortReasons.push(`M15 bearish structure (${m15Structure.detail})`);
+  // H1 Structure (0-15 pts)
+  if (h1Structure.structure === 'bearish') {
+    shortReasons.push(`H1 bearish structure (${h1Structure.detail})`);
     shortScore += 15;
   }
 
-  // M15 Break of Structure (0-15 pts, bonus)
-  if (m15Structure.bos && m15Structure.bosType === 'bearish_bos') {
-    shortReasons.push(`M15 bearish BoS detected`);
+  // H1 Break of Structure (0-15 pts, bonus)
+  if (h1Structure.bos && h1Structure.bosType === 'bearish_bos') {
+    shortReasons.push(`H1 bearish BoS detected`);
     shortScore += 15;
   }
 
-  // M15 Trend confluence (0-10 pts)
-  if (m15Trend.direction === 'bearish') {
-    shortReasons.push(`M15 trend bearish (${m15Trend.strengthLabel})`);
+  // H1 Trend confluence (0-10 pts)
+  if (h1Trend.direction === 'bearish') {
+    shortReasons.push(`H1 trend bearish (${h1Trend.strengthLabel})`);
     shortScore += 10;
   }
 
@@ -243,8 +243,8 @@ function evaluateSignal(symbol, data) {
     shortReasons.push(`H4 stoch overbought (K:${h4Stoch.k.toFixed(1)} D:${h4Stoch.d.toFixed(1)})`);
     shortScore += 10;
   }
-  if (m15Stoch.signal === 'overbought') {
-    shortReasons.push(`M15 stoch overbought (K:${m15Stoch.k.toFixed(1)})`);
+  if (h1Stoch.signal === 'overbought') {
+    shortReasons.push(`H1 stoch overbought (K:${h1Stoch.k.toFixed(1)})`);
     shortScore += 5;
   }
 
@@ -262,9 +262,11 @@ function evaluateSignal(symbol, data) {
   let score = 0;
   let reasons = [];
 
-  // Minimum viable score = 40 (was 75)
-  // This means roughly 2-3 conditions need to align
-  const MIN_SCORE = 40;
+  // Minimum viable score = 65 out of max ~98 pts
+  // Requires at least 3-4 strong conditions aligning (e.g. D1 strong + H4 trend + H1 structure)
+  const MIN_SCORE = 65;
+  // Minimum 3 supporting reasons to confirm real confluence
+  const MIN_REASONS = 3;
 
   if (longScore >= MIN_SCORE && shortScore >= MIN_SCORE) {
     // Both valid → pick higher score
@@ -282,9 +284,9 @@ function evaluateSignal(symbol, data) {
     return null;
   }
 
-  // Must have at least 2 reasons (some signal behind the score)
-  if (reasons.length < 2) {
-    logger.debug(`${symbol} → not enough confluence: ${reasons.length} reasons`);
+  // Must have at least 3 reasons (genuine confluence)
+  if (reasons.length < MIN_REASONS) {
+    logger.debug(`${symbol} → not enough confluence: ${reasons.length}/${MIN_REASONS} reasons`);
     return null;
   }
 

@@ -1,6 +1,6 @@
 {
   "name": "crypto-signal-bot",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Modular crypto trading signal bot with technical analysis and AI-powered decision refinement",
   "main": "src/index.js",
   "scripts": {

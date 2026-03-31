@@ -2,6 +2,38 @@
 
 This document tracks the evolution of trading strategies used in the Crypto Signal Bot. Each version represents a significant refinement in how the bot evaluates market conditions.
 
+---
+
+## [v2.2.0] - Stricter Quality + H1 Timeframe Upgrade
+*Released: 2026-03-31*
+
+### What Changed:
+- **M15 → H1**: The short-term confluence timeframe is now **H1 (1-hour)** instead of M15 (15-min).
+  - Rationale: M15 generated too much noise, producing signals every 15 minutes. H1 gives cleaner structure and fewer false setups.
+- **Minimum Score: 40 → 65**: A signal now requires a higher bar. Out of a max of **~98 pts**, a score of 65 means at least **66% of max possible** conditions must align.
+- **Minimum Reasons: 2 → 3**: At least **3 technical reasons** must be explicitly logged to confirm real confluence.
+- **Scan Interval: 15min → 1 hour**: Bot now evaluates the market once per hour, matching the H1 timeframe rhythm.
+
+### Score Breakdown (per direction, max ~98 pts):
+| Condition | Points |
+|---|---|
+| D1 Trend (strong/moderate/weak bullish) | 25 / 20 / 10 |
+| D1 counter-trend penalty | -30 |
+| H4 Trend alignment (strong/moderate) | 15 / 10 |
+| H4 Near S/R (within 4%) | 20 |
+| H4 Moderate S/R proximity (<6%) | 8 |
+| H1 Structure (bullish/bearish) | 15 |
+| H1 Break of Structure (BoS) | 15 (bonus) |
+| H1 Trend alignment | 10 |
+| H4 Stoch oversold/overbought | 10 |
+| H1 Stoch oversold/overbought | 5 |
+| H4 Stoch crossover in extreme zone | 8 |
+| **Total possible** | **~98** |
+
+**Threshold: 65 pts = ~66% of max. Min 3 supporting reasons required.**
+
+---
+
 ## [v2.1.0] - Reduced Signal Scarcity (Relaxed Strategy)
 *Released: 2026-03-31*
 
