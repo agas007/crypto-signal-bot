@@ -31,8 +31,14 @@ function formatSignalMessage(signal) {
 
   const rrRatio = Math.abs(signal.take_profit - signal.entry) / Math.abs(signal.entry - signal.stop_loss);
 
+  const fallbackHeader = signal.isFallback
+    ? `⚠️ *BEST AVAILABLE — LOW CONFIDENCE*\n_Tidak ada sinyal high-conviction saat ini. Ini adalah kandidat terbaik dari scan cycle ini._\n\n`
+    : '';
+
+  const header = signal.isFallback ? '📡 *BEST AVAILABLE SIGNAL*' : '🚨 *TRADE SIGNAL*';
+
   return `
-🚨 *TRADE SIGNAL* ${qualityEmoji}
+${fallbackHeader}${header} ${qualityEmoji}
 
 ${biasEmoji} *${signal.symbol}*
 ━━━━━━━━━━━━━━━━━━━

@@ -53,7 +53,7 @@ You MUST respond with ONLY valid JSON (no markdown, no explanation, no fences).`
  */
 function buildPrompt(signal) {
   const { symbol, bias, score, reasons, analysis, riskReward } = signal;
-  const { d1Trend, h4SR, h4Stoch, h4Trend, m15Trend, m15Structure, m15Stoch, pricePosition } = analysis;
+  const { d1Trend, h4SR, h4Stoch, h4Trend, h1Trend, h1Structure, h1Stoch, pricePosition } = analysis;
 
   return `VALIDATE this pre-screened trade candidate. Assess the setup quality holistically.
 
@@ -72,12 +72,12 @@ H4:
 - Price Position: ${pricePosition} (S: ${h4SR.distToSupport.toFixed(2)}%, R: ${h4SR.distToResistance !== Infinity ? h4SR.distToResistance.toFixed(2) : 'N/A'}%)
 - Stochastic: K=${h4Stoch.k.toFixed(1)}, D=${h4Stoch.d.toFixed(1)} (${h4Stoch.signal})
 
-M15:
-- Structure: ${m15Structure.structure}
-- Break of Structure: ${m15Structure.bos} ${m15Structure.bosType ? `(${m15Structure.bosType})` : ''}
-- Trend: ${m15Trend.direction} (${m15Trend.strengthLabel})
-- Stochastic: K=${m15Stoch.k.toFixed(1)}, D=${m15Stoch.d.toFixed(1)} (${m15Stoch.signal})
-- Detail: ${m15Structure.detail}
+H1:
+- Structure: ${h1Structure?.structure ?? 'N/A'}
+- Break of Structure: ${h1Structure?.bos ?? false} ${h1Structure?.bosType ? `(${h1Structure.bosType})` : ''}
+- Trend: ${h1Trend.direction} (${h1Trend.strengthLabel})
+- Stochastic: K=${h1Stoch.k.toFixed(1)}, D=${h1Stoch.d.toFixed(1)} (${h1Stoch.signal})
+- Detail: ${h1Structure?.detail ?? 'N/A'}
 
 PRE-SCREENED:
 - Bias: ${bias}

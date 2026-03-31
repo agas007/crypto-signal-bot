@@ -263,34 +263,23 @@ function evaluateSignal(symbol, data) {
   let reasons = [];
 
   // Minimum viable score = 65 out of max ~98 pts
-  // Requires at least 3-4 strong conditions aligning (e.g. D1 strong + H4 trend + H1 structure)
   const MIN_SCORE = 65;
   // Minimum 3 supporting reasons to confirm real confluence
   const MIN_REASONS = 3;
 
-  if (longScore >= MIN_SCORE && shortScore >= MIN_SCORE) {
-    // Both valid → pick higher score
-    if (longScore >= shortScore) {
-      bias = 'LONG'; score = longScore; reasons = longReasons;
-    } else {
-      bias = 'SHORT'; score = shortScore; reasons = shortReasons;
-    }
-  } else if (longScore >= MIN_SCORE) {
+  // Pick best direction regardless of threshold (for fallback top-3)
+  if (longScore >= shortScore && longScore > 0) {
     bias = 'LONG'; score = longScore; reasons = longReasons;
-  } else if (shortScore >= MIN_SCORE) {
+  } else if (shortScore > longScore && shortScore > 0) {
     bias = 'SHORT'; score = shortScore; reasons = shortReasons;
+  } else if (longScore > 0) {
+    bias = 'LONG'; score = longScore; reasons = longReasons;
   } else {
-    logger.debug(`${symbol} → score too low (L:${longScore} S:${shortScore}, need ${MIN_SCORE}+)`);
+    logger.debug(`${symbol} → no directional score at all`);
     return null;
   }
 
-  // Must have at least 3 reasons (genuine confluence)
-  if (reasons.length < MIN_REASONS) {
-    logger.debug(`${symbol} → not enough confluence: ${reasons.length}/${MIN_REASONS} reasons`);
-    return null;
-  }
-
-  // Pre-calculate R:R
+  // R:R check (only hard-reject if truly terrible)
   const riskReward = calculateRiskReward(
     bias,
     h4SR.currentPrice,
@@ -298,14 +287,30 @@ function evaluateSignal(symbol, data) {
     h4SR.nearestResistance
   );
 
-  // Kill if R:R < minimum (uses relaxed config value)
-  if (riskReward.rr < config.strategy.minRrRatio) {
+  // Determine if this meets strict criteria
+  const meetsScore = score >= MIN_SCORE && reasons.length >= MIN_REASONS;
+  const meetsRR = riskReward.rr >= config.strategy.minRrRatio;
+  const isStrict = meetsScore && meetsRR;
+
+  if (!meetsScore) {
+    logger.debug(`${symbol} → score too low (L:${longScore} S:${shortScore}, need ${MIN_SCORE}+)`);
+  }
+  if (!meetsRR) {
     logger.debug(`${symbol} → R:R too low: ${riskReward.rr.toFixed(2)} (need ${config.strategy.minRrRatio}+)`);
-    return null;
   }
 
-  logger.info(`${symbol} ✓ ${bias} candidate (score: ${score}, R:R: ${riskReward.rr.toFixed(2)}, reasons: ${reasons.length})`);
-  return { symbol, bias, score, reasons, rejectReasons: [], analysis, riskReward };
+  logger.info(`${symbol} ✓ ${bias} candidate (score: ${score}, R:R: ${riskReward.rr.toFixed(2)}, reasons: ${reasons.length}${!isStrict ? ', LOW CONFIDENCE' : ''})`);
+  return {
+    symbol,
+    bias,
+    score,
+    reasons,
+    rejectReasons: [],
+    analysis,
+    riskReward,
+    isStrict,           // true = passed all strict filters
+    lowConfidence: !isStrict, // true = fallback candidate only
+  };
 }
 
 module.exports = { evaluateSignal, classifyPricePosition, calculateRiskReward };

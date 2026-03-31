@@ -95,24 +95,45 @@ async function runScanCycle() {
     }
   }
 
-  logger.info(`Scan: ${candidates.length} candidates, ${filtered} pre-filtered, ${rejected} strategy-rejected, ${errors} errors / ${pairs.length} pairs`);
+  // Split strict vs fallback candidates
+  const strictCandidates = candidates.filter(c => c.isStrict);
+  const fallbackCandidates = candidates.filter(c => !c.isStrict);
+
+  logger.info(`Scan: ${strictCandidates.length} strict, ${fallbackCandidates.length} low-confidence, ${filtered} pre-filtered, ${errors} errors / ${pairs.length} pairs`);
 
   if (!candidates.length) {
-    logger.info('⛔ No trade candidates survived filtering this cycle');
-    await sendStatus('😴 *Scan Cycle:* No candidates matched technical criteria this hour.');
+    logger.info('⛔ No trade candidates found at all this cycle');
+    await sendStatus('😴 *Scan Cycle:* No directional candidates found across all pairs.');
     return 0;
   }
 
-  // 3. Sort by score and take top N
-  candidates.sort((a, b) => b.score - a.score);
-  const topCandidates = candidates.slice(0, config.scanner.topSignalsToAi);
+  // 3. Build mixed pool: all strict first, then fill with best available
+  const totalSlots = config.scanner.topSignalsToAi;
 
-  logger.info(`🤖 Sending top ${topCandidates.length} candidates to AI for VALIDATION...`);
+  strictCandidates.sort((a, b) => b.score - a.score);
+  fallbackCandidates.sort((a, b) => b.score - a.score);
+
+  const pool = [
+    ...strictCandidates,
+    ...fallbackCandidates.slice(0, Math.max(0, totalSlots - strictCandidates.length)),
+  ];
+
+  const isMixedMode = strictCandidates.length > 0 && fallbackCandidates.length > 0;
+  const isFallbackOnly = strictCandidates.length === 0;
+
+  if (isFallbackOnly) {
+    logger.info(`⚠️  No strict signals — sending top ${pool.length} BEST AVAILABLE to AI...`);
+    await sendStatus(`⚠️ *Scan Cycle:* No high-conviction signals. Sending top ${pool.length} best available (lower quality).`);
+  } else if (isMixedMode) {
+    logger.info(`🤖 Mixed pool: ${strictCandidates.length} strict + ${pool.length - strictCandidates.length} best available → ${pool.length} total to AI...`);
+  } else {
+    logger.info(`🤖 Sending top ${pool.length} STRICT candidates to AI for validation...`);
+  }
 
   // 4. AI validation + Telegram delivery
   let sentCount = 0;
 
-  for (const candidate of topCandidates) {
+  for (const candidate of pool) {
     try {
       const refined = await refineSignal(candidate);
 
@@ -127,16 +148,22 @@ async function runScanCycle() {
         continue;
       }
 
-      // Confidence threshold (0-100 scale, need 60+)
-      if (refined.confidence < 60) {
+      // Relax confidence for best-available candidates
+      const minConfidence = candidate.lowConfidence ? 45 : 60;
+      if (refined.confidence < minConfidence) {
         logger.info(`⚠️ ${candidate.symbol}: AI confidence too low ${refined.confidence}/100 — ${refined.reason}`);
         continue;
       }
 
       // Quality gate: only reject LOW quality with very low confidence
-      if (refined.quality === 'LOW' && refined.confidence < 50) {
+      if (refined.quality === 'LOW' && refined.confidence < (candidate.lowConfidence ? 35 : 40)) {
         logger.info(`⚠️ ${candidate.symbol}: AI quality LOW + low confidence — ${refined.reason}`);
         continue;
+      }
+
+      // Mark best-available signals clearly for Telegram formatting
+      if (candidate.lowConfidence) {
+        refined.isFallback = true;
       }
 
       await sendSignal(refined);
@@ -149,7 +176,7 @@ async function runScanCycle() {
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  logger.info(`🏁 Cycle: ${sentCount} signals sent, ${topCandidates.length - sentCount} rejected by AI, ${elapsed}s`);
+  logger.info(`🏁 Cycle: ${sentCount} signals sent, ${pool.length - sentCount} rejected by AI, ${elapsed}s`);
   logger.info('═══════════════════════════════════════════════');
 
   if (sentCount === 0) {
