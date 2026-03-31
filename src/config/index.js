@@ -19,7 +19,7 @@ const config = {
 
   scanner: {
     intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 900_000, // 15 min
-    topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 3,
+    topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 5,
     maxPairs: parseInt(process.env.MAX_PAIRS, 10) || 30,
   },
 
@@ -39,13 +39,13 @@ const config = {
 
   // Filter thresholds
   filters: {
-    minVolume24hUsd: 10_000_000,   // $10M minimum daily volume
-    minAtrPercent: 1.5,             // 1.5% minimum ATR as % of price
-    minTrendStrength: 0.6,          // EMA slope strength threshold (0-1)
+    minVolume24hUsd: 5_000_000,    // $5M minimum daily volume (was $10M)
+    minAtrPercent: 0.8,             // 0.8% minimum ATR (was 1.5%)
+    minTrendStrength: 0.2,          // Allow moderate trends through (was 0.6)
   },
 
   strategy: {
-    minRrRatio: parseFloat(process.env.MIN_RR_RATIO) || 3.0,
+    minRrRatio: parseFloat(process.env.MIN_RR_RATIO) || 1.5,
   },
 };
 

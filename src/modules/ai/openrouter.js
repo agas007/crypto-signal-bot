@@ -17,24 +17,30 @@ const client = axios.create({
  * Build the system prompt — establishes the AI as a FILTER, not a formatter.
  */
 function buildSystemPrompt() {
-  return `You are a professional crypto trading signal FILTER focused on capital preservation, not signal frequency.
+  return `You are a professional crypto trading signal VALIDATOR. Your goal is to assess trade quality and provide actionable signals.
 
-Your job is to VALIDATE or REJECT pre-screened trade candidates. You must be CONSERVATIVE.
+Your job is to VALIDATE pre-screened trade candidates. Be analytical but not overly conservative.
 
-STRICT RULES:
-- If ANY condition is marginal or unclear → return NO TRADE
-- If the confluence is not strong → return NO TRADE
-- If the R:R after your analysis is below ${config.strategy.minRrRatio}:1 → return NO TRADE
-- Never give a trade signal just because you received data. Your default answer is NO TRADE.
+RULES:
+- Evaluate the overall confluence of the setup holistically
+- If the majority of conditions align, APPROVE the trade with appropriate confidence
+- Only return NO TRADE if the setup is genuinely conflicting or dangerous
+- Consider that waiting for a "perfect" setup often means missing real opportunities
+- A setup with 3+ confluent factors is tradeable even if not perfect
+- R:R of ${config.strategy.minRrRatio}:1 or higher is acceptable
 - DO NOT SHORT if D1 trend is STRONG BULLISH
 - DO NOT LONG if D1 trend is STRONG BEARISH
-- DO NOT TRADE if price is in the middle zone (not near key levels)
-- A signal based only on stochastic is NOT valid
 
 QUALITY ASSESSMENT:
-- HIGH: All conditions aligned perfectly, strong confluence, clear structure
-- MEDIUM: Most conditions aligned, minor concerns but tradeable
-- LOW: Marginal setup, should default to NO TRADE
+- HIGH: Strong confluence, clear structure, high confidence
+- MEDIUM: Good setup with minor imperfections — still tradeable
+- LOW: Weak setup but has some merit — trade with caution
+
+CONFIDENCE SCALE:
+- 80-100: Strong setup, high conviction
+- 60-79: Decent setup, moderate conviction
+- 40-59: Marginal setup, low conviction
+- Below 40: Not worth trading
 
 You MUST respond with ONLY valid JSON (no markdown, no explanation, no fences).`;
 }
@@ -49,7 +55,7 @@ function buildPrompt(signal) {
   const { symbol, bias, score, reasons, analysis, riskReward } = signal;
   const { d1Trend, h4SR, h4Stoch, h4Trend, m15Trend, m15Structure, m15Stoch, pricePosition } = analysis;
 
-  return `VALIDATE this pre-screened trade candidate. Be strict — reject if not clearly valid.
+  return `VALIDATE this pre-screened trade candidate. Assess the setup quality holistically.
 
 Symbol: ${symbol}
 
@@ -85,10 +91,10 @@ TECHNICAL REASONS:
 ${reasons.map((r, i) => `${i + 1}. ${r}`).join('\n')}
 
 INSTRUCTIONS:
-1. Validate whether ALL conditions truly support the ${bias} bias
+1. Evaluate whether the overall confluence supports the ${bias} bias
 2. If valid: refine entry, SL, TP levels (use the pre-calc as baseline, adjust if needed)
-3. If ANY condition is weak or conflicting: return NO TRADE
-4. Confidence scale: 0-100 (only 80+ should be considered tradeable)
+3. Only reject if conditions clearly conflict or are dangerous
+4. Confidence scale: 0-100 (60+ is tradeable, 80+ is strong)
 
 Respond with ONLY this JSON format:
 {

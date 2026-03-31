@@ -126,15 +126,15 @@ async function runScanCycle() {
         continue;
       }
 
-      // Confidence threshold (0-100 scale, need 75+)
-      if (refined.confidence < 75) {
+      // Confidence threshold (0-100 scale, need 60+)
+      if (refined.confidence < 60) {
         logger.info(`⚠️ ${candidate.symbol}: AI confidence too low ${refined.confidence}/100 — ${refined.reason}`);
         continue;
       }
 
-      // Quality gate: only HIGH and MEDIUM pass
-      if (refined.quality === 'LOW') {
-        logger.info(`⚠️ ${candidate.symbol}: AI quality LOW — ${refined.reason}`);
+      // Quality gate: only reject LOW quality with very low confidence
+      if (refined.quality === 'LOW' && refined.confidence < 50) {
+        logger.info(`⚠️ ${candidate.symbol}: AI quality LOW + low confidence — ${refined.reason}`);
         continue;
       }
 
@@ -160,7 +160,7 @@ async function runScanCycle() {
 async function startScanner() {
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
-  await sendStatus('🤖 *Crypto Signal Bot v2* started!\n_Conservative mode — quality over quantity\._\n_Scanning every 15 minutes\.\.\._');
+  await sendStatus('🤖 *Crypto Signal Bot v2.1* started!\n_Balanced mode — confluence-based scoring._\n_Scanning every 15 minutes..._');
 
   // Run first cycle immediately
   await runScanCycle();
