@@ -4,6 +4,17 @@ This document tracks the evolution of trading strategies used in the Crypto Sign
 
 ---
 
+## [v3.0.1] - Price Accuracy & Bug Fixes
+*Released: 2026-03-31*
+
+### Fixes & Improvements:
+- **AI-Price Synchronization**: Chart markers (Entry/TP/SL) now correctly use AI-refined prices instead of raw technical signals.
+- **High-Precision Charting**: Increased chart axis and marker precision to **8 decimal places** (ideal for low-priced coins like DOGE, SHIB, PEPE).
+- **Flexible Data Handling**: Fixed destructuring errors in the chart module by supporting both raw and AI-refined signal object structures.
+- **Polling Conflict Fix**: Added documentation/strategy for handling 409 Conflict errors by using a dedicated test bot token for local development.
+
+---
+
 ## [v3.0.0] - Visual Charts + Interactive Control
 *Released: 2026-03-31*
 
