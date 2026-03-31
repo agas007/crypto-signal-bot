@@ -169,7 +169,7 @@ async function runScanCycle() {
       }
 
       // ─── Generate and Send Chart ───
-      const chartPath = await generateChartImage(candidate.symbol, candidate.candles, candidate);
+      const chartPath = await generateChartImage(candidate.symbol, candidate.candles, refined);
 
       await sendSignal(refined, chartPath);
       sentCount++;

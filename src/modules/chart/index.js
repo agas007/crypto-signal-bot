@@ -12,7 +12,16 @@ const logger = require('../../utils/logger');
  * @returns {Promise<string>} Path to the generated image
  */
 async function generateChartImage(symbol, candles, signal) {
-  const { entry, tp, sl } = signal.riskReward;
+  // Handle both raw signal structure and refined signal structure
+  const entry = signal.entry || (signal.riskReward && signal.riskReward.entry);
+  const tp = signal.take_profit || (signal.riskReward && signal.riskReward.tp);
+  const sl = signal.stop_loss || (signal.riskReward && signal.riskReward.sl);
+
+  if (!entry || !tp || !sl) {
+    logger.error(`❌ Cannot generate chart for ${symbol}: Missing price levels`, { entry, tp, sl });
+    return null;
+  }
+
   const bias = signal.bias;
 
   // Map and SORT candles to strictly increasing time (mandatory for Lightweight Charts)
@@ -50,10 +59,20 @@ async function generateChartImage(symbol, candles, signal) {
       timeScale: { borderColor: '#485c7b', timeVisible: true },
     });
 
-    // Use specific addCandlestickSeries method (v4 API)
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
       wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+      priceFormat: {
+        type: 'price',
+        precision: 8,
+        minMove: 0.00000001,
+      },
+    });
+
+    // Also update price scale precision
+    chart.priceScale().applyOptions({
+        autoScale: true,
+        borderColor: '#485c7b',
     });
 
     const data = ${JSON.stringify(chartData)};
