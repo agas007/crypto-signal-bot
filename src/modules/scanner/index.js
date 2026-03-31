@@ -99,6 +99,7 @@ async function runScanCycle() {
 
   if (!candidates.length) {
     logger.info('⛔ No trade candidates survived filtering this cycle');
+    await sendStatus('😴 *Scan Cycle:* No candidates matched technical criteria this hour.');
     return 0;
   }
 
@@ -150,6 +151,10 @@ async function runScanCycle() {
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   logger.info(`🏁 Cycle: ${sentCount} signals sent, ${topCandidates.length - sentCount} rejected by AI, ${elapsed}s`);
   logger.info('═══════════════════════════════════════════════');
+
+  if (sentCount === 0) {
+    await sendStatus('🛡️ *Scan Cycle:* Candidates were found but rejected by AI validation.');
+  }
 
   return sentCount;
 }
