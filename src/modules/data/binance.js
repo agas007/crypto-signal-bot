@@ -11,8 +11,14 @@ const FALLBACK_ENDPOINTS = [
 ];
 
 const FUTURES_URL = 'https://fapi.binance.com';
+const FUTURES_FALLBACK_URLS = [
+  'https://fapi1.binance.com',
+  'https://fapi2.binance.com',
+  'https://fapi3.binance.com',
+];
 
 let currentWorkingUrl = config.binance.baseUrl;
+let currentWorkingFuturesUrl = FUTURES_URL;
 
 /**
  * Perform a GET request with fallback or signed security.
@@ -20,7 +26,7 @@ let currentWorkingUrl = config.binance.baseUrl;
 async function getWithFallback(path, params = {}, isSigned = false, isFutures = false) {
   const queryParams = { ...params };
   let headers = {};
-  const actualBaseUrl = isFutures ? FUTURES_URL : currentWorkingUrl;
+  const actualBaseUrl = isFutures ? currentWorkingFuturesUrl : currentWorkingUrl;
 
   if (isSigned) {
     if (!config.binance.apiKey || !config.binance.apiSecret) {
@@ -60,7 +66,29 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
         }
     }
     
-    if (isFutures) throw err; // Futures is less prone to local blocks than spot
+    if (isFutures) {
+        const fUrls = [
+            FUTURES_URL,
+            ...FUTURES_FALLBACK_URLS
+        ];
+        
+        for (const baseUrl of fUrls) {
+            if (baseUrl === actualBaseUrl) continue;
+            try {
+                const response = await axios.get(`${baseUrl}${path}`, {
+                    params: queryParams,
+                    headers,
+                    timeout: 15_000,
+                });
+                currentWorkingFuturesUrl = baseUrl;
+                return response.data;
+            } catch (e) {
+                if (e.response?.status === 429) throw e;
+                continue;
+            }
+        }
+        throw err; // If all fallbacks failed, throw original
+    }
     
     // For spot, keep checking uniqueUrls
     const urls = [

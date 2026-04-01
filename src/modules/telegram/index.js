@@ -3,6 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const { formatJakartaTime } = require('../../utils/time');
+const { analyzePerformanceSummary } = require('../ai/openrouter');
 const tracker = require('../tracker');
 const binancePerformance = require('../tracker/binance_performance');
 
