@@ -129,26 +129,35 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
  */
 async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
     try {
-        const params = { limit: 1000 }; // Increased from 500 to 1000 (Max allowed by Binance)
+        const params = { limit: 1000 };
         if (symbol) params.symbol = symbol.toUpperCase();
         if (startTime) params.startTime = startTime;
         
         const path = type === 'futures' ? '/fapi/v1/userTrades' : '/api/v3/myTrades';
         const data = await getWithFallback(path, params, true, type === 'futures');
-        
+
+        if (!data || !Array.isArray(data)) {
+            logger.warn(`⚠️ Binance returned non-array for ${type} ${symbol}: ${JSON.stringify(data)}`);
+            return [];
+        }
+
         return data.map(t => ({
             symbol: t.symbol,
+            id: t.id,
+            orderId: t.orderId,
             price: parseFloat(t.price),
             qty: parseFloat(t.qty),
-            quoteQty: type === 'futures' ? (parseFloat(t.price) * parseFloat(t.qty)) : parseFloat(t.quoteQty),
+            quoteQty: parseFloat(t.quoteQty),
             commission: parseFloat(t.commission),
-            isBuyer: type === 'futures' ? (parseFloat(t.realizedPnl) === 0 ? true : false) : t.isBuyer, // Simple heuristic for futures pnl matching
-            realizedPnl: parseFloat(t.realizedPnl || 0),
+            commissionAsset: t.commissionAsset,
             time: t.time,
+            isBuyer: t.isBuyer,
+            isMaker: t.isMaker,
+            realizedPnl: parseFloat(t.realizedPnl || 0)
         }));
     } catch (err) {
-        logger.error(`Failed to fetch ${type} trades for ${symbol}:`, err.message);
-        return [];
+        logger.error(`Failed to fetch ${type} trades for ${symbol}: ${err.message}`);
+        return []; 
     }
 }
 
