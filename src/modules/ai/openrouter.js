@@ -110,6 +110,7 @@ Respond with ONLY this JSON format:
   "bias": "LONG" | "SHORT" | "NO TRADE",
   "confidence": 0-100,
   "quality": "LOW" | "MEDIUM" | "HIGH",
+  "trading_type": "SCALPING" | "DAY TRADING" | "SWING",
   "entry": price_number_or_null,
   "stop_loss": price_number_or_null,
   "take_profit": price_number_or_null,
@@ -174,11 +175,13 @@ async function refineSignal(signal) {
       return parsed;
     }
 
-    // Validate price fields for actual trades
+    // Validate price fields and trading_type
     if (parsed.entry === undefined || parsed.stop_loss === undefined || parsed.take_profit === undefined) {
       logger.warn(`AI response missing price fields for ${signal.symbol}`);
       return null;
     }
+    
+    if (!parsed.trading_type) parsed.trading_type = 'DAY TRADING';
 
     parsed.entry = parseFloat(parsed.entry);
     parsed.stop_loss = parseFloat(parsed.stop_loss);
@@ -303,4 +306,56 @@ Respond with ONLY this JSON:
   }
 }
 
-module.exports = { refineSignal, analyzePostMortem, analyzeRealTrade, buildPrompt, buildSystemPrompt };
+/**
+ * AI Performance Coach: Reviews the whole ledger and provides strategic feedback.
+ */
+async function analyzePerformanceSummary(stats, tradeLog) {
+  try {
+    const ledgerSummary = tradeLog.map(t => `- ${t.symbol} (${t.market}): ${t.pnl} USDT`).join('\n');
+    
+    const prompt = `
+You are a Professional Trading Performance Analyst. Review this trader's recent results:
+
+OVERALL STATS:
+- PnL: $${stats.totalPnl}
+- Win Rate: ${stats.winRate}
+- Total Trades: ${stats.tradesCount}
+
+RECENT TRADES LEDGER:
+${ledgerSummary}
+
+TASK:
+Provide a concise performance review in INDONESIAN (Bahasa Indonesia).
+Focus on:
+1. WHAT'S GOOD: (Strength in their trading)
+2. WHAT'S BAD: (Weakness or patterns of losses)
+3. WHAT TO IMPROVE: (Concrete advice)
+
+Keep it professional, encouraging, but honest. Use Markdown.
+`;
+
+    const response = await axios.post(config.openRouter.baseUrl + '/chat/completions', {
+      model: config.openRouter.model,
+      messages: [{ role: 'user', content: prompt }],
+    }, {
+      headers: {
+        'Authorization': `Bearer ${config.openRouter.apiKey}`,
+        'HTTP-Referer': 'https://github.com/crypto-signal-bot',
+      }
+    });
+
+    return response.data.choices[0].message.content;
+  } catch (err) {
+    logger.error('Failed to generate performance coaching:', err.message);
+    return "Gagal mendapatkan input dari AI Coach saat ini.";
+  }
+}
+
+module.exports = { 
+  refineSignal, 
+  analyzePostMortem, 
+  analyzeRealTrade, 
+  analyzePerformanceSummary,
+  buildPrompt, 
+  buildSystemPrompt 
+};

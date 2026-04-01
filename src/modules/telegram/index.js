@@ -75,11 +75,11 @@ function initTelegram() {
     const validPeriods = ['daily', 'weekly', 'monthly', 'all'];
     const validMarkets = ['spot', 'futures', 'combined'];
 
-    if (validMarkets.includes(period) && !validMarkets.includes(market)) {
+    if (validMarkets.includes(period) && !validPeriods.includes(market)) {
         [period, market] = [market, period]; // swap
     }
 
-    bot.sendMessage(msg.chat.id, `⏳ *Calculating Binance ${market.toUpperCase()} performance (${period})...* \n_Checking trades for scanned symbols..._`);
+    bot.sendMessage(msg.chat.id, `⏳ *Calculating Binance ${market.toUpperCase()} performance (${period})...* \n_Checking trades & calling AI Coach..._`);
     
     try {
       const stats = await binancePerformance.getPerformance(period, market);
@@ -94,6 +94,9 @@ function initTelegram() {
                  }).join('\n') + `\n\n`;
       }
 
+      // 🧠 Call AI Performance Coach
+      const aiReview = await analyzePerformanceSummary(stats, stats.tradeLog);
+
       const report = `📈 *BINANCE PERFORMANCE REPORT*\n` +
                      `⏱ *Period:* \`${stats.period.toUpperCase()}\`\n` +
                      `🏛 *Market:* \`${stats.market.toUpperCase()}\`\n` +
@@ -103,6 +106,7 @@ function initTelegram() {
                      `📊 *Total Trades:* \`${stats.tradesCount}\`\n` +
                      `🎯 *Win Rate:* \`${stats.winRate}\`\n` +
                      `✅ *Wins:* ${stats.wins} | 🚨 *Losses:* ${stats.losses}\n\n` +
+                     `🧠 *AI PERFORMANCE COACH:* \n${aiReview}\n\n` +
                      `_Note: Futures sync is based on realized PnL from Binance history._`;
 
       bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
@@ -247,6 +251,8 @@ function formatSignalMessage(signal) {
 
   const header = signal.isFallback ? '📡 *BEST AVAILABLE SIGNAL*' : '🚨 *TRADE SIGNAL*';
 
+  const typeEmoji = signal.trading_type === 'SCALPING' ? '⚡' : signal.trading_type === 'SWING' ? '🎯' : '🗓️';
+
   return `
 ${fallbackHeader}${header} ${qualityEmoji}
 
@@ -254,6 +260,7 @@ ${biasEmoji} *${signal.symbol}*
 ━━━━━━━━━━━━━━━━━━━
 
 📊 *Bias:* \`${signal.bias}\`
+${typeEmoji} *Type:* \`${signal.trading_type || 'DAY TRADING'}\`
 🎯 *Confidence:* ${confidence.toFixed(0)}% ${confBars}
 📋 *Quality:* \`${signal.quality || 'N/A'}\`
 
