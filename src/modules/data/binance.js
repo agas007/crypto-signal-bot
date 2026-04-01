@@ -167,6 +167,7 @@ async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
 async function fetchOHLCV(symbol, interval, limit = 100) {
   try {
     const data = await getWithFallback('/api/v3/klines', { symbol, interval, limit });
+    if (!data || !Array.isArray(data)) return [];
 
     return data.map((candle) => ({
       openTime: candle[0],
@@ -198,6 +199,8 @@ async function fetchMultiTimeframe(symbol) {
 async function fetchTopPairs(limit = config.scanner.maxPairs) {
   try {
     const data = await getWithFallback('/api/v3/ticker/24hr');
+    if (!data || !Array.isArray(data)) return [];
+
     return data
       .filter((t) => t.symbol.endsWith('USDT') && !t.symbol.includes('UP') && !t.symbol.includes('DOWN'))
       .sort((a, b) => parseFloat(b.quoteVolume) - parseFloat(a.quoteVolume))

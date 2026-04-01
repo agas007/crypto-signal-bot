@@ -70,8 +70,8 @@ function initTelegram() {
 
   // /performance command
   bot.onText(/\/performance(?:\s+(\w+))?(?:\s+(\w+))?/, async (msg, match) => {
-    let period = match[1] || 'all';
-    let market = match[2] || 'combined';
+    let period = (match[1] || 'all').toLowerCase();
+    let market = (match[2] || 'combined').toLowerCase();
 
     // Allow swap of arguments (e.g. /performance futures weekly)
     const validPeriods = ['daily', 'weekly', 'monthly', 'all'];
@@ -81,24 +81,32 @@ function initTelegram() {
         [period, market] = [market, period]; // swap
     }
 
-    bot.sendMessage(msg.chat.id, `⏳ *Calculating Binance ${market.toUpperCase()} performance (${period})...* \n_Checking trades & calling AI Coach..._`);
-    
+    bot.sendMessage(msg.chat.id, `⌛ *Fetching Binance ${market.toUpperCase()} data...*\n_Analyzing trades and calling AI Coach..._`, { parse_mode: 'Markdown' });
+
     try {
       const stats = await binancePerformance.getPerformance(period, market);
       
       let ledger = '';
-      if (stats.tradeLog.length > 0) {
-        ledger = `📜 *TRADE LEDGER (Recent 15):*\n` +
+      if (stats.tradeLog && stats.tradeLog.length > 0) {
+        ledger = `📜 *TRADE LEDGER (Recent 10):*\n` +
                  stats.tradeLog.slice(0, 10).map(t => {
                    const emoji = parseFloat(t.pnl) > 0 ? '✅' : '🚨';
-                   const pnlStr = (parseFloat(t.pnl) > 0 ? '+' : '') + t.pnl;
-                   return `${emoji} \`${t.symbol}\` (${t.market}): \`${pnlStr} USDT\``;
+                   const pnlSafe = (parseFloat(t.pnl) > 0 ? '+' : '') + t.pnl;
+                   const symbolSafe = (t.symbol || 'PAIR').replace(/_/g, '\\_');
+                   return `${emoji} \`${symbolSafe}\` (${t.market}): \`${pnlSafe} USDT\``;
                  }).join('\n') + `\n\n`;
       }
 
       // 🧠 Call AI Performance Coach
       let aiReview = await analyzePerformanceSummary(stats, stats.tradeLog);
-      if (aiReview.length > 2500) aiReview = aiReview.substring(0, 2500) + '... (truncated)';
+      
+      // Sanitize Markdown from AI
+      const sanitizedAiReview = aiReview
+        .replace(/([_*`\[\]()])/g, '\\$1') // Escape ALL markdown chars from AI
+        .replace(/\\`\\`\\`(\w+)?/g, '\n```$1\n') // Restore code blocks if any
+        .replace(/\\*\\*/g, '*') // Restore bold slightly
+        .replace(/\\`/g, '`') // Restore inline code
+        .substring(0, 2000);
 
       const report = `📈 *BINANCE PERFORMANCE REPORT*\n` +
                      `⏱ *Period:* \`${stats.period.toUpperCase()}\`\n` +
@@ -109,23 +117,16 @@ function initTelegram() {
                      `📊 *Total Trades:* \`${stats.tradesCount}\`\n` +
                      `🎯 *Win Rate:* \`${stats.winRate}\`\n` +
                      `✅ *Wins:* ${stats.wins} | 🚨 *Losses:* ${stats.losses}\n\n` +
-                     `🧠 *AI PERFORMANCE COACH:* \n${aiReview}\n\n` +
-                     `_Note: Futures sync is based on realized PnL from Binance history._`;
+                     `🧠 *AI PERFORMANCE COACH:* \n${sanitizedAiReview}\n\n` +
+                     `_Note: Datasync is real-time via Binance API._`;
 
-      // Split message if too long for Telegram (4096 chars)
-      if (report.length > 4000) {
-          bot.sendMessage(msg.chat.id, report.substring(0, 4000), { parse_mode: 'Markdown' });
-          bot.sendMessage(msg.chat.id, '...(continued above)', { parse_mode: 'Markdown' });
-      } else {
-          bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(err => {
-              logger.error('Telegram Markdown Error:', err.message);
-              // Fallback to plain text if Markdown fails
-              bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
-          });
-      }
+      bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(err => {
+          logger.error('Telegram Markdown Error:', err.message);
+          bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
+      });
     } catch (err) {
-      logger.error('Failed to generate Binance performance:', err.message);
-      bot.sendMessage(msg.chat.id, '❌ Failed to fetch data from Binance. Error: ' + err.message);
+      logger.error('Failed to generate Binance performance:', err.stack);
+      bot.sendMessage(msg.chat.id, '❌ *Failed to fetch performance data.* \n\nCheck if your API keys are correct and your VPS is in a supported region (avoid US/UK). Error: ' + err.message, { parse_mode: 'Markdown' });
     }
   });
 
