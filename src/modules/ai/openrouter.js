@@ -226,15 +226,19 @@ async function refineSignal(signal) {
 }
 
 /**
- * AI-driven post-mortem to analyze why a signal hit SL.
+ * AI-driven post-mortem to analyze why a signal hit SL or TP.
  * 
  * @param {Object} trade - The signal data
- * @param {number} finalPrice - Price when SL was hit
+ * @param {number} finalPrice - Price when target was hit
+ * @param {'TP' | 'SL'} hitType - Which target was hit
  * @returns {Promise<string>} Educational analysis
  */
-async function analyzePostMortem(trade, finalPrice) {
+async function analyzePostMortem(trade, finalPrice, hitType = 'SL') {
+  const status = hitType === 'TP' ? 'SUCCESS (TAKE PROFIT HIT)' : 'FAILED (STOP LOSS HIT)';
+  const emoji = hitType === 'TP' ? '✅' : '🚨';
+
   const prompt = `
-🚨 TRADE FAILED (STOP LOSS HIT)
+${emoji} TRADE ${status}
 Symbol: ${trade.symbol}
 Bias: ${trade.bias}
 Entry: ${trade.entry}
@@ -244,9 +248,10 @@ Exit Price: ${finalPrice}
 
 Technical Reason for signal: ${trade.reason}
 
-TASK: Provide a very brief (2-3 sentences) "post-mortem" analysis in Indonesian. 
-Explain logically why this trade might have failed based on price action and give a "lesson learned" to the user.
-Keep it simple and educational. Avoid generic advice.
+TASK: Provide a very brief (2-3 sentences) analysis in Indonesian. 
+If it was a SUCCESS (TP), explain why the setup worked well and what the user can learn from this winning trade.
+If it was a FAILURE (SL), explain logically why it might have failed and give a "lesson learned".
+Keep it simple, educational, and professional. Avoid generic advice.
   `;
 
   try {

@@ -25,7 +25,8 @@ async function runScanCycle() {
   logger.info('🔍 Starting scan cycle...');
 
   // ─── 0. Monitor Active Trades ──────────────────────────
-  await checkActiveTrades();
+  // Now returns symbols that hit TP/SL to prevent re-tracking in SAME cycle
+  const hitSymbols = await checkActiveTrades();
 
   // ─── 1. Fetch top pairs by volume ──────────────────────
   const pairs = await fetchTopPairs();
@@ -41,6 +42,12 @@ async function runScanCycle() {
   let errors = 0;
 
   for (const symbol of pairs) {
+    // Skip if just hit TP/SL in this cycle to avoid duplicate signals
+    if (hitSymbols.includes(symbol.toUpperCase())) {
+      logger.info(`⏭️ Skipping ${symbol} - just hit TP/SL in this cycle.`);
+      continue;
+    }
+
     try {
       // Quick filter: fetch ticker first (cheap API call)
       const ticker = await fetch24hTicker(symbol);
@@ -239,10 +246,15 @@ async function startScanner() {
 
 /**
  * Check if active trades have hit SL or TP.
+ * Returns a list of symbols that hit TP or SL in this check.
+ *
+ * @returns {Promise<string[]>}
  */
 async function checkActiveTrades() {
   const actives = tracker.getAllActive();
-  if (actives.length === 0) return;
+  const hitInThisScan = [];
+
+  if (actives.length === 0) return hitInThisScan;
 
   const { fetchOHLCV } = require('../data/binance');
   logger.info(`🧠 Monitoring ${actives.length} active trades for SL/TP (Wick Detection active)...`);
@@ -285,16 +297,15 @@ async function checkActiveTrades() {
       if (hit) {
         logger.info(`🎯 ${trade.symbol}: ${hit} HIT! (Wick detected at ${hitPrice})`);
         const emoji = hit === 'TP' ? '✅' : '🚨';
+        hitInThisScan.push(trade.symbol.toUpperCase());
         
-        let learningInfo = '';
-        if (hit === 'SL') {
-          logger.info(`🧠 Requesting AI post-mortem for ${trade.symbol}...`);
-          const lesson = await analyzePostMortem(trade, hitPrice);
-          learningInfo = `\n\n📖 *PELAJARAN (AI Analysis):*\n_` + lesson + `_`;
-          tracker.saveLesson(trade.symbol, trade.bias, lesson);
-        }
+        logger.info(`🧠 Requesting AI post-mortem for ${trade.symbol} (${hit})...`);
+        const lesson = await analyzePostMortem(trade, hitPrice, hit);
+        
+        const learningInfo = `\n\n📖 *PELAJARAN (AI Analysis):*\n_` + lesson + `_`;
+        tracker.saveLesson(trade.symbol, trade.bias, lesson);
 
-        const msg = `${emoji} *${hit} HIT (WICK): ${trade.symbol}*\n\n` +
+        const msg = `${emoji} *${hit} HIT: ${trade.symbol}*\n\n` +
                     `📊 *Bias:* \`${trade.bias}\`\n` +
                     `💰 *Target Price:* \`${hit === 'TP' ? trade.take_profit : trade.stop_loss}\`\n` +
                     `📍 *Hit Price:* \`${hitPrice}\`` + learningInfo;
@@ -306,6 +317,8 @@ async function checkActiveTrades() {
       logger.error(`Failed to monitor ${trade.symbol}:`, err.message);
     }
   }
+
+  return hitInThisScan;
 }
 
 module.exports = { startScanner, runScanCycle };
