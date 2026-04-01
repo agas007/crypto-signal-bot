@@ -101,7 +101,7 @@ function initTelegram() {
       let aiReview = await analyzePerformanceSummary(stats, stats.tradeLog);
       
       // Sanitize Markdown from AI (Truncate BEFORE sanitization to avoid breaking entities)
-      const maxAiLen = 1500;
+      const maxAiLen = 3000;
       const aiTruncated = aiReview.length > maxAiLen ? aiReview.substring(0, maxAiLen) + '...' : aiReview;
       
       const sanitizedAiReview = aiTruncated
