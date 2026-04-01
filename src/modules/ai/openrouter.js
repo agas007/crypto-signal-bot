@@ -135,10 +135,20 @@ async function refineSignal(signal) {
     const { data } = await client.post('/chat/completions', {
       model: config.openRouter.model,
       messages: [
-        { role: 'system', content: systemPrompt },
+        { 
+          role: 'system', 
+          content: [
+            {
+              type: 'text',
+              text: systemPrompt,
+              // Cache this large system prompt (Claude/DeepSeek optimization)
+              cache_control: { type: 'ephemeral' }
+            }
+          ] 
+        },
         { role: 'user', content: prompt },
       ],
-      temperature: 0.1, // Lower temp = more conservative, more consistent
+      temperature: 0.1,
       max_tokens: 500,
       response_format: { type: 'json_object' },
     });
