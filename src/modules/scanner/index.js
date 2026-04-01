@@ -244,42 +244,63 @@ async function checkActiveTrades() {
   const actives = tracker.getAllActive();
   if (actives.length === 0) return;
 
-  logger.info(`🧠 Monitoring ${actives.length} active trades for SL/TP...`);
+  const { fetchOHLCV } = require('../data/binance');
+  logger.info(`🧠 Monitoring ${actives.length} active trades for SL/TP (Wick Detection active)...`);
 
   for (const trade of actives) {
     try {
-      const ticker = await fetch24hTicker(trade.symbol);
-      if (!ticker) continue;
+      // Fetch last 60 1-minute candles to check for any wicks in the last hour
+      const candles = await fetchOHLCV(trade.symbol, '1m', 60);
+      if (!candles || candles.length === 0) continue;
 
-      const currentPrice = parseFloat(ticker.lastPrice);
       let hit = null;
+      let hitPrice = 0;
 
-      if (trade.bias === 'LONG') {
-        if (currentPrice >= trade.take_profit) hit = 'TP';
-        else if (currentPrice <= trade.stop_loss) hit = 'SL';
-      } else {
-        if (currentPrice <= trade.take_profit) hit = 'TP';
-        else if (currentPrice >= trade.stop_loss) hit = 'SL';
+      for (const candle of candles) {
+        const [,, high, low, close] = candle;
+
+        if (trade.bias === 'LONG') {
+          if (low <= trade.stop_loss) {
+            hit = 'SL';
+            hitPrice = low;
+            break; 
+          } else if (high >= trade.take_profit) {
+            hit = 'TP';
+            hitPrice = high;
+            break;
+          }
+        } else { // SHORT
+          if (high >= trade.stop_loss) {
+            hit = 'SL';
+            hitPrice = high;
+            break;
+          } else if (low <= trade.take_profit) {
+            hit = 'TP';
+            hitPrice = low;
+            break;
+          }
+        }
       }
 
       if (hit) {
-        logger.info(`🎯 ${trade.symbol}: ${hit} HIT! Price: ${currentPrice}`);
+        logger.info(`🎯 ${trade.symbol}: ${hit} HIT! (Wick detected at ${hitPrice})`);
         const emoji = hit === 'TP' ? '✅' : '🚨';
         
         let learningInfo = '';
         if (hit === 'SL') {
           logger.info(`🧠 Requesting AI post-mortem for ${trade.symbol}...`);
-          const lesson = await analyzePostMortem(trade, currentPrice);
+          const lesson = await analyzePostMortem(trade, hitPrice);
           learningInfo = `\n\n📖 *PELAJARAN (AI Analysis):*\n_` + lesson + `_`;
-          tracker.saveLesson(trade.symbol, trade.bias, lesson); // Save for future memory
+          tracker.saveLesson(trade.symbol, trade.bias, lesson);
         }
 
-        const msg = `${emoji} *${hit} HIT: ${trade.symbol}*\n\n` +
+        const msg = `${emoji} *${hit} HIT (WICK): ${trade.symbol}*\n\n` +
                     `📊 *Bias:* \`${trade.bias}\`\n` +
-                    `💰 *Final Price:* \`${currentPrice}\`` + learningInfo;
+                    `💰 *Target Price:* \`${hit === 'TP' ? trade.take_profit : trade.stop_loss}\`\n` +
+                    `📍 *Hit Price:* \`${hitPrice}\`` + learningInfo;
         
         await sendStatus(msg);
-        tracker.remove(trade.symbol, `${hit}_HIT`, currentPrice);
+        tracker.remove(trade.symbol, `${hit}_HIT`);
       }
     } catch (err) {
       logger.error(`Failed to monitor ${trade.symbol}:`, err.message);
