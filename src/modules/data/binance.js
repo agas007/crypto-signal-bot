@@ -8,6 +8,7 @@ const FALLBACK_ENDPOINTS = [
   'https://data-api.binance.vision',
   'https://api.binance.me',
   'https://api-gcp.binance.com',
+  'https://api.binance.me',
 ];
 
 const FUTURES_URL = 'https://fapi.binance.com';
@@ -19,11 +20,20 @@ const FUTURES_FALLBACK_URLS = [
 
 let currentWorkingUrl = config.binance.baseUrl;
 let currentWorkingFuturesUrl = FUTURES_URL;
+let isIpBlocked = false;
+let blockResetTime = 0;
+
+function checkIpBlock() {
+    if (isIpBlocked && Date.now() > blockResetTime) isIpBlocked = false;
+    return isIpBlocked;
+}
 
 /**
  * Perform a GET request with fallback or signed security.
  */
 async function getWithFallback(path, params = {}, isSigned = false, isFutures = false) {
+  if (checkIpBlock()) throw new Error('BINANCE_IP_BLOCK_451');
+
   const queryParams = { ...params };
   let headers = {};
   const actualBaseUrl = isFutures ? currentWorkingFuturesUrl : currentWorkingUrl;
@@ -57,15 +67,28 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
     });
     return response.data;
   } catch (err) {
-    if (err.response && err.response.data) {
+    if (err.response) {
         const bErr = err.response.data;
-        logger.error(`❌ Binance API Error (${path}): Code: ${bErr.code}, Msg: ${bErr.msg}`);
-        // Handle specific error: Timestamp outside recvWindow
-        if (bErr.code === -1021) {
-            logger.warn('⚠️ Server time is out of sync. Trying to adjust timestamp...');
+        const status = err.response.status;
+
+        if (status === 451) {
+            isIpBlocked = true;
+            blockResetTime = Date.now() + 15 * 60 * 1000;
+            logger.warn(`🛑 Binance Restricted Location (451) for ${path}. IP marked as blocked for 15 mins.`);
+            throw new Error('BINANCE_RESTRICTED_LOCATION_451');
+        } else {
+            const code = bErr?.code ?? 'N/A';
+            const msg = bErr?.msg ?? err.message ?? 'Unknown';
+            logger.error(`❌ Binance API Error (${path}): Code: ${code}, Msg: ${msg}`);
         }
+    } else {
+        logger.error(`❌ Binance Network Error (${path}): ${err.message}`);
     }
     
+    if (err.response?.status === 451) {
+        throw new Error('BINANCE_RESTRICTED_LOCATION_451');
+    }
+
     if (isFutures) {
         const fUrls = [
             FUTURES_URL,
@@ -84,20 +107,21 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
                 return response.data;
             } catch (e) {
                 if (e.response?.status === 429) throw e;
+                if (e.response?.status === 451) throw new Error('BINANCE_RESTRICTED_LOCATION_451');
                 continue;
             }
         }
-        throw err; // If all fallbacks failed, throw original
+        throw err;
     }
     
-    // For spot, keep checking uniqueUrls
+    // For spot
     const urls = [
       currentWorkingUrl,
       'https://api.binance.me',
       'https://data-api.binance.vision',
       config.binance.baseUrl,
       ...FALLBACK_ENDPOINTS,
-    ];
+    ].filter(Boolean);
     
     const uniqueUrls = [...new Set(urls)];
     let lastError = err;
@@ -115,6 +139,11 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
       } catch (e) {
         lastError = e;
         if (e.response?.status === 429) throw e;
+        if (e.response?.status === 451) {
+            isIpBlocked = true;
+            blockResetTime = Date.now() + 15 * 60 * 1000;
+            throw new Error('BINANCE_RESTRICTED_LOCATION_451');
+        }
         logger.warn(`⚠️ Endpoint ${baseUrl} failed (${e.response?.status || 'NETWORK_ERR'})`);
         continue;
       }
@@ -136,7 +165,11 @@ async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
         const path = type === 'futures' ? '/fapi/v1/userTrades' : '/api/v3/myTrades';
         const data = await getWithFallback(path, params, true, type === 'futures');
 
-        if (!data || !Array.isArray(data)) {
+        if (data === '' || !data) {
+            return [];
+        }
+
+        if (!Array.isArray(data)) {
             logger.warn(`⚠️ Binance returned non-array for ${type} ${symbol}: ${JSON.stringify(data)}`);
             return [];
         }
@@ -157,7 +190,7 @@ async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
         }));
     } catch (err) {
         logger.error(`Failed to fetch ${type} trades for ${symbol}: ${err.message}`);
-        return []; 
+        throw err; // Re-throw so caller can detect 451
     }
 }
 

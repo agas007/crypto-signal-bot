@@ -100,13 +100,15 @@ function initTelegram() {
       // 🧠 Call AI Performance Coach
       let aiReview = await analyzePerformanceSummary(stats, stats.tradeLog);
       
-      // Sanitize Markdown from AI
-      const sanitizedAiReview = aiReview
-        .replace(/([_*`\[\]()])/g, '\\$1') // Escape ALL markdown chars from AI
-        .replace(/\\`\\`\\`(\w+)?/g, '\n```$1\n') // Restore code blocks if any
-        .replace(/\\*\\*/g, '*') // Restore bold slightly
-        .replace(/\\`/g, '`') // Restore inline code
-        .substring(0, 2000);
+      // Sanitize Markdown from AI (Truncate BEFORE sanitization to avoid breaking entities)
+      const maxAiLen = 1500;
+      const aiTruncated = aiReview.length > maxAiLen ? aiReview.substring(0, maxAiLen) + '...' : aiReview;
+      
+      const sanitizedAiReview = aiTruncated
+        .replace(/([_*`\[\]()])/g, '\\$1') // Escape ALL possible markdown chars
+        .replace(/\\`\\`\\`(\w+)?/g, '\n```$1\n') // But restore code blocks
+        .replace(/\\*\\*/g, '*') // And bold
+        .replace(/\\`/g, '`'); // And inline code
 
       const report = `📈 *BINANCE PERFORMANCE REPORT*\n` +
                      `⏱ *Period:* \`${stats.period.toUpperCase()}\`\n` +
@@ -121,8 +123,11 @@ function initTelegram() {
                      `_Note: Datasync is real-time via Binance API._`;
 
       bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(err => {
-          logger.error('Telegram Markdown Error:', err.message);
-          bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
+          logger.error('Telegram Markdown Error (Retrying plain text):', err.message);
+          const plainReport = report
+             .replace(/[*_`]/g, '')
+             .replace(/━━━━━━━━━━━━━━━━━━━/g, '-------------------');
+          bot.sendMessage(msg.chat.id, plainReport);
       });
     } catch (err) {
       logger.error('Failed to generate Binance performance:', err.stack);

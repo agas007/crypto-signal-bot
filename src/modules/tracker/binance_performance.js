@@ -30,26 +30,41 @@ class BinancePerformance {
 
     for (const mkt of marketsToScan) {
       if (mkt === 'futures') {
-        const trades = await fetchUserTrades('', startTime, 'futures'); 
-        const pnlData = await this._calculateAndLearn('GLOBAL_FUTURES', trades, 'futures');
-        totalPnl += pnlData.pnl;
-        tradesCount += pnlData.count;
-        wins += pnlData.wins;
-        losses += pnlData.losses;
-        tradeLog.push(...pnlData.details); 
-      } else {
-        const scanPairs = await fetchTopPairs(50);
-        for (const symbol of scanPairs) {
-            const trades = await fetchUserTrades(symbol, startTime, 'spot');
-            if (trades.length === 0) continue;
-
-            const pnlData = await this._calculateAndLearn(symbol, trades, 'spot');
+        try {
+            const trades = await fetchUserTrades('', startTime, 'futures'); 
+            const pnlData = await this._calculateAndLearn('GLOBAL_FUTURES', trades, 'futures');
             totalPnl += pnlData.pnl;
             tradesCount += pnlData.count;
             wins += pnlData.wins;
             losses += pnlData.losses;
-            tradeLog.push(...pnlData.details);
-            await sleep(50); 
+            tradeLog.push(...pnlData.details); 
+        } catch (err) {
+            logger.warn(`⚠️ Skipping futures sync due to error: ${err.message}`);
+        }
+      } else {
+        const scanPairs = await fetchTopPairs(50);
+        let error451Count = 0;
+        
+        for (const symbol of scanPairs) {
+            try {
+                const trades = await fetchUserTrades(symbol, startTime, 'spot');
+                if (trades.length === 0) continue;
+
+                const pnlData = await this._calculateAndLearn(symbol, trades, 'spot');
+                totalPnl += pnlData.pnl;
+                tradesCount += pnlData.count;
+                wins += pnlData.wins;
+                losses += pnlData.losses;
+                tradeLog.push(...pnlData.details);
+                await sleep(50); 
+            } catch (err) {
+                const msg = err.message || '';
+                if (msg.includes('451') || msg.includes('RESTRICTED')) {
+                    logger.error(`🛑 CRITICAL: Binance IP block detected. Skipping remaining sync.`);
+                    break; // Escape the loop entirely
+                }
+                logger.warn(`⚠️ Error fetching ${symbol}: ${msg}`);
+            }
         }
       }
     }
