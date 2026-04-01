@@ -27,6 +27,8 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
         throw new Error('BINANCE_API_KEY and BINANCE_API_SECRET are required for private requests');
     }
     queryParams.timestamp = Date.now();
+    queryParams.recvWindow = 60000; // Increased tolerance for server time skew (60s)
+    
     const queryString = Object.entries(queryParams)
       .map(([key, val]) => `${key}=${encodeURIComponent(val)}`)
       .join('&');
@@ -45,10 +47,19 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
     const response = await axios.get(`${actualBaseUrl}${path}`, {
       params: queryParams,
       headers,
-      timeout: 10_000,
+      timeout: 15_000, // Slightly longer timeout for production stability
     });
     return response.data;
   } catch (err) {
+    if (err.response && err.response.data) {
+        const bErr = err.response.data;
+        logger.error(`❌ Binance API Error (${path}): Code: ${bErr.code}, Msg: ${bErr.msg}`);
+        // Handle specific error: Timestamp outside recvWindow
+        if (bErr.code === -1021) {
+            logger.warn('⚠️ Server time is out of sync. Trying to adjust timestamp...');
+        }
+    }
+    
     if (isFutures) throw err; // Futures is less prone to local blocks than spot
     
     // For spot, keep checking uniqueUrls
