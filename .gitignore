@@ -3,3 +3,4 @@ node_modules/
 .env copy
 *.log
 tmp_charts/
+history_lessons.json

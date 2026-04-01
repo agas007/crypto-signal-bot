@@ -3,6 +3,8 @@ require('dotenv').config();
 const config = {
   binance: {
     baseUrl: process.env.BINANCE_BASE_URL || 'https://api.binance.com',
+    apiKey: process.env.BINANCE_API_KEY,
+    apiSecret: process.env.BINANCE_API_SECRET,
     rateLimitMs: 200, // delay between requests to stay under rate limits
   },
 

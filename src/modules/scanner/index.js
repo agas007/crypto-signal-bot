@@ -180,9 +180,15 @@ async function runScanCycle() {
           await sendStatus(`🔄 *UPDATE ${candidate.symbol}*\n_Sinyal sebelumnya masih VALID._\n• *Entry:* \`${refined.entry}\` (±${(diffEntry*100).toFixed(1)}%)\n• *Status:* Ongoing trade.`);
           continue;
         } else {
-          // If bias changed or prices shifted significantly, update the tracker
-          logger.info(`⚠️ ${candidate.symbol}: Updating levels shifting by ${(diffEntry*100).toFixed(2)}%. Sending NEW signal message.`);
-          tracker.remove(candidate.symbol, 'UPDATING');
+          // If bias changed or prices shifted significantly, invalidate and update
+          logger.info(`⚠️ ${candidate.symbol}: Invalidating old setup due to new market conditions.`);
+          
+          let invalidateReason = refined.bias !== active.bias 
+            ? `Perubahan BIAS dari ${active.bias} ke ${refined.bias}`
+            : `Penyesuaian Level (Entry/SL/TP) karena volatilitas market (diff: ${(diffEntry*100).toFixed(1)}%)`;
+
+          await sendStatus(`🚫 *SIGNAL INVALID: ${candidate.symbol}*\n_Sinyal sebelumnya sudah tidak valid._\n• *Alasan:* ${invalidateReason}\n\n_Stay tuned, setup baru sedang dikirim..._`);
+          tracker.remove(candidate.symbol, 'INVALIDATED_BY_NEW_SETUP');
         }
       }
 
@@ -273,7 +279,7 @@ async function checkActiveTrades() {
                     `💰 *Final Price:* \`${currentPrice}\`` + learningInfo;
         
         await sendStatus(msg);
-        tracker.remove(trade.symbol, `${hit}_HIT`);
+        tracker.remove(trade.symbol, `${hit}_HIT`, currentPrice);
       }
     } catch (err) {
       logger.error(`Failed to monitor ${trade.symbol}:`, err.message);

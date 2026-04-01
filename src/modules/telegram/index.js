@@ -3,9 +3,30 @@ const TelegramBot = require('node-telegram-bot-api');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const { formatJakartaTime } = require('../../utils/time');
+const tracker = require('../tracker');
+const binancePerformance = require('../tracker/binance_performance');
 
 let bot = null;
 let startTime = Date.now();
+
+function getHelpMessage(chatId) {
+  return `🤖 *Crypto Signal Bot v3.1.0* is active!\n\n` +
+    `📈 /performance [daily|weekly|monthly] - Real Binance PnL\n` +
+    `⏳ /active - List all currently active signals\n` +
+    `📊 /status - Bot health & info\n` +
+    `📜 /history - View last 10 trade results\n` +
+    `🧠 /lessons - View recent AI learnings\n` +
+    `📐 /strategy - View current trading logic\n` +
+    `🔍 /pairs - See top pairs being scanned\n` +
+    `❓ /help - Show this help menu\n\n` +
+    `⚙️ /adjust SYMBOL TP SL - Manual level adjust\n` +
+    `_Example: /adjust SUIUSDT 1.8 1.45_\n\n` +
+    `🛠 *Admin Commands:* \n` +
+    `🗑 /reset\\_active - Clear all active signals\n` +
+    `📂 /reset\\_history - Clear trade history\n` +
+    `🧠 /reset\\_lessons - Clear AI lessons\n\n` +
+    `_Connected to chatId: ${chatId}_`;
+}
 
 /**
  * Initialize the Telegram bot with polling enabled for interactive commands.
@@ -18,19 +39,14 @@ function initTelegram() {
 
   // ─── Command Handlers ─────────────────────────────────────
   
-  // /start command
-  bot.onText(/\/start/, (msg) => {
-    const chatId = msg.chat.id;
-    bot.sendMessage(chatId, 
-      `🤖 *Crypto Signal Bot v3.1.0* is active!\n\n` +
-      `Commands:\n` +
-      `📊 /status - Quick bot health check\n` +
-      `📐 /strategy - View current trading logic\n` +
-      `🔍 /pairs - See top pairs being scanned\n\n` +
-      `_Connected to chatId: ${chatId}_`, 
-      { parse_mode: 'Markdown' }
-    );
-  });
+  // /start, /help, /commands
+  const helpHandler = (msg) => {
+    bot.sendMessage(msg.chat.id, getHelpMessage(msg.chat.id), { parse_mode: 'Markdown' });
+  };
+
+  bot.onText(/\/start/, helpHandler);
+  bot.onText(/\/help/, helpHandler);
+  bot.onText(/\/commands/, helpHandler);
 
   // /status command
   bot.onText(/\/status/, (msg) => {
@@ -42,10 +58,115 @@ function initTelegram() {
       `✅ *Bot Status: ONLINE*\n\n` +
       `🕒 *Uptime:* ${hrs}h ${mins}m\n` +
       `⌛ *Interval:* ${config.scanner.intervalMs / 3600000} hour(s)\n` +
-      `🎯 *Strict Mode:* Active (Score ≥ 65)\n` +
+      `🎯 *Mode:* Strict (Score ≥ 65)\n` +
+      `🧠 *AI Memory:* ${tracker.lessons.length} lessons learned\n` +
       `🔄 *Timeframes:* D1 · H4 · H1`,
       { parse_mode: 'Markdown' }
     );
+  });
+
+  // /performance command
+  bot.onText(/\/performance(?:\s+(daily|weekly|monthly))?/, async (msg, match) => {
+    const period = match[1] || 'all';
+    bot.sendMessage(msg.chat.id, `⏳ *Calculating Binance performance (${period})...* \n_Checking trades for scanned symbols..._`);
+    
+    try {
+      const stats = await binancePerformance.getPerformance(period);
+      
+      const report = `📈 *BINANCE PERFORMANCE REPORT*\n` +
+                     `⏱ *Period:* \`${period.toUpperCase()}\`\n` +
+                     `━━━━━━━━━━━━━━━━━━━\n\n` +
+                     `💰 *Realized PnL:* \`$${stats.totalPnl}\`\n` +
+                     `📊 *Total Trades:* \`${stats.tradesCount}\`\n` +
+                     `🎯 *Win Rate:* \`${stats.winRate}\`\n` +
+                     `✅ *Wins:* ${stats.wins} | 🚨 *Losses:* ${stats.losses}\n\n` +
+                     `_Note: Stats cover trades in top symbols scanned by the bot._`;
+
+      bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+    } catch (err) {
+      logger.error('Failed to generate Binance performance:', err.message);
+      bot.sendMessage(msg.chat.id, '❌ Failed to fetch data from Binance. Check your API keys and permissions.');
+    }
+  });
+
+  // /active command
+  bot.onText(/\/active/, (msg) => {
+    const actives = tracker.getAllActive();
+    
+    if (actives.length === 0) {
+      return bot.sendMessage(msg.chat.id, '😴 *No active signals* at the moment.');
+    }
+
+    let report = `⏳ *ACTIVE SIGNALS (${actives.length})*\n\n`;
+    
+    actives.forEach((s, i) => {
+      const ageMin = Math.floor((Date.now() - s.timestamp) / 60000);
+      const ageStr = ageMin > 60 ? `${(ageMin/60).toFixed(1)}h` : `${ageMin}m`;
+      
+      report += `${i+1}. *${s.symbol}* (${s.bias})\n` +
+                `• Entry: \`${s.entry}\`\n` +
+                `• TP: \`${s.take_profit}\` | SL: \`${s.stop_loss}\`\n` +
+                `• Age: \`${ageStr}\`\n\n`;
+    });
+
+    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+  });
+
+  // /adjust command
+  bot.onText(/\/adjust\s+(\w+)\s+([\d.]+)\s+([\d.]+)/, (msg, match) => {
+    const symbol = match[1].toUpperCase();
+    const tp = match[2];
+    const sl = match[3];
+
+    const success = tracker.adjustSignal(symbol, tp, sl);
+    if (success) {
+      bot.sendMessage(msg.chat.id, `✅ *Adjusted levels for ${symbol}:*\n• *New TP:* \`${tp}\`\n• *New SL:* \`${sl}\``, { parse_mode: 'Markdown' });
+    } else {
+      bot.sendMessage(msg.chat.id, `❌ Signal for *${symbol}* not found.`);
+    }
+  });
+
+  // /history command
+  bot.onText(/\/history/, (msg) => {
+    const history = tracker.history.slice(-10).reverse();
+    if (history.length === 0) return bot.sendMessage(msg.chat.id, '📜 *No trade history* yet.');
+
+    let report = `📜 *LAST 10 TRADE RESULTS*\n\n`;
+    history.forEach((t, i) => {
+      const resultEmoji = t.close_reason === 'TP_HIT' ? '✅' : t.close_reason === 'SL_HIT' ? '🚨' : '⚪';
+      report += `${i+1}. ${resultEmoji} *${t.symbol}* (${t.bias})\n` +
+                `• In: \`${t.entry}\` → Out: \`${t.exit_price || 'N/A'}\`\n` +
+                `• Result: \`${t.close_reason}\`\n\n`;
+    });
+    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+  });
+
+  // /lessons command
+  bot.onText(/\/lessons/, (msg) => {
+    const lessons = tracker.lessons.slice(-5).reverse();
+    if (lessons.length === 0) return bot.sendMessage(msg.chat.id, '🧠 *No lessons learned* yet. Keep trading!');
+
+    let report = `🧠 *RECENT AI LESSONS (Post-Mortem)*\n\n`;
+    lessons.forEach((l, i) => {
+      report += `${i+1}. *${l.symbol}* (${l.bias})\n_${l.analysis}_\n\n`;
+    });
+    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+  });
+
+  // ─── Reset Commands ───
+  bot.onText(/\/reset_active/, (msg) => {
+    tracker.clearActive();
+    bot.sendMessage(msg.chat.id, '🗑 *Active signals cleared!*');
+  });
+
+  bot.onText(/\/reset_history/, (msg) => {
+    tracker.clearHistory();
+    bot.sendMessage(msg.chat.id, '📂 *Trade history cleared!*');
+  });
+
+  bot.onText(/\/reset_lessons/, (msg) => {
+    tracker.clearLessons();
+    bot.sendMessage(msg.chat.id, '🧠 *AI lessons cleared!*');
   });
 
   // /strategy command
@@ -142,8 +263,8 @@ async function sendSignal(signal, imagePath = null) {
   const replyMarkup = {
     inline_keyboard: [
       [
-        { text: '📈 TradingView', url: `https://www.tradingview.com/chart/?symbol=BINANCE:${signal.symbol}` },
-        { text: '💰 Binance App', url: `https://app.binance.com/en/trade/${signal.symbol.replace('USDT', '_USDT')}` }
+        { text: '📈 View', url: `https://www.tradingview.com/chart/?symbol=BINANCE:${signal.symbol}` },
+        { text: '💰 Trade', url: `https://app.binance.com/en/trade/${signal.symbol.replace('USDT', '_USDT')}` }
       ]
     ]
   };
@@ -154,8 +275,7 @@ async function sendSignal(signal, imagePath = null) {
         caption: message,
         parse_mode: 'Markdown',
         reply_markup: replyMarkup
-      }, { contentType: false }); // Fix deprecation warning
-      // Optionally cleanup the image after sending
+      });
       fs.unlinkSync(imagePath);
     } else {
       await bot.sendMessage(config.telegram.chatId, message, {

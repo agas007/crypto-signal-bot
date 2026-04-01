@@ -102,6 +102,7 @@ INSTRUCTIONS:
 2. If valid: refine entry, SL, TP levels (use the pre-calc as baseline, adjust if needed)
 3. Only reject if conditions clearly conflict or are dangerous
 4. Confidence scale: 0-100 (60+ is tradeable, 80+ is strong)
+5. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia).
 
 Respond with ONLY this JSON format:
 {
@@ -112,7 +113,7 @@ Respond with ONLY this JSON format:
   "entry": price_number_or_null,
   "stop_loss": price_number_or_null,
   "take_profit": price_number_or_null,
-  "reason": "clear explanation of why this is or isn't a valid trade"
+  "reason": "Penjelasan terperinci dalam Bahasa Indonesia mengenai alasan trading ini valid/tidak"
 }`;
 }
 
@@ -248,4 +249,58 @@ Keep it simple and educational. Avoid generic advice.
   }
 }
 
-module.exports = { refineSignal, analyzePostMortem, buildPrompt, buildSystemPrompt };
+/**
+ * Analyze a real world trade from Binance that resulted in a loss.
+ * Provides feedback on what went wrong based on price action.
+ */
+async function analyzeRealTrade(symbol, entry, exit, side, pnl, candles) {
+  try {
+    const candleSummary = candles.slice(-10).map(c => 
+      `Time: ${new Date(c.openTime).toISOString()}, H: ${c.high}, L: ${c.low}, C: ${c.close}`
+    ).join('\n');
+
+    const prompt = `
+You are a top-tier Trading Coach. A trader just took a ${side} trade on ${symbol} and lost $${Math.abs(pnl).toFixed(2)}.
+
+TRADE DATA:
+- Symbol: ${symbol}
+- Side: ${side}
+- Entry Price: ${entry}
+- Exit Price: ${exit}
+- Result: LOSS
+
+RECENT MARKET CONTEXT (Last 10 candles before/during trade):
+${candleSummary}
+
+TASK:
+1. Be brutally honest. Why did this trade fail? 
+2. Was it a bad entry? Did the price hit a resistance/support? 
+3. Provide 1-2 sentences of "Lesson Learned" in INDONESIAN (Bahasa Indonesia).
+
+Respond with ONLY this JSON:
+{
+  "analysis": "Penjelasan singkat dalam Bahasa Indonesia",
+  "mistake_type": "FOMO / Bad Entry / No Trend / Catching Falling Knife / etc"
+}
+`;
+
+    const response = await axios.post(config.openRouter.baseUrl + '/chat/completions', {
+      model: config.openRouter.model,
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' }
+    }, {
+      headers: {
+        'Authorization': `Bearer ${config.openRouter.apiKey}`,
+        'HTTP-Referer': 'https://github.com/crypto-signal-bot',
+      }
+    });
+
+    const content = JSON.parse(response.data.choices[0].message.content);
+    return content;
+  } catch (err) {
+    logger.error('Failed to analyze real trade:', err.message);
+    return null;
+  }
+}
+
+module.exports = { refineSignal, analyzePostMortem, analyzeRealTrade, buildPrompt, buildSystemPrompt };
