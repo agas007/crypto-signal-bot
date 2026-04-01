@@ -84,11 +84,22 @@ function initTelegram() {
     try {
       const stats = await binancePerformance.getPerformance(period, market);
       
+      let ledger = '';
+      if (stats.tradeLog.length > 0) {
+        ledger = `📜 *TRADE LEDGER (Recent 15):*\n` +
+                 stats.tradeLog.map(t => {
+                   const emoji = parseFloat(t.pnl) > 0 ? '✅' : '🚨';
+                   const pnlStr = (parseFloat(t.pnl) > 0 ? '+' : '') + t.pnl;
+                   return `${emoji} \`${t.symbol}\` (${t.market}): \`${pnlStr} USDT\``;
+                 }).join('\n') + `\n\n`;
+      }
+
       const report = `📈 *BINANCE PERFORMANCE REPORT*\n` +
                      `⏱ *Period:* \`${stats.period.toUpperCase()}\`\n` +
                      `🏛 *Market:* \`${stats.market.toUpperCase()}\`\n` +
                      `━━━━━━━━━━━━━━━━━━━\n\n` +
-                     `💰 *Realized PnL:* \`$${stats.totalPnl}\`\n` +
+                     ledger +
+                     `💰 *Total Realized PnL:* \`$${stats.totalPnl}\`\n` +
                      `📊 *Total Trades:* \`${stats.tradesCount}\`\n` +
                      `🎯 *Win Rate:* \`${stats.winRate}\`\n` +
                      `✅ *Wins:* ${stats.wins} | 🚨 *Losses:* ${stats.losses}\n\n` +

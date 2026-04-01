@@ -23,22 +23,22 @@ class BinancePerformance {
     let tradesCount = 0;
     let wins = 0;
     let losses = 0;
+    const tradeLog = [];
 
     const marketsToScan = market === 'combined' ? ['spot', 'futures'] : [market];
     logger.info(`📊 Global Binance ${market.toUpperCase()} sync starting (${period})...`);
 
     for (const mkt of marketsToScan) {
       if (mkt === 'futures') {
-        // FUTURES: We can fetch ALL symbols in one go (very efficient)
         const trades = await fetchUserTrades('', startTime, 'futures'); 
         const pnlData = await this._calculateAndLearn('GLOBAL_FUTURES', trades, 'futures');
         totalPnl += pnlData.pnl;
         tradesCount += pnlData.count;
         wins += pnlData.wins;
         losses += pnlData.losses;
+        tradeLog.push(...pnlData.details); 
       } else {
-        // SPOT: Individual symbol scan (need to broaden the search)
-        const scanPairs = await fetchTopPairs(50); // Scan top 50 pairs
+        const scanPairs = await fetchTopPairs(50);
         for (const symbol of scanPairs) {
             const trades = await fetchUserTrades(symbol, startTime, 'spot');
             if (trades.length === 0) continue;
@@ -48,6 +48,7 @@ class BinancePerformance {
             tradesCount += pnlData.count;
             wins += pnlData.wins;
             losses += pnlData.losses;
+            tradeLog.push(...pnlData.details);
             await sleep(50); 
         }
       }
@@ -62,7 +63,8 @@ class BinancePerformance {
       tradesCount,
       winRate: winRate.toFixed(2) + '%',
       wins,
-      losses
+      losses,
+      tradeLog: tradeLog.slice(-15).reverse() // Show last 15 trade events
     };
   }
 
@@ -74,23 +76,30 @@ class BinancePerformance {
     let count = 0;
     let wins = 0;
     let losses = 0;
+    const details = [];
 
     if (market === 'futures') {
-        // Futures provides realizedPnl directly
         trades.forEach(t => {
             if (t.realizedPnl !== 0) {
                 pnl += t.realizedPnl;
                 count++;
-                if (t.realizedPnl > 0) wins++; else if (t.realizedPnl < -0.1) {
-                    losses++;
-                    this._triggerAiLesson(symbol, t.price, t.price, t.realizedPnl, t.time, 'FUTURES');
-                } else losses++;
+                if (t.realizedPnl > 0) wins++; else losses++;
+                
+                details.push({
+                    symbol: t.symbol,
+                    market: 'FUT',
+                    pnl: t.realizedPnl.toFixed(2),
+                    time: t.time
+                });
+
+                if (t.realizedPnl < -0.1) {
+                    this._triggerAiLesson(t.symbol, t.price, t.price, t.realizedPnl, t.time, 'FUTURES');
+                }
             }
         });
-        return { pnl, count, wins, losses };
+        return { pnl, count, wins, losses, details };
     }
 
-    // Spot needs manual matching
     const sorted = [...trades].sort((a, b) => a.time - b.time);
     let inventoryQty = 0;
     let avgCost = 0;
@@ -107,20 +116,24 @@ class BinancePerformance {
           
           pnl += realizedPnl;
           count++;
-          if (realizedPnl > 0) {
-            wins++;
-          } else if (realizedPnl < -0.1) {
-            losses++;
+          if (realizedPnl > 0) wins++; else losses++;
+
+          details.push({
+            symbol,
+            market: 'SPOT',
+            pnl: realizedPnl.toFixed(2),
+            time: t.time
+          });
+
+          if (realizedPnl < -0.1) {
             this._triggerAiLesson(symbol, avgCost, t.price, realizedPnl, t.time, 'SPOT');
-          } else {
-            losses++;
           }
           inventoryQty -= sellQty;
         }
       }
     }
 
-    return { pnl, count, wins, losses };
+    return { pnl, count, wins, losses, details };
   }
 
   /**
