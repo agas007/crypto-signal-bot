@@ -1,7 +1,7 @@
 {
   "name": "crypto-signal-bot",
-  "version": "3.1.0",
-  "description": "Modular crypto trading signal bot with technical analysis and AI-powered decision refinement",
+  "version": "4.0.0",
+  "description": "AI-Driven Crypto Signal Scanner & Real-Time Performance Tracker",
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",

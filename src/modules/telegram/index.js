@@ -10,7 +10,7 @@ let bot = null;
 let startTime = Date.now();
 
 function getHelpMessage(chatId) {
-  return `🤖 *Crypto Signal Bot v3.2.0* is active!\n\n` +
+  return `🤖 *Crypto Signal Bot v4.0.0* is active!\n\n` +
     `📈 /performance [period] [market] - Real PnL\n` +
     `_Periods: daily, weekly, monthly, all_\n` +
     `_Markets: spot, futures, combined_\n` +

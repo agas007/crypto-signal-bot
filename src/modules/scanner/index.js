@@ -222,7 +222,7 @@ async function runScanCycle() {
 async function startScanner() {
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
-  await sendStatus('🤖 *Crypto Signal Bot v3.1* started!\n_Signal Memory, AI Learning & Active Tracker active._\n_Multi-TF: D1 · H4 · H1 — scanning every 1 hour..._');
+  await sendStatus('🤖 *Crypto Signal Bot v4.0.0* started!\n_Binance Real-Time Sync, AI Learning & Ledger active._\n_Scanning Spot & Futures Market every 1 hour..._');
 
   // Run first cycle immediately
   await runScanCycle();
