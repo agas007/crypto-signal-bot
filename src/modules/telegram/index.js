@@ -10,17 +10,18 @@ let bot = null;
 let startTime = Date.now();
 
 function getHelpMessage(chatId) {
-  return `🤖 *Crypto Signal Bot v3.1.0* is active!\n\n` +
-    `📈 /performance [daily|weekly|monthly] - Real Binance PnL\n` +
+  return `🤖 *Crypto Signal Bot v3.2.0* is active!\n\n` +
+    `📈 /performance [period] [market] - Real PnL\n` +
+    `_Periods: daily, weekly, monthly, all_\n` +
+    `_Markets: spot, futures, combined_\n` +
+    `_Example: /performance weekly futures_\n\n` +
     `⏳ /active - List all currently active signals\n` +
     `📊 /status - Bot health & info\n` +
     `📜 /history - View last 10 trade results\n` +
     `🧠 /lessons - View recent AI learnings\n` +
     `📐 /strategy - View current trading logic\n` +
-    `🔍 /pairs - See top pairs being scanned\n` +
     `❓ /help - Show this help menu\n\n` +
-    `⚙️ /adjust SYMBOL TP SL - Manual level adjust\n` +
-    `_Example: /adjust SUIUSDT 1.8 1.45_\n\n` +
+    `⚙️ /adjust SYMBOL TP SL - Manual level adjust\n\n` +
     `🛠 *Admin Commands:* \n` +
     `🗑 /reset\\_active - Clear all active signals\n` +
     `📂 /reset\\_history - Clear trade history\n` +
@@ -66,21 +67,32 @@ function initTelegram() {
   });
 
   // /performance command
-  bot.onText(/\/performance(?:\s+(daily|weekly|monthly))?/, async (msg, match) => {
-    const period = match[1] || 'all';
-    bot.sendMessage(msg.chat.id, `⏳ *Calculating Binance performance (${period})...* \n_Checking trades for scanned symbols..._`);
+  bot.onText(/\/performance(?:\s+(\w+))?(?:\s+(\w+))?/, async (msg, match) => {
+    let period = match[1] || 'all';
+    let market = match[2] || 'combined';
+
+    // Allow swap of arguments (e.g. /performance futures weekly)
+    const validPeriods = ['daily', 'weekly', 'monthly', 'all'];
+    const validMarkets = ['spot', 'futures', 'combined'];
+
+    if (validMarkets.includes(period) && !validMarkets.includes(market)) {
+        [period, market] = [market, period]; // swap
+    }
+
+    bot.sendMessage(msg.chat.id, `⏳ *Calculating Binance ${market.toUpperCase()} performance (${period})...* \n_Checking trades for scanned symbols..._`);
     
     try {
-      const stats = await binancePerformance.getPerformance(period);
+      const stats = await binancePerformance.getPerformance(period, market);
       
       const report = `📈 *BINANCE PERFORMANCE REPORT*\n` +
-                     `⏱ *Period:* \`${period.toUpperCase()}\`\n` +
+                     `⏱ *Period:* \`${stats.period.toUpperCase()}\`\n` +
+                     `🏛 *Market:* \`${stats.market.toUpperCase()}\`\n` +
                      `━━━━━━━━━━━━━━━━━━━\n\n` +
                      `💰 *Realized PnL:* \`$${stats.totalPnl}\`\n` +
                      `📊 *Total Trades:* \`${stats.tradesCount}\`\n` +
                      `🎯 *Win Rate:* \`${stats.winRate}\`\n` +
                      `✅ *Wins:* ${stats.wins} | 🚨 *Losses:* ${stats.losses}\n\n` +
-                     `_Note: Stats cover trades in top symbols scanned by the bot._`;
+                     `_Note: Futures sync is based on realized PnL from Binance history._`;
 
       bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
     } catch (err) {

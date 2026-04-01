@@ -10,39 +10,54 @@ const config = require('../../config');
  */
 class BinancePerformance {
   /**
-   * Get PnL and Win Rate for a specific timeframe.
+   * Get PnL and Win Rate for a specific timeframe and market.
    * 
    * @param {'daily' | 'weekly' | 'monthly' | 'all'} period 
+   * @param {'spot' | 'futures' | 'combined'} market
    * @returns {Promise<Object>} Performance stats
    */
-  async getPerformance(period = 'all') {
+  async getPerformance(period = 'all', market = 'combined') {
     const startTime = this._getStartTime(period);
-    const pairs = await fetchTopPairs(30);
     
     let totalPnl = 0;
     let tradesCount = 0;
     let wins = 0;
     let losses = 0;
 
-    logger.info(`📊 Syncing Binance trades for period: ${period}...`);
+    const marketsToScan = market === 'combined' ? ['spot', 'futures'] : [market];
+    logger.info(`📊 Global Binance ${market.toUpperCase()} sync starting (${period})...`);
 
-    for (const symbol of pairs) {
-      const trades = await fetchUserTrades(symbol, startTime);
-      if (trades.length < 2) continue;
+    for (const mkt of marketsToScan) {
+      if (mkt === 'futures') {
+        // FUTURES: We can fetch ALL symbols in one go (very efficient)
+        const trades = await fetchUserTrades('', startTime, 'futures'); 
+        const pnlData = await this._calculateAndLearn('GLOBAL_FUTURES', trades, 'futures');
+        totalPnl += pnlData.pnl;
+        tradesCount += pnlData.count;
+        wins += pnlData.wins;
+        losses += pnlData.losses;
+      } else {
+        // SPOT: Individual symbol scan (need to broaden the search)
+        const scanPairs = await fetchTopPairs(50); // Scan top 50 pairs
+        for (const symbol of scanPairs) {
+            const trades = await fetchUserTrades(symbol, startTime, 'spot');
+            if (trades.length === 0) continue;
 
-      const pnlData = await this._calculateAndLearn(symbol, trades);
-      totalPnl += pnlData.pnl;
-      tradesCount += pnlData.count;
-      wins += pnlData.wins;
-      losses += pnlData.losses;
-
-      await sleep(100);
+            const pnlData = await this._calculateAndLearn(symbol, trades, 'spot');
+            totalPnl += pnlData.pnl;
+            tradesCount += pnlData.count;
+            wins += pnlData.wins;
+            losses += pnlData.losses;
+            await sleep(50); 
+        }
+      }
     }
 
     const winRate = tradesCount > 0 ? (wins / tradesCount) * 100 : 0;
 
     return {
       period,
+      market,
       totalPnl: totalPnl.toFixed(2),
       tradesCount,
       winRate: winRate.toFixed(2) + '%',
@@ -54,12 +69,28 @@ class BinancePerformance {
   /**
    * Calculate PnL and learn from mistakes.
    */
-  async _calculateAndLearn(symbol, trades) {
+  async _calculateAndLearn(symbol, trades, market = 'spot') {
     let pnl = 0;
     let count = 0;
     let wins = 0;
     let losses = 0;
 
+    if (market === 'futures') {
+        // Futures provides realizedPnl directly
+        trades.forEach(t => {
+            if (t.realizedPnl !== 0) {
+                pnl += t.realizedPnl;
+                count++;
+                if (t.realizedPnl > 0) wins++; else if (t.realizedPnl < -0.1) {
+                    losses++;
+                    this._triggerAiLesson(symbol, t.price, t.price, t.realizedPnl, t.time, 'FUTURES');
+                } else losses++;
+            }
+        });
+        return { pnl, count, wins, losses };
+    }
+
+    // Spot needs manual matching
     const sorted = [...trades].sort((a, b) => a.time - b.time);
     let inventoryQty = 0;
     let avgCost = 0;
@@ -78,14 +109,12 @@ class BinancePerformance {
           count++;
           if (realizedPnl > 0) {
             wins++;
-          } else if (realizedPnl < -0.1) { // Only analyze losses > $0.1 to avoid dust
+          } else if (realizedPnl < -0.1) {
             losses++;
-            // LOSS DETECTED: Call AI Reviewer async to not block
-            this._triggerAiLesson(symbol, avgCost, t.price, realizedPnl, t.time);
+            this._triggerAiLesson(symbol, avgCost, t.price, realizedPnl, t.time, 'SPOT');
           } else {
             losses++;
           }
-
           inventoryQty -= sellQty;
         }
       }
@@ -97,18 +126,17 @@ class BinancePerformance {
   /**
    * Asynchronously fetch candles and analyze the trade.
    */
-  async _triggerAiLesson(symbol, entry, exit, pnl, tradeTime) {
+  async _triggerAiLesson(symbol, entry, exit, pnl, tradeTime, mktType = 'SPOT') {
     try {
-        // Fetch context around the trade time
-        const candles = await fetchOHLCV(symbol, '1h', 20); // 20 candles for context
-        const review = await analyzeRealTrade(symbol, entry.toFixed(4), exit.toFixed(4), 'LONG/SHORT', pnl, candles);
+        const candles = await fetchOHLCV(symbol, '1h', 20);
+        const side = pnl > 0 ? 'WIN' : 'LOSS';
+        const review = await analyzeRealTrade(symbol, entry.toFixed(4), exit.toFixed(4), `${mktType} ${side}`, pnl, candles);
         
         if (review) {
-            const lessonText = `[REAL TRADE] ${review.mistake_type}: ${review.analysis}`;
+            const lessonText = `[${mktType}] ${review.mistake_type}: ${review.analysis}`;
             const bias = pnl < 0 ? 'LOSS_REVIEW' : 'WIN_REVIEW';
-            
             tracker.saveLesson(symbol, bias, lessonText);
-            logger.info(`🧠 [BinanceSync] New AI Lesson added for ${symbol} real trade.`);
+            logger.info(`🧠 [BinanceSync] New AI Lesson added for ${symbol} ${mktType} trade.`);
         }
     } catch (err) {
         logger.error(`Failed to trigger AI lesson: ${err.message}`);
@@ -122,7 +150,8 @@ class BinancePerformance {
       case 'daily': return now - dayMs;
       case 'weekly': return now - (7 * dayMs);
       case 'monthly': return now - (30 * dayMs);
-      default: return now - (90 * dayMs); // Max 90 days for performance scan
+      case 'all': return null; // Null means fetch the MOST RECENT trades from Binance
+      default: return null;
     }
   }
 }

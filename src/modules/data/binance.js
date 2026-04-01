@@ -10,14 +10,17 @@ const FALLBACK_ENDPOINTS = [
   'https://api-gcp.binance.com',
 ];
 
+const FUTURES_URL = 'https://fapi.binance.com';
+
 let currentWorkingUrl = config.binance.baseUrl;
 
 /**
  * Perform a GET request with fallback or signed security.
  */
-async function getWithFallback(path, params = {}, isSigned = false) {
+async function getWithFallback(path, params = {}, isSigned = false, isFutures = false) {
   const queryParams = { ...params };
   let headers = {};
+  const actualBaseUrl = isFutures ? FUTURES_URL : currentWorkingUrl;
 
   if (isSigned) {
     if (!config.binance.apiKey || !config.binance.apiSecret) {
@@ -37,58 +40,75 @@ async function getWithFallback(path, params = {}, isSigned = false) {
     headers['X-MBX-APIKEY'] = config.binance.apiKey;
   }
 
-  const urls = [
-    currentWorkingUrl,
-    'https://api.binance.me',
-    'https://data-api.binance.vision',
-    config.binance.baseUrl,
-    ...FALLBACK_ENDPOINTS,
-  ];
-  
-  const uniqueUrls = [...new Set(urls)];
-  let lastError;
+  // Use simple request for futures if it's the target, or fallback chain for public spot
+  try {
+    const response = await axios.get(`${actualBaseUrl}${path}`, {
+      params: queryParams,
+      headers,
+      timeout: 10_000,
+    });
+    return response.data;
+  } catch (err) {
+    if (isFutures) throw err; // Futures is less prone to local blocks than spot
+    
+    // For spot, keep checking uniqueUrls
+    const urls = [
+      currentWorkingUrl,
+      'https://api.binance.me',
+      'https://data-api.binance.vision',
+      config.binance.baseUrl,
+      ...FALLBACK_ENDPOINTS,
+    ];
+    
+    const uniqueUrls = [...new Set(urls)];
+    let lastError = err;
 
-  for (const baseUrl of uniqueUrls) {
-    try {
-      const response = await axios.get(`${baseUrl}${path}`, {
-        params: queryParams,
-        headers,
-        timeout: 10_000,
-      });
-      
-      if (currentWorkingUrl !== baseUrl) currentWorkingUrl = baseUrl;
-      return response.data;
-    } catch (err) {
-      lastError = err;
-      if (err.response?.status === 429) throw err;
-      logger.warn(`⚠️ Endpoint ${baseUrl} failed (${err.response?.status || 'NETWORK_ERR'})`);
-      continue;
+    for (const baseUrl of uniqueUrls) {
+      if (baseUrl === actualBaseUrl) continue;
+      try {
+        const response = await axios.get(`${baseUrl}${path}`, {
+          params: queryParams,
+          headers,
+          timeout: 10_000,
+        });
+        if (currentWorkingUrl !== baseUrl) currentWorkingUrl = baseUrl;
+        return response.data;
+      } catch (e) {
+        lastError = e;
+        if (e.response?.status === 429) throw e;
+        logger.warn(`⚠️ Endpoint ${baseUrl} failed (${e.response?.status || 'NETWORK_ERR'})`);
+        continue;
+      }
     }
+    throw lastError;
   }
-
-  throw lastError;
 }
 
 /**
  * Fetch personal trade history (PRIVATE).
+ * Supports both SPOT and FUTURES.
  */
-async function fetchUserTrades(symbol, startTime = null) {
+async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
     try {
-        const params = { symbol: symbol.toUpperCase(), limit: 100 };
+        const params = { limit: 1000 }; // Increased from 500 to 1000 (Max allowed by Binance)
+        if (symbol) params.symbol = symbol.toUpperCase();
         if (startTime) params.startTime = startTime;
         
-        const data = await getWithFallback('/api/v3/myTrades', params, true);
+        const path = type === 'futures' ? '/fapi/v1/userTrades' : '/api/v3/myTrades';
+        const data = await getWithFallback(path, params, true, type === 'futures');
+        
         return data.map(t => ({
             symbol: t.symbol,
             price: parseFloat(t.price),
             qty: parseFloat(t.qty),
-            quoteQty: parseFloat(t.quoteQty),
+            quoteQty: type === 'futures' ? (parseFloat(t.price) * parseFloat(t.qty)) : parseFloat(t.quoteQty),
             commission: parseFloat(t.commission),
-            isBuyer: t.isBuyer,
+            isBuyer: type === 'futures' ? (parseFloat(t.realizedPnl) === 0 ? true : false) : t.isBuyer, // Simple heuristic for futures pnl matching
+            realizedPnl: parseFloat(t.realizedPnl || 0),
             time: t.time,
         }));
     } catch (err) {
-        logger.error(`Failed to fetch trades for ${symbol}:`, err.message);
+        logger.error(`Failed to fetch ${type} trades for ${symbol}:`, err.message);
         return [];
     }
 }
