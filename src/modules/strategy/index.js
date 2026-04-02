@@ -32,38 +32,36 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = 4.0)
  */
 function calculateRiskReward(bias, currentPrice, support, resistance) {
   const minRr = config.strategy.minRrRatio;
-  const MAX_SL_PERCENT = 0.04; // 4% Hard Cap for 20x Leverage safety
+  const MAX_SL_ALLOWED = 0.04; // 4% Maximum Risk limit
 
   if (bias === 'LONG') {
     const entry = currentPrice;
-    let sl = support * 0.998;
+    const sl = support * 0.998;
     
-    // Hard Cap check for LONG
-    const maxSlAllowed = entry * (1 - MAX_SL_PERCENT);
-    if (sl < maxSlAllowed) {
-        sl = maxSlAllowed;
-    }
+    // Hard Reject if distance to support > 4%
+    const slDistPercent = (entry - sl) / entry;
+    if (slDistPercent > MAX_SL_ALLOWED) return null;
 
     const tp = resistance !== Infinity
       ? resistance * 0.998
       : entry * (1 + (entry - sl) * minRr / entry);
+    
     const risk = entry - sl;
     const reward = tp - entry;
     const rr = risk > 0 ? reward / risk : 0;
     return { entry, sl, tp, rr };
   } else {
     const entry = currentPrice;
-    let sl = resistance !== Infinity ? resistance * 1.002 : entry * 1.02;
+    const sl = resistance !== Infinity ? resistance * 1.002 : entry * 1.02;
 
-    // Hard Cap check for SHORT
-    const maxSlAllowed = entry * (1 + MAX_SL_PERCENT);
-    if (sl > maxSlAllowed) {
-        sl = maxSlAllowed;
-    }
+    // Hard Reject if distance to resistance > 4%
+    const slDistPercent = (sl - entry) / entry;
+    if (slDistPercent > MAX_SL_ALLOWED) return null;
 
     const tp = support > 0
       ? support * 1.002
       : entry * (1 - (sl - entry) * minRr / entry);
+    
     const risk = sl - entry;
     const reward = entry - tp;
     const rr = risk > 0 ? reward / risk : 0;
@@ -180,8 +178,9 @@ function evaluateSignal(symbol, data) {
   }
 
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance);
+  if (!riskReward) return null; // Hard reject if SL distance > 4%
 
-  // 1. Max SL Threshold (Capital Protection)
+  // 1. Max SL Threshold (Capital Protection) - We still keep this 15% check for other logic, but 4% is already rejected above
   const slDistPercent = (Math.abs(riskReward.entry - riskReward.sl) / riskReward.entry) * 100;
   if (slDistPercent > 15) {
     score -= 10;
