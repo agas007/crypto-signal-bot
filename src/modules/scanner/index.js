@@ -124,16 +124,20 @@ async function runScanCycle() {
   // 3. Build mixed pool: all strict first, then fill with best available
   const totalSlots = config.scanner.topSignalsToAi;
 
-  strictCandidates.sort((a, b) => b.score - a.score);
-  fallbackCandidates.sort((a, b) => b.score - a.score);
+  // Filter out signals with terrible R:R (e.g. < 2.0) if we want quality
+  const qualityCandidates = candidates.filter(c => c.riskReward.rr >= 2.0);
+  const okCandidates = candidates.filter(c => c.riskReward.rr < 2.0);
+
+  // Sort by R:R DESCENDING (Highest R:R first)
+  qualityCandidates.sort((a, b) => b.riskReward.rr - a.riskReward.rr);
+  okCandidates.sort((a, b) => b.riskReward.rr - a.riskReward.rr);
 
   const pool = [
-    ...strictCandidates,
-    ...fallbackCandidates.slice(0, Math.max(0, totalSlots - strictCandidates.length)),
-  ];
+    ...qualityCandidates,
+    ...okCandidates.slice(0, Math.max(0, totalSlots - qualityCandidates.length)),
+  ].slice(0, totalSlots);
 
-  const isMixedMode = strictCandidates.length > 0 && fallbackCandidates.length > 0;
-  const isFallbackOnly = strictCandidates.length === 0;
+  const isFallbackOnly = qualityCandidates.length === 0;
 
   if (isFallbackOnly) {
     logger.info(`⚠️  No strict signals — sending top ${pool.length} BEST AVAILABLE to AI...`);
