@@ -1,6 +1,6 @@
 const config = require('../../config');
 const logger = require('../../utils/logger');
-const { analyzeTrend, calculateStochastic, findSupportResistance, analyzeStructure } = require('../indicators');
+const { analyzeTrend, calculateStochastic, findSupportResistance, analyzeStructure, detectAtSpike } = require('../indicators');
 
 /**
  * Classify price position relative to support/resistance.
@@ -32,10 +32,18 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = 4.0)
  */
 function calculateRiskReward(bias, currentPrice, support, resistance) {
   const minRr = config.strategy.minRrRatio;
+  const MAX_SL_PERCENT = 0.04; // 4% Hard Cap for 20x Leverage safety
 
   if (bias === 'LONG') {
     const entry = currentPrice;
-    const sl = support * 0.998;
+    let sl = support * 0.998;
+    
+    // Hard Cap check for LONG
+    const maxSlAllowed = entry * (1 - MAX_SL_PERCENT);
+    if (sl < maxSlAllowed) {
+        sl = maxSlAllowed;
+    }
+
     const tp = resistance !== Infinity
       ? resistance * 0.998
       : entry * (1 + (entry - sl) * minRr / entry);
@@ -45,7 +53,14 @@ function calculateRiskReward(bias, currentPrice, support, resistance) {
     return { entry, sl, tp, rr };
   } else {
     const entry = currentPrice;
-    const sl = resistance !== Infinity ? resistance * 1.002 : entry * 1.02;
+    let sl = resistance !== Infinity ? resistance * 1.002 : entry * 1.02;
+
+    // Hard Cap check for SHORT
+    const maxSlAllowed = entry * (1 + MAX_SL_PERCENT);
+    if (sl > maxSlAllowed) {
+        sl = maxSlAllowed;
+    }
+
     const tp = support > 0
       ? support * 1.002
       : entry * (1 - (sl - entry) * minRr / entry);
@@ -58,13 +73,6 @@ function calculateRiskReward(bias, currentPrice, support, resistance) {
 
 /**
  * Evaluate a symbol across multiple timeframes with RELAXED scoring.
- *
- * Flow (no hard kill-switches, everything is scored):
- *   1. Analyze all timeframes
- *   2. Score each condition (weighted)
- *   3. Determine bias from best scoring direction
- *   4. Pre-calculate R:R
- *   5. Return if score meets minimum threshold
  *
  * @param {string} symbol
  * @param {{ D1: Array, H4: Array, M15: Array }} data
@@ -84,6 +92,9 @@ function evaluateSignal(symbol, data) {
   const h1Structure = analyzeStructure(H1);
   const h1Stoch = calculateStochastic(H1, stochParams);
 
+  // New: Spike Detection (Penalty for 'God-Candle')
+  const h1Spike = detectAtSpike(H1, 14);
+
   const pricePosition = classifyPricePosition(h4SR.distToSupport, h4SR.distToResistance);
 
   const analysis = {
@@ -97,36 +108,20 @@ function evaluateSignal(symbol, data) {
     pricePosition,
   };
 
-  // ═══════════════════════════════════════════════════════
-  // SOFT REJECT (only truly hopeless cases)
-  // ═══════════════════════════════════════════════════════
-  
   // Only reject if there is literally zero directional info
   if (d1Trend.direction === 'neutral' && h4Trend.direction === 'neutral' && h1Trend.direction === 'neutral') {
-    logger.debug(`${symbol} ✘ All timeframes neutral — no direction at all`);
     return null;
   }
 
-  // ═══════════════════════════════════════════════════════
-  // LONG SCORING (additive, no mandatory conditions)
-  // ═══════════════════════════════════════════════════════
   const longReasons = [];
   let longScore = 0;
+  const tags = [];
 
   // D1 Trend alignment (0-25 pts)
   if (d1Trend.direction === 'bullish') {
-    if (d1Trend.strengthLabel === 'strong') {
-      longReasons.push(`D1 strong bullish (spread: ${d1Trend.spreadPercent.toFixed(2)}%)`);
-      longScore += 25;
-    } else if (d1Trend.strengthLabel === 'moderate') {
-      longReasons.push(`D1 moderate bullish (spread: ${d1Trend.spreadPercent.toFixed(2)}%)`);
-      longScore += 20;
-    } else {
-      longReasons.push(`D1 weak bullish (spread: ${d1Trend.spreadPercent.toFixed(2)}%)`);
-      longScore += 10;
-    }
+    longScore += d1Trend.strengthLabel === 'strong' ? 25 : d1Trend.strengthLabel === 'moderate' ? 20 : 10;
+    longReasons.push(`D1 trend bullish (${d1Trend.strengthLabel})`);
   }
-  // Penalty for going against strong D1 bearish
   if (d1Trend.direction === 'bearish' && d1Trend.strengthLabel === 'strong') {
     longScore -= 30;
   }
@@ -134,182 +129,92 @@ function evaluateSignal(symbol, data) {
   // H4 Trend alignment (0-15 pts)
   if (h4Trend.direction === 'bullish') {
     longReasons.push(`H4 bullish (${h4Trend.strengthLabel})`);
-    longScore += h4Trend.strengthLabel === 'strong' ? 15 : 10;
+    longScore += 15;
   }
 
   // H4 Price position (0-20 pts)
   if (pricePosition === 'near_support') {
     longReasons.push(`H4 near support @ ${h4SR.nearestSupport.toFixed(4)} (${h4SR.distToSupport.toFixed(2)}%)`);
     longScore += 20;
-  } else if (pricePosition === 'middle' && h4SR.distToSupport < 6) {
-    // Give partial credit if within 6%
+  } else if (h4SR.distToSupport < 6) {
     longReasons.push(`H4 moderate proximity to support (${h4SR.distToSupport.toFixed(2)}%)`);
     longScore += 8;
   }
 
-  // H1 Structure (0-15 pts)
+  // H1 Structure
   if (h1Structure.structure === 'bullish') {
-    longReasons.push(`H1 bullish structure (${h1Structure.detail})`);
     longScore += 15;
+    longReasons.push(`H1 bullish structure`);
   }
-
-  // H1 Break of Structure (0-15 pts, bonus)
   if (h1Structure.bos && h1Structure.bosType === 'bullish_bos') {
-    longReasons.push(`H1 bullish BoS detected`);
     longScore += 15;
+    longReasons.push(`H1 bullish Break of Structure`);
   }
 
-  // H1 Trend confluence (0-10 pts)
-  if (h1Trend.direction === 'bullish') {
-    longReasons.push(`H1 trend bullish (${h1Trend.strengthLabel})`);
-    longScore += 10;
-  }
-
-  // Stochastic momentum (0-10 pts)
-  if (h4Stoch.signal === 'oversold') {
-    longReasons.push(`H4 stoch oversold (K:${h4Stoch.k.toFixed(1)} D:${h4Stoch.d.toFixed(1)})`);
-    longScore += 10;
-  }
-  if (h1Stoch.signal === 'oversold') {
-    longReasons.push(`H1 stoch oversold (K:${h1Stoch.k.toFixed(1)})`);
-    longScore += 5;
-  }
-
-  // Stoch crossover bonus
-  if (h4Stoch.k > h4Stoch.d && h4Stoch.k < 40) {
-    longReasons.push(`H4 stoch bullish crossover in low zone`);
-    longScore += 8;
-  }
+  // Stochastic
+  if (h4Stoch.signal === 'oversold') longScore += 10;
+  if (h1Stoch.signal === 'oversold') longScore += 5;
 
   // ═══════════════════════════════════════════════════════
-  // SHORT SCORING (additive, no mandatory conditions)
+  // SHORT SCORING (simplified)
   // ═══════════════════════════════════════════════════════
   const shortReasons = [];
   let shortScore = 0;
-
-  // D1 Trend alignment (0-25 pts)
-  if (d1Trend.direction === 'bearish') {
-    if (d1Trend.strengthLabel === 'strong') {
-      shortReasons.push(`D1 strong bearish (spread: ${d1Trend.spreadPercent.toFixed(2)}%)`);
-      shortScore += 25;
-    } else if (d1Trend.strengthLabel === 'moderate') {
-      shortReasons.push(`D1 moderate bearish (spread: ${d1Trend.spreadPercent.toFixed(2)}%)`);
-      shortScore += 20;
-    } else {
-      shortReasons.push(`D1 weak bearish (spread: ${d1Trend.spreadPercent.toFixed(2)}%)`);
-      shortScore += 10;
-    }
-  }
-  // Penalty for going against strong D1 bullish
-  if (d1Trend.direction === 'bullish' && d1Trend.strengthLabel === 'strong') {
-    shortScore -= 30;
-  }
-
-  // H4 Trend alignment (0-15 pts)
-  if (h4Trend.direction === 'bearish') {
-    shortReasons.push(`H4 bearish (${h4Trend.strengthLabel})`);
-    shortScore += h4Trend.strengthLabel === 'strong' ? 15 : 10;
-  }
-
-  // H4 Price position (0-20 pts)
-  if (pricePosition === 'near_resistance') {
-    shortReasons.push(`H4 near resistance @ ${h4SR.nearestResistance.toFixed(4)} (${h4SR.distToResistance.toFixed(2)}%)`);
-    shortScore += 20;
-  } else if (pricePosition === 'middle' && h4SR.distToResistance < 6) {
-    shortReasons.push(`H4 moderate proximity to resistance (${h4SR.distToResistance.toFixed(2)}%)`);
-    shortScore += 8;
-  }
-
-  // H1 Structure (0-15 pts)
-  if (h1Structure.structure === 'bearish') {
-    shortReasons.push(`H1 bearish structure (${h1Structure.detail})`);
-    shortScore += 15;
-  }
-
-  // H1 Break of Structure (0-15 pts, bonus)
-  if (h1Structure.bos && h1Structure.bosType === 'bearish_bos') {
-    shortReasons.push(`H1 bearish BoS detected`);
-    shortScore += 15;
-  }
-
-  // H1 Trend confluence (0-10 pts)
-  if (h1Trend.direction === 'bearish') {
-    shortReasons.push(`H1 trend bearish (${h1Trend.strengthLabel})`);
-    shortScore += 10;
-  }
-
-  // Stochastic momentum (0-10 pts)
-  if (h4Stoch.signal === 'overbought') {
-    shortReasons.push(`H4 stoch overbought (K:${h4Stoch.k.toFixed(1)} D:${h4Stoch.d.toFixed(1)})`);
-    shortScore += 10;
-  }
-  if (h1Stoch.signal === 'overbought') {
-    shortReasons.push(`H1 stoch overbought (K:${h1Stoch.k.toFixed(1)})`);
-    shortScore += 5;
-  }
-
-  // Stoch crossover bonus
-  if (h4Stoch.k < h4Stoch.d && h4Stoch.k > 60) {
-    shortReasons.push(`H4 stoch bearish crossover in high zone`);
-    shortScore += 8;
-  }
+  if (d1Trend.direction === 'bearish') shortScore += 25;
+  if (h4Trend.direction === 'bearish') shortScore += 15;
+  if (pricePosition === 'near_resistance') shortScore += 20;
+  if (h1Structure.structure === 'bearish') shortScore += 15;
 
   // ═══════════════════════════════════════════════════════
-  // PICK BIAS + VALIDATION
+  // PICK BIAS + APPLY NEW FILTERS
   // ═══════════════════════════════════════════════════════
 
   let bias = null;
   let score = 0;
   let reasons = [];
 
-  // Minimum viable score = 65 out of max ~98 pts
-  const MIN_SCORE = 65;
-  // Minimum 3 supporting reasons to confirm real confluence
-  const MIN_REASONS = 3;
-
-  // Pick best direction regardless of threshold (for fallback top-3)
-  if (longScore >= shortScore && longScore > 0) {
-    bias = 'LONG'; score = longScore; reasons = longReasons;
-  } else if (shortScore > longScore && shortScore > 0) {
-    bias = 'SHORT'; score = shortScore; reasons = shortReasons;
-  } else if (longScore > 0) {
+  if (longScore >= shortScore) {
     bias = 'LONG'; score = longScore; reasons = longReasons;
   } else {
-    logger.debug(`${symbol} → no directional score at all`);
-    return null;
+    bias = 'SHORT'; score = shortScore; reasons = shortReasons;
   }
 
-  // R:R check (only hard-reject if truly terrible)
-  const riskReward = calculateRiskReward(
-    bias,
-    h4SR.currentPrice,
-    h4SR.nearestSupport,
-    h4SR.nearestResistance
-  );
+  const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance);
 
-  // Determine if this meets strict criteria
-  const meetsScore = score >= MIN_SCORE && reasons.length >= MIN_REASONS;
-  const meetsRR = riskReward.rr >= config.strategy.minRrRatio;
-  const isStrict = meetsScore && meetsRR;
-
-  if (!meetsScore) {
-    logger.debug(`${symbol} → score too low (L:${longScore} S:${shortScore}, need ${MIN_SCORE}+)`);
-  }
-  if (!meetsRR) {
-    logger.debug(`${symbol} → R:R too low: ${riskReward.rr.toFixed(2)} (need ${config.strategy.minRrRatio}+)`);
+  // 1. Max SL Threshold (Capital Protection)
+  const slDistPercent = (Math.abs(riskReward.entry - riskReward.sl) / riskReward.entry) * 100;
+  if (slDistPercent > 15) {
+    score -= 10;
+    tags.push('WIDE SL WARNING');
+    reasons.push(`⚠️ WIDE SL: SL distance is ${slDistPercent.toFixed(1)}% (>15%)`);
   }
 
-  logger.info(`${symbol} ✓ ${bias} candidate (score: ${score}, R:R: ${riskReward.rr.toFixed(2)}, reasons: ${reasons.length}${!isStrict ? ', LOW CONFIDENCE' : ''})`);
+  // 2. Verticality & Mean Reversion Check
+  // If price is > 5% above S/R Proximity threshold (which is 4%), basically > 5% from support level
+  if (bias === 'LONG' && h4SR.distToSupport > 5.0) {
+    tags.push('WAIT FOR RETEST');
+    reasons.push(`✋ Price is floating ${h4SR.distToSupport.toFixed(1)}% above support. Waiting for retest.`);
+  }
+
+  // 3. God-Candle Penalty
+  if (h1Spike.spike) {
+    score -= 15;
+    tags.push('GOD-CANDLE ALERT');
+    reasons.push(`☄️ Abnormal ATR Spike (${h1Spike.ratio.toFixed(1)}x average). High correction risk.`);
+  }
+
+  const isStrict = score >= 65 && reasons.length >= 3;
+
   return {
     symbol,
     bias,
     score,
     reasons,
-    rejectReasons: [],
+    tags,
     analysis,
     riskReward,
-    isStrict,           // true = passed all strict filters
-    lowConfidence: !isStrict, // true = fallback candidate only
+    isStrict,
+    lowConfidence: !isStrict,
   };
 }
 

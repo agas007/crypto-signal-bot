@@ -261,10 +261,29 @@ async function fetch24hTicker(symbol) {
   }
 }
 
+/**
+ * Fetch current funding rate for a futures symbol.
+ *
+ * @param {string} symbol
+ * @returns {Promise<number|null>} Funding rate as float (e.g. 0.0001 = 0.01%)
+ */
+async function fetchFundingRate(symbol) {
+  try {
+    const res = await axios.get(`${FUTURES_URL}/fapi/v1/premiumIndex`, {
+      params: { symbol: symbol.toUpperCase() }
+    });
+    return parseFloat(res.data.lastFundingRate);
+  } catch (err) {
+    logger.error(`Failed to fetch funding rate for ${symbol}:`, err.message);
+    return null;
+  }
+}
+
 module.exports = {
   fetchOHLCV,
   fetchMultiTimeframe,
   fetchTopPairs,
   fetch24hTicker,
   fetchUserTrades,
+  fetchFundingRate,
 };

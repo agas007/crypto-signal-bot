@@ -82,16 +82,18 @@ async function runScanCycle() {
         continue;
       }
 
-      // Passed filter → fetch multi-TF data
+      // Passed filter → fetch multi-TF data + Funding Rate
       logger.info(`📊 ${symbol} passed pre-filters, fetching multi-TF data...`);
       const mtfData = await fetchMultiTimeframe(symbol);
+      const fundingRate = await fetchFundingRate(symbol);
+      
       if (!mtfData) {
         errors++;
         continue;
       }
 
       // Run strategy evaluation (includes hard kill-switches + R:R check)
-      const signal = evaluateSignal(symbol, mtfData);
+      const signal = evaluateSignal(symbol, mtfData, { fundingRate });
       if (signal) {
         signal.candles = mtfData.H1; // Save candles for the chart later
         candidates.push(signal);
@@ -178,6 +180,19 @@ async function runScanCycle() {
       // ─── Deduplication / Update Check ───
       const active = tracker.getActive(candidate.symbol);
       if (active) {
+        const ticker = await fetch24hTicker(candidate.symbol);
+        const currentPrice = ticker ? parseFloat(ticker.lastPrice) : refined.entry;
+
+        // Check if trade is "Running in Profit"
+        const isRunningInProfit = active.bias === 'LONG' 
+            ? currentPrice > active.entry 
+            : currentPrice < active.entry;
+
+        if (isRunningInProfit) {
+            logger.info(`🧠 [Tracker] ${candidate.symbol} is already running in profit. Skipping update message.`);
+            continue; // Don't send anything if already winning
+        }
+
         // If same bias and prices are close enough, just send update
         const diffEntry = Math.abs(refined.entry - active.entry) / active.entry;
         logger.info(`🧠 [Tracker] Found ${candidate.symbol} active. Price diff: ${(diffEntry*100).toFixed(2)}%`);
@@ -265,33 +280,48 @@ async function checkActiveTrades() {
       const candles = await fetchOHLCV(trade.symbol, '1m', 60);
       if (!candles || candles.length === 0) continue;
 
+      const ageMs = Date.now() - trade.timestamp;
+      const movePercent = (Math.abs(currentPrice - trade.entry) / trade.entry) * 100;
+
+      // 1. Time-Based Invalidation Check (Momentum Stalled after 24h)
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      if (ageMs > oneDayMs && movePercent < 2.0 && !trade.stalledWarningSent) {
+          await sendStatus(`⏳ *REVIEW POSITION: MOMENTUM STALLED* \n\n` + 
+                         `• *Symbol:* \`${trade.symbol}\` (${trade.bias})\n` +
+                         `• *Age:* \`${(ageMs / (60 * 60 * 1000)).toFixed(1)}h\`\n` +
+                         `• *Movement:* \`${movePercent.toFixed(2)}%\` (< 2%)\n\n` +
+                         `_Trade ini sudah jalan lebih dari 24 jam tanpa pergerakan signifikan. Consider untuk manual close atau adjust SL/TP._`);
+          
+          // Mark as warned to prevent spamming
+          trade.stalledWarningSent = true;
+          tracker._save();
+      }
+
+      // 2. Break-Even Check (Move SL to Entry if 50% of TP distance is reached)
+      const totalTpDist = Math.abs(trade.take_profit - trade.entry);
+      const currentProgress = Math.abs(currentPrice - trade.entry);
+      const progressPercent = (currentProgress / totalTpDist) * 100;
+      const isInProfit = trade.bias === 'LONG' ? currentPrice > trade.entry : currentPrice < trade.entry;
+
+      if (progressPercent >= 50.0 && isInProfit && !trade.slMovedToEntry) {
+          const oldSl = trade.stop_loss;
+          trade.stop_loss = trade.entry; // Move SL to Entry
+          trade.slMovedToEntry = true;
+          
+          await sendStatus(`🛡️ *PROTECT PROFIT: MOVE SL TO ENTRY* \n\n` +
+                         `• *Symbol:* \`${trade.symbol}\`\n` +
+                         `• *Progress:* \`${progressPercent.toFixed(1)}%\` nuju TP\n` +
+                         `• *Keterangan:* Harga sudah jalan setengah jalan. SL otomatis digeser ke Entry [\`${trade.entry}\`] untuk menjaga modal.`);
+          tracker._save();
+      }
+
       let hit = null;
-      let hitPrice = 0;
-
-      for (const candle of candles) {
-        const [,, high, low, close] = candle;
-
-        if (trade.bias === 'LONG') {
-          if (low <= trade.stop_loss) {
-            hit = 'SL';
-            hitPrice = low;
-            break; 
-          } else if (high >= trade.take_profit) {
-            hit = 'TP';
-            hitPrice = high;
-            break;
-          }
-        } else { // SHORT
-          if (high >= trade.stop_loss) {
-            hit = 'SL';
-            hitPrice = high;
-            break;
-          } else if (low <= trade.take_profit) {
-            hit = 'TP';
-            hitPrice = low;
-            break;
-          }
-        }
+      if (trade.bias === 'LONG') {
+        if (currentPrice >= trade.take_profit) hit = 'TP';
+        else if (currentPrice <= trade.stop_loss) hit = 'SL';
+      } else {
+        if (currentPrice <= trade.take_profit) hit = 'TP';
+        else if (currentPrice >= trade.stop_loss) hit = 'SL';
       }
 
       if (hit) {

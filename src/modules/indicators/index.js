@@ -2,6 +2,7 @@ const { analyzeTrend, classifyStrength } = require('./trend');
 const { calculateStochastic } = require('./stochastic');
 const { findSupportResistance } = require('./supportResistance');
 const { analyzeStructure } = require('./structure');
+const { calculateATR, detectAtSpike } = require('./volatility');
 
 module.exports = {
   analyzeTrend,
@@ -9,4 +10,6 @@ module.exports = {
   calculateStochastic,
   findSupportResistance,
   analyzeStructure,
+  calculateATR,
+  detectAtSpike,
 };

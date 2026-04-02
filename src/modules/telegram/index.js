@@ -149,10 +149,14 @@ function initTelegram() {
       const ageMin = Math.floor((Date.now() - s.timestamp) / 60000);
       const ageStr = ageMin > 60 ? `${(ageMin/60).toFixed(1)}h` : `${ageMin}m`;
       
+      const risk = Math.abs(s.entry - s.stop_loss);
+      const reward = Math.abs(s.take_profit - s.entry);
+      const rrRatio = risk > 0 ? (reward / risk).toFixed(2) : 'N/A';
+
       report += `${i+1}. *${s.symbol}* (${s.bias})\n` +
                 `• Entry: \`${s.entry}\`\n` +
                 `• TP: \`${s.take_profit}\` | SL: \`${s.stop_loss}\`\n` +
-                `• Age: \`${ageStr}\`\n\n`;
+                `• R:R Ratio: \`${rrRatio}\` | Age: \`${ageStr}\`\n\n`;
     });
 
     bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });

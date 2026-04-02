@@ -60,6 +60,9 @@ You MUST respond with ONLY valid JSON (no markdown, no explanation, no fences).`
  */
 function buildPrompt(signal) {
   const { symbol, bias, score, reasons, analysis, riskReward } = signal;
+  const config = require('../../config');
+  const logger = require('../../utils/logger');
+  const { analyzeTrend, calculateStochastic, findSupportResistance, analyzeStructure, detectAtSpike } = require('../indicators');
   const { d1Trend, h4SR, h4Stoch, h4Trend, h1Trend, h1Structure, h1Stoch, pricePosition } = analysis;
 
   return `VALIDATE this pre-screened trade candidate. Assess the setup quality holistically.
@@ -98,11 +101,15 @@ TECHNICAL REASONS:
 ${reasons.map((r, i) => `${i + 1}. ${r}`).join('\n')}
 
 INSTRUCTIONS:
-1. Evaluate whether the overall confluence supports the ${bias} bias
-2. If valid: refine entry, SL, TP levels (use the pre-calc as baseline, adjust if needed)
-3. Only reject if conditions clearly conflict or are dangerous
-4. Confidence scale: 0-100 (60+ is tradeable, 80+ is strong)
-5. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia).
+1. Evaluate whether the overall confluence supports the ${bias} bias.
+2. If valid: refine entry, SL, TP levels.
+3. 🛑 CRITICAL RULE: Stop Loss (SL) distance MUST NOT exceed 4% from the entry price (Max SL = 4.0% for 20x leverage safety).
+4. VERIFIKASI RETEST: Cek apakah sudah terjadi retest pada breakout level?
+   - Jika BELUM (kenaikan vertikal/ngawang), set trading_type menjadi 'MOMENTUM SCALP'.
+   - Jika SUDAH ada retest jelas, set trading_type ke 'SWING' atau 'DAY TRADING'.
+5. Only reject if conditions clearly conflict or are dangerous.
+6. Confidence scale: 0-100 (60+ is tradeable, 80+ is strong).
+7. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia).
 
 Respond with ONLY this JSON format:
 {
@@ -110,11 +117,11 @@ Respond with ONLY this JSON format:
   "bias": "LONG" | "SHORT" | "NO TRADE",
   "confidence": 0-100,
   "quality": "LOW" | "MEDIUM" | "HIGH",
-  "trading_type": "SCALPING" | "DAY TRADING" | "SWING",
+  "trading_type": "SCALPING" | "DAY TRADING" | "SWING" | "MOMENTUM SCALP",
   "entry": price_number_or_null,
   "stop_loss": price_number_or_null,
   "take_profit": price_number_or_null,
-  "reason": "Penjelasan terperinci dalam Bahasa Indonesia mengenai alasan trading ini valid/tidak"
+  "reason": "Penjelasan terperinci dalam Bahasa Indonesia. Wajib sebutkan status retest (Sudah retest/Belum retest) dan alasan pemilihan trading_type."
 }`;
 }
 
