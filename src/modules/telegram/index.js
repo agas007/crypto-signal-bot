@@ -151,7 +151,7 @@ function initTelegram() {
       
       const risk = Math.abs(s.entry - s.stop_loss);
       const reward = Math.abs(s.take_profit - s.entry);
-      const rrRatio = risk > 0 ? (reward / risk).toFixed(2) : 'N/A';
+      const rrRatio = risk > 0 ? (reward / risk).toFixed(2) : (s.slMovedToEntry ? '∞ (Risk-Free)' : 'N/A');
 
       report += `${i+1}. *${s.symbol}* (${s.bias})\n` +
                 `• Entry: \`${s.entry}\`\n` +

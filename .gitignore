@@ -4,3 +4,5 @@ node_modules/
 *.log
 tmp_charts/
 history_lessons.json
+active_signals.json
+trade_history.json
