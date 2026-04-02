@@ -138,14 +138,15 @@ async function runScanCycle() {
   ].slice(0, totalSlots);
 
   const isFallbackOnly = qualityCandidates.length === 0;
+  const isMixedMode = qualityCandidates.length > 0 && okCandidates.length > 0;
 
   if (isFallbackOnly) {
-    logger.info(`⚠️  No strict signals — sending top ${pool.length} BEST AVAILABLE to AI...`);
-    await sendStatus(`⚠️ *Scan Cycle:* No high-conviction signals. Sending top ${pool.length} best available (lower quality).`);
+    logger.info(`⚠️  No quality signals (R:R>=2.0) — sending top ${pool.length} BEST AVAILABLE to AI...`);
+    await sendStatus(`⚠️ *Scan Cycle:* No high-quality signals. Sending top ${pool.length} best available (lower R:R).`);
   } else if (isMixedMode) {
-    logger.info(`🤖 Mixed pool: ${strictCandidates.length} strict + ${pool.length - strictCandidates.length} best available → ${pool.length} total to AI...`);
+    logger.info(`🤖 Mixed pool: ${qualityCandidates.length} high-quality + ${pool.length - qualityCandidates.length} standard signals → ${pool.length} total to AI...`);
   } else {
-    logger.info(`🤖 Sending top ${pool.length} STRICT candidates to AI for validation...`);
+    logger.info(`🤖 Sending top ${pool.length} HIGH QUALITY candidates to AI for validation...`);
   }
 
   // 4. AI validation + Telegram delivery
