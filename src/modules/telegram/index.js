@@ -251,13 +251,15 @@ function initTelegram() {
 }
 
 /**
+ * Helper to escape markdown characters to prevent Telegram API errors.
+ */
+function escapeMarkdown(text) {
+  if (!text) return '';
+  return text.replace(/([_*`\[\]()])/g, '\\$1');
+}
+
+/**
  * Format a validated AI signal into a Telegram message.
- *
- * @param {{
- *   symbol: string, bias: string, confidence: number, quality: string,
- *   entry: number, stop_loss: number, take_profit: number, reason: string
- * }} signal
- * @returns {string}
  */
 function formatSignalMessage(signal) {
   const biasEmoji = signal.bias === 'LONG' ? '🟢' : '🔴';
@@ -276,6 +278,9 @@ function formatSignalMessage(signal) {
 
   const typeEmoji = signal.trading_type === 'SCALPING' ? '⚡' : signal.trading_type === 'SWING' ? '🎯' : '🗓️';
 
+  // Sanitize the reason to prevent Markdown parsing errors
+  const safeReason = escapeMarkdown(signal.reason);
+
   return `
 ${fallbackHeader}${header} ${qualityEmoji}
 
@@ -293,7 +298,7 @@ ${typeEmoji} *Type:* \`${signal.trading_type || 'DAY TRADING'}\`
 📐 *R:R Ratio:* \`${rrRatio.toFixed(2)}\`
 
 💬 *Reason:*
-_${signal.reason}_
+_${safeReason}_
 
 ⏰ ${formatJakartaTime(new Date(), 'readable')} WIB
 ━━━━━━━━━━━━━━━━━━━

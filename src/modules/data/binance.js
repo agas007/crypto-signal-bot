@@ -269,11 +269,34 @@ async function fetch24hTicker(symbol) {
  */
 async function fetchFundingRate(symbol) {
   try {
+    let futuresSymbol = symbol.toUpperCase();
+    
+    // Binance Futures mapping for meme coins
+    const mapping = {
+        'PEPEUSDT': '1000PEPEUSDT',
+        'SHIBUSDT': '1000SHIBUSDT',
+        'FLOKIUSDT': '1000FLOKIUSDT',
+        'BONKUSDT': '1000BONKUSDT',
+        'LUNCUSDT': '1000LUNCUSDT',
+        'XECUSDT': '1000XECUSDT',
+        'SATSUSDT': '1000SATSUSDT',
+        'RATSUSDT': '1000RATSUSDT',
+    };
+
+    if (mapping[futuresSymbol]) {
+        futuresSymbol = mapping[futuresSymbol];
+    }
+
     const res = await axios.get(`${FUTURES_URL}/fapi/v1/premiumIndex`, {
-      params: { symbol: symbol.toUpperCase() }
+      params: { symbol: futuresSymbol }
     });
     return parseFloat(res.data.lastFundingRate);
   } catch (err) {
+    // If it's 400, it probably doesn't exist on futures at all
+    if (err.response && err.response.status === 400) {
+        logger.debug(`No futures market found for ${symbol}, skipping funding check.`);
+        return 0; // Assume neutral if no futures market
+    }
     logger.error(`Failed to fetch funding rate for ${symbol}:`, err.message);
     return null;
   }
