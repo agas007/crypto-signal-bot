@@ -244,7 +244,7 @@ async function runScanCycle() {
 async function startScanner() {
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
-  await sendStatus('🤖 *Crypto Signal Bot v4.1.0* started!\n_Binance Sync, AI Performance Coach & Trading Types active._\n_Scanning Spot & Futures Market every 1 hour..._');
+  await sendStatus('🤖 *Crypto Signal Bot v4.2.0* started!\n_Binance Sync, BE Protect, Stalled Check & Funding Filter active._\n_Scanning Spot & Futures Market every 1 hour..._');
 
   // Run first cycle immediately
   await runScanCycle();
@@ -280,6 +280,8 @@ async function checkActiveTrades() {
       const candles = await fetchOHLCV(trade.symbol, '1m', 60);
       if (!candles || candles.length === 0) continue;
 
+      const lastCandle = candles[candles.length - 1];
+      const currentPrice = lastCandle.close;
       const ageMs = Date.now() - trade.timestamp;
       const movePercent = (Math.abs(currentPrice - trade.entry) / trade.entry) * 100;
 
@@ -304,7 +306,6 @@ async function checkActiveTrades() {
       const isInProfit = trade.bias === 'LONG' ? currentPrice > trade.entry : currentPrice < trade.entry;
 
       if (progressPercent >= 50.0 && isInProfit && !trade.slMovedToEntry) {
-          const oldSl = trade.stop_loss;
           trade.stop_loss = trade.entry; // Move SL to Entry
           trade.slMovedToEntry = true;
           
@@ -315,13 +316,18 @@ async function checkActiveTrades() {
           tracker._save();
       }
 
+      // 3. SL/TP Check (including Wick Detection)
       let hit = null;
-      if (trade.bias === 'LONG') {
-        if (currentPrice >= trade.take_profit) hit = 'TP';
-        else if (currentPrice <= trade.stop_loss) hit = 'SL';
-      } else {
-        if (currentPrice <= trade.take_profit) hit = 'TP';
-        else if (currentPrice >= trade.stop_loss) hit = 'SL';
+      let hitPrice = null;
+
+      for (const candle of candles) {
+        if (trade.bias === 'LONG') {
+          if (candle.high >= trade.take_profit) { hit = 'TP'; hitPrice = trade.take_profit; break; }
+          if (candle.low <= trade.stop_loss) { hit = 'SL'; hitPrice = trade.stop_loss; break; }
+        } else {
+          if (candle.low <= trade.take_profit) { hit = 'TP'; hitPrice = trade.take_profit; break; }
+          if (candle.high >= trade.stop_loss) { hit = 'SL'; hitPrice = trade.stop_loss; break; }
+        }
       }
 
       if (hit) {

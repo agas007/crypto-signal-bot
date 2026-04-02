@@ -11,8 +11,8 @@ let bot = null;
 let startTime = Date.now();
 
 function getHelpMessage(chatId) {
-  return `🤖 *Crypto Signal Bot v4.1.0* is active!\n` +
-    `_Binance Sync, AI Performance Coach & Trading Types active._\n\n` +
+  return `🤖 *Crypto Signal Bot v4.2.0* is active!\n` +
+    `_Binance Sync, Funding Rate Filter, BE Protect & Stalled detection active._\n\n` +
     `📈 /performance [period] [market] - Real PnL & AI Coach\n` +
     `_Periods: daily, weekly, monthly, all_\n` +
     `_Markets: spot, futures, combined_\n` +
