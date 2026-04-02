@@ -252,10 +252,12 @@ function initTelegram() {
 
 /**
  * Helper to escape markdown characters to prevent Telegram API errors.
+ * Note: Simple version for Markdown (V1) style.
  */
 function escapeMarkdown(text) {
   if (!text) return '';
-  return text.replace(/([_*`\[\]()])/g, '\\$1');
+  // Only escape the characters that break basic Markdown
+  return text.replace(/[_*`\[\]()]/g, (match) => `\\${match}`);
 }
 
 /**
@@ -276,12 +278,16 @@ function formatSignalMessage(signal) {
 
   const header = signal.isFallback ? '📡 *BEST AVAILABLE SIGNAL*' : '🚨 *TRADE SIGNAL*';
 
-  const typeEmoji = signal.trading_type === 'SCALPING' ? '⚡' : signal.trading_type === 'SWING' ? '🎯' : '🗓️';
+  const typeEmoji = signal.trading_type?.includes('MOMENTUM') ? '⚡' : signal.trading_type?.includes('SWING') ? '🎯' : '🗓️';
+  const fundingEmoji = signal.fundingRate?.includes('-') ? '🔵' : '🟠';
 
-  // Sanitize the reason to prevent Markdown parsing errors
-  const safeReason = escapeMarkdown(signal.reason);
+  // 1. Clean AI reason from any markdown characters it might have sent automatically
+  const rawReason = (signal.reason || '').replace(/[*_`]/g, '');
+  
+  // 2. Escape the cleaned reason
+  let safeReason = escapeMarkdown(rawReason);
 
-  return `
+  const baseMessage = `
 ${fallbackHeader}${header} ${qualityEmoji}
 
 ${biasEmoji} *${signal.symbol}*
@@ -291,6 +297,7 @@ ${biasEmoji} *${signal.symbol}*
 ${typeEmoji} *Type:* \`${signal.trading_type || 'DAY TRADING'}\`
 🎯 *Confidence:* ${confidence.toFixed(0)}% ${confBars}
 📋 *Quality:* \`${signal.quality || 'N/A'}\`
+${fundingEmoji} *Funding:* \`${signal.fundingRate || '0.0000%'}\`
 
 💰 *Entry:* \`${signal.entry}\`
 🎯 *Take Profit:* \`${signal.take_profit}\`
@@ -298,12 +305,21 @@ ${typeEmoji} *Type:* \`${signal.trading_type || 'DAY TRADING'}\`
 📐 *R:R Ratio:* \`${rrRatio.toFixed(2)}\`
 
 💬 *Reason:*
-_${safeReason}_
+`.trim();
 
-⏰ ${formatJakartaTime(new Date(), 'readable')} WIB
+  const footer = `
+\n⏰ ${formatJakartaTime(new Date(), 'readable')} WIB
 ━━━━━━━━━━━━━━━━━━━
 ⚠️ _Not financial advice. DYOR._
   `.trim();
+
+  // Telegram Photo Caption Limit is 1024.
+  const maxReasonLen = 1000 - baseMessage.length - footer.length;
+  if (safeReason.length > maxReasonLen) {
+    safeReason = safeReason.substring(0, Math.max(0, maxReasonLen - 20)) + '... [truncated]';
+  }
+
+  return `${baseMessage}\n_${safeReason}_\n${footer}`;
 }
 
 /**

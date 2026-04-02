@@ -197,9 +197,10 @@ async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
 /**
  * Fetch OHLCV candlestick data from Binance.
  */
-async function fetchOHLCV(symbol, interval, limit = 100) {
+async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
   try {
-    const data = await getWithFallback('/api/v3/klines', { symbol, interval, limit });
+    const params = { symbol, interval, limit, ...options };
+    const data = await getWithFallback('/api/v3/klines', params);
     if (!data || !Array.isArray(data)) return [];
 
     return data.map((candle) => ({

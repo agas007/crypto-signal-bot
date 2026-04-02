@@ -60,9 +60,6 @@ You MUST respond with ONLY valid JSON (no markdown, no explanation, no fences).`
  */
 function buildPrompt(signal) {
   const { symbol, bias, score, reasons, analysis, riskReward } = signal;
-  const config = require('../../config');
-  const logger = require('../../utils/logger');
-  const { analyzeTrend, calculateStochastic, findSupportResistance, analyzeStructure, detectAtSpike } = require('../indicators');
   const { d1Trend, h4SR, h4Stoch, h4Trend, h1Trend, h1Structure, h1Stoch, pricePosition } = analysis;
 
   return `VALIDATE this pre-screened trade candidate. Assess the setup quality holistically.
@@ -238,14 +235,15 @@ async function refineSignal(signal) {
  * @param {Object} trade - The signal data
  * @param {number} finalPrice - Price when target was hit
  * @param {'TP' | 'SL'} hitType - Which target was hit
+ * @param {string} historySummary - Optional H1 candle summary from entry to exit
  * @returns {Promise<string>} Educational analysis
  */
-async function analyzePostMortem(trade, finalPrice, hitType = 'SL') {
+async function analyzePostMortem(trade, finalPrice, hitType = 'SL', historySummary = 'N/A') {
   const status = hitType === 'TP' ? 'SUCCESS (TAKE PROFIT HIT)' : 'FAILED (STOP LOSS HIT)';
   const emoji = hitType === 'TP' ? '✅' : '🚨';
 
   const prompt = `
-${emoji} TRADE ${status}
+${emoji} TRADE PERFORMANCE REVIEW: ${status}
 Symbol: ${trade.symbol}
 Bias: ${trade.bias}
 Entry: ${trade.entry}
@@ -253,12 +251,17 @@ SL: ${trade.stop_loss}
 TP: ${trade.take_profit}
 Exit Price: ${finalPrice}
 
-Technical Reason for signal: ${trade.reason}
+[INITIAL REASON FOR ENTRY]:
+${trade.reason}
+
+[ACTUAL PRICE ACTION (H1 Summary from Entry to Exit)]:
+${historySummary}
 
 TASK: Provide a very brief (2-3 sentences) analysis in Indonesian. 
-If it was a SUCCESS (TP), explain why the setup worked well and what the user can learn from this winning trade.
-If it was a FAILURE (SL), explain logically why it might have failed and give a "lesson learned".
-Keep it simple, educational, and professional. Avoid generic advice.
+- COMPARE the [INITIAL REASON] with the [ACTUAL PRICE ACTION]. 
+- If it was a SUCCESS (TP), analyze what part of the thesis was most accurate.
+- If it was a FAILURE (SL), pinpoint whether the entry was too early, the SL was too tight, or the trend reversed completely.
+- Keep it simple, professional, and highly educational for a trader.
   `;
 
   try {

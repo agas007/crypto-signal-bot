@@ -340,19 +340,33 @@ async function checkActiveTrades() {
         const emoji = hit === 'TP' ? '✅' : '🚨';
         hitInThisScan.push(trade.symbol.toUpperCase());
         
+        // --- 1. REMOVE FROM MEMORY IMMEDIATELY --- 
+        // This ensures subsequent /active calls don't show the stale trade 
+        // while AI and Telegram are still processing.
+        tracker.remove(trade.symbol, `${hit}_HIT`, hitPrice);
+        
+        // --- 2. AI & TELEGRAM (MIGHT BE SLOW) ---
         logger.info(`🧠 Requesting AI post-mortem for ${trade.symbol} (${hit})...`);
-        const lesson = await analyzePostMortem(trade, hitPrice, hit);
+        
+        // Fetch full path candles (from start of signal until now)
+        const ageHours = Math.ceil((Date.now() - trade.timestamp) / (3600 * 1000));
+        const historyCandles = await fetchOHLCV(trade.symbol, '1h', ageHours + 1, { startTime: trade.timestamp });
+        const summary = historyCandles.map(c => `H:${c.high}/L:${c.low}/C:${c.close}`).join(' | ');
+
+        const lesson = await analyzePostMortem(trade, hitPrice, hit, summary);
         
         const learningInfo = `\n\n📖 *PELAJARAN (AI Analysis):*\n_` + lesson + `_`;
         tracker.saveLesson(trade.symbol, trade.bias, lesson);
 
+        const targetLabel = hit === 'TP' ? '🎯 *Take Profit Target:*' : '🛑 *Stop Loss Level:*';
+        const targetPrice = hit === 'TP' ? trade.take_profit : trade.stop_loss;
+
         const msg = `${emoji} *${hit} HIT: ${trade.symbol}*\n\n` +
                     `📊 *Bias:* \`${trade.bias}\`\n` +
-                    `💰 *Target Price:* \`${hit === 'TP' ? trade.take_profit : trade.stop_loss}\`\n` +
+                    `${targetLabel} \`${targetPrice}\`\n` +
                     `📍 *Hit Price:* \`${hitPrice}\`` + learningInfo;
         
         await sendStatus(msg);
-        tracker.remove(trade.symbol, `${hit}_HIT`);
       }
     } catch (err) {
       logger.error(`Failed to monitor ${trade.symbol}:`, err.message);
