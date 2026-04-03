@@ -172,6 +172,10 @@ function evaluateSignal(symbol, data, options = {}) {
   const h1Stoch = calculateStochastic(H1, stochParams);
   const h1Spike = detectAtSpike(H1, 14); // Penalty for 'God-Candle'
 
+  // Retest Detection (Rule: Check if price retested the H4 SR level)
+  const breakoutLevel = d1Trend.direction === 'bullish' ? h4SR.nearestSupport : h4SR.nearestResistance;
+  const retestStatus = detectRetest(H1, breakoutLevel, d1Trend.direction === 'bullish' ? 'LONG' : 'SHORT');
+
   const pricePosition = classifyPricePosition(h4SR.distToSupport, h4SR.distToResistance);
 
   const analysis = {
@@ -183,6 +187,7 @@ function evaluateSignal(symbol, data, options = {}) {
     h1Structure,
     h1Stoch,
     pricePosition,
+    retestStatus,
   };
 
   // Rule 5: No entry if against HTF trend (4H/1D)
@@ -235,6 +240,12 @@ function evaluateSignal(symbol, data, options = {}) {
   // 5. Stochastic (0-15 pts)
   if (h4Stoch.signal === 'oversold') longScore += 10;
   if (h1Stoch.signal === 'oversold') longScore += 5;
+
+  // 6. Retest Confirmation (0-10 pts)
+  if (retestStatus === 'CONFIRMED') {
+    longScore += 10;
+    longReasons.push('H1 retest confirmed at support');
+  }
 
   // 6. Funding Rate Penalty (Crowded Trade Protection)
   if (fundingRate > 0.03) {

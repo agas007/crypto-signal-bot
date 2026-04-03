@@ -14,13 +14,24 @@ const client = axios.create({
   },
 });
 
-/**
- * Build the system prompt — establishes the AI as a FILTER, not a formatter.
- */
-function buildSystemPrompt() {
+function buildSystemPrompt(options = {}) {
   const lessons = tracker.getRecentLessons();
   const lessonContext = lessons.length > 0 
-    ? `\nLEARNED LESSONS FROM RECENT FAILURES (Do not repeat these mistakes):\n${lessons.map(l => `- ${l.symbol} (${l.bias}): ${l.analysis}`).join('\n')}`
+    ? `\nLEARNED LESSONS FROM RECENT FAILURES (Do not repeat ini):\n${lessons.map(l => `- ${l.symbol} (${l.bias}): ${l.analysis}`).join('\n')}`
+    : "";
+
+  const performanceBrackets = tracker.getScorePerformanceBrackets();
+  const performanceContext = `
+CURRENT SYSTEM PERFORMANCE (Reality Check):
+- Score 60-70: ${performanceBrackets.bracket60_70.winRate}% win rate across ${performanceBrackets.bracket60_70.count} trades
+- Score 70-80: ${performanceBrackets.bracket70_80.winRate}% win rate across ${performanceBrackets.bracket70_80.count} trades
+- Score 80+: ${performanceBrackets.bracket80_plus.winRate}% win rate across ${performanceBrackets.bracket80_plus.count} trades
+
+Adjust your confidence threshold based on this data. If a bracket has low win rate, be EXTREMELY critical or REJECT.
+  `;
+
+  const marketContext = options.btcTrend 
+    ? `\nCURRENT MARKET REGIME: BTC D1 is ${options.btcTrend.toUpperCase()}. Adjust conviction accordingly.\n`
     : "";
 
   return `You are a professional crypto trading signal VALIDATOR. Your goal is to assess trade quality and provide actionable signals.
@@ -30,24 +41,27 @@ ${lessonContext}
 
 RULES:
 - Evaluate the overall confluence of the setup holistically
-- If the majority of conditions align, APPROVE the trade with appropriate confidence
+- Only approve if confluence is genuine, not superficial
+- If technical score is 70+, be critical, but BIAS TOWARD APPROVAL when evidence is mixed, not rejection
 - Only return NO TRADE if the setup is genuinely conflicting or dangerous
-- Consider that waiting for a "perfect" setup often means missing real opportunities
-- A setup with 3+ confluent factors is tradeable even if not perfect
 - R:R of ${config.strategy.minRrRatio}:1 or higher is acceptable
-- DO NOT SHORT if D1 trend is STRONG BULLISH
-- DO NOT LONG if D1 trend is STRONG BEARISH
+- If data timestamp is > 120 seconds (2 minutes) old, REJECT and request fresh data
+- Retest Status: CONFIRMED means stronger entry, PENDING means momentum/scalp entry
 
+${performanceContext}
+${marketContext}
 QUALITY ASSESSMENT:
-- HIGH: Strong confluence, clear structure, high confidence
-- MEDIUM: Good setup with minor imperfections — still tradeable
-- LOW: Weak setup but has some merit — trade with caution
+- HIGH: Strong confluence, clear structure, high confidence (APPROVE)
+- MEDIUM: Good setup, valid confluence (APPROVE)
+- LOW: Weak setup, conflicting data (REJECT)
 
-CONFIDENCE SCALE:
-- 80-100: Strong setup, high conviction
-- 60-79: Decent setup, moderate conviction
-- 40-59: Marginal setup, low conviction
-- Below 40: Not worth trading
+CONFIDENCE THRESHOLDS:
+- 75-100: APPROVE (HIGH quality)
+- 60-74: APPROVE (MEDIUM quality) 
+- 40-59: REJECT (too weak)
+- Below 40: REJECT (dangerous)
+
+NO 'trade with caution' allowed. Either approve with confidence 60+ or reject.
 
 You MUST respond with ONLY valid JSON (no markdown, no explanation, no fences).`;
 }
@@ -131,8 +145,8 @@ Respond with ONLY this JSON format:
  *   entry: number|null, stop_loss: number|null, take_profit: number|null, reason: string
  * } | null>}
  */
-async function refineSignal(signal) {
-  const systemPrompt = buildSystemPrompt();
+async function refineSignal(signal, options = {}) {
+  const systemPrompt = buildSystemPrompt(options);
   const prompt = buildPrompt(signal);
 
   try {
@@ -152,7 +166,7 @@ async function refineSignal(signal) {
         },
         { role: 'user', content: prompt },
       ],
-      temperature: 0.1,
+      temperature: 0.3,
       max_tokens: 500,
       response_format: { type: 'json_object' },
     });
@@ -217,6 +231,16 @@ async function refineSignal(signal) {
       return parsed;
     }
 
+    // Rule: AI must not exceed 4% SL distance
+    const slDistance = parsed.bias === 'LONG'
+      ? (parsed.entry - parsed.stop_loss) / parsed.entry
+      : (parsed.stop_loss - parsed.entry) / parsed.entry;
+
+    if (slDistance > 0.04) {
+      logger.warn(`${signal.symbol} ✘ AI returned SL > 4%: ${(slDistance * 100).toFixed(2)}%`);
+      return null;
+    }
+
     logger.info(`${signal.symbol} ✓ AI validated: ${parsed.bias} @ ${parsed.entry} (conf: ${parsed.confidence}, quality: ${parsed.quality || 'N/A'}, R:R: ${rrRatio.toFixed(2)})`);
     return parsed;
   } catch (err) {
@@ -262,15 +286,22 @@ TASK: Provide a very brief (2-3 sentences) analysis in Indonesian.
 - If it was a SUCCESS (TP), analyze what part of the thesis was most accurate.
 - If it was a FAILURE (SL), pinpoint whether the entry was too early, the SL was too tight, or the trend reversed completely.
 - Keep it simple, professional, and highly educational for a trader.
+
+Respond with ONLY this JSON format:
+{
+  "analysis": "Penjelasan singkat dalam Bahasa Indonesia (tanpa markdown/bullet)"
+}
   `;
 
   try {
     const { data } = await client.post('/chat/completions', {
       model: config.openRouter.model,
-      messages: [{ role: 'user', content: prompt }]
+      messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' }
     });
 
-    return data.choices?.[0]?.message?.content?.trim() || "Analisa gagal: AI tidak memberikan respon.";
+    const parsed = JSON.parse(data.choices?.[0]?.message?.content || '{}');
+    return parsed.analysis || "Analisa gagal: AI tidak memberikan respon.";
   } catch (err) {
     logger.error('Post-mortem analysis failed:', err.message);
     return "Analisa gagal: Koneksi AI terputus. Tetap semangat!";
@@ -312,15 +343,10 @@ Respond with ONLY this JSON:
 }
 `;
 
-    const response = await axios.post(config.openRouter.baseUrl + '/chat/completions', {
+    const response = await client.post('/chat/completions', {
       model: config.openRouter.model,
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' }
-    }, {
-      headers: {
-        'Authorization': `Bearer ${config.openRouter.apiKey}`,
-        'HTTP-Referer': 'https://github.com/crypto-signal-bot',
-      }
     });
 
     const content = JSON.parse(response.data.choices[0].message.content);
@@ -339,29 +365,66 @@ async function analyzePerformanceSummary(stats, tradeLog) {
     const ledgerSummary = tradeLog.map(t => `- ${t.symbol} (${t.market}): ${t.pnl} USDT`).join('\n');
     
     const prompt = `
-You are a Professional Trading Performance Analyst. Review this trader's recent results:
+Kamu adalah Performance Analyst untuk sistem trading otomatis.
+Analisis data trade dengan framework:
+
+## 1. STATISTICAL REALITY CHECK
+- Win rate vs Required win rate (berdasarkan avg R:R)
+- Consecutive loss pattern (clustering?)
+- Time-to-SL distribution (immediate = execution/sl issue, delayed = direction issue)
+
+## 2. PAIR/DIRECTION BIAS AUDIT
+- List top 3 pairs by loss count
+- Cek: Apakah loss clustered di direction tertentu (LONG/SHORT)?
+- Cek: Apakah loss clustered di market condition tertentu (trending up/down/ranging)?
+
+## 3. SYSTEM HEALTH CHECK
+- Compare: Signal generated vs Signal executed (manual gap?)
+- Compare: Planned R:R vs Actual R:R (slippage?)
+- Filter effectiveness: AI score 60-70 vs 70+ win rate difference
+
+## 4. ONE SPECIFIC HYPOTHESIS
+Berdasarkan data, apa satu hal yang paling mungkin salah?
+Contoh: "ATR calculation menggunakan 14-period di timeframe yang salah sehingga SL terlalu tight"
+
+## 5. ONE EXPERIMENT
+Apa satu perubahan yang bisa di-test dalam 10 trade berikutnya?
+Contoh: "Naikkan technical threshold dari 70 ke 80, track win rate change"
+
+TONE: Direct, data-driven, no motivational fluff. 
+Bahasa Indonesia casual tapi presisi.
+
+❌ BAD OUTPUT (REJECT THIS STYLE):
+"Anda menunjukkan konsistensi dalam trading. Meski win rate rendah, ada peluang untuk meningkatkan dengan manajemen risiko..."
+
+✅ GOOD OUTPUT (FOLLOW THIS STYLE):
+"Math: 25% win rate butuh R:R 3:1 minimum. Lu punya 3.3:1, tapi fees eat it. Real problem: 80% trade di shitcoins volatilitas tinggi → SL hunt.
+Hypothesis: Meme coin filter terlalu lemah.
+Experiment: Next 10 trade, blacklist < $100M market cap.
+Action: Update scanner filter sekarang."
+
+RESPOND WITH ONLY THIS JSON FORMAT:
+{
+  "math_check": "Analisis win rate vs R:R (Singkat)",
+  "pattern_detected": "Pola kesalahan yang terdeteksi (Singkat)",
+  "hypothesis": "Satu hal yang paling mungkin salah (Analitis)",
+  "one_experiment": "Satu kalimat instruksi spesifik untuk strategy baru (Actionable)",
+  "action_items": ["Langkah 1", "Langkah 2"]
+}
 
 OVERALL STATS:
-- PnL: $${stats.totalPnl}
+- Total PnL: $${stats.totalPnl}
 - Win Rate: ${stats.winRate}
 - Total Trades: ${stats.tradesCount}
 
-RECENT TRADES LEDGER:
-${ledgerSummary}
-
-TASK:
-Provide a concise performance review in INDONESIAN (Bahasa Indonesia).
-Focus on:
-1. WHAT'S GOOD: (Strength in their trading)
-2. WHAT'S BAD: (Weakness or patterns of losses)
-3. WHAT TO IMPROVE: (Concrete advice)
-
-Keep it professional, encouraging, but honest. Use Markdown.
+RECENT TRADES LEDGER (JSON Data for analysis):
+${JSON.stringify(tradeLog, null, 2)}
 `;
 
     const response = await axios.post(config.openRouter.baseUrl + '/chat/completions', {
       model: config.openRouter.model,
       messages: [{ role: 'user', content: prompt }],
+      response_format: { type: 'json_object' }
     }, {
       headers: {
         'Authorization': `Bearer ${config.openRouter.apiKey}`,
@@ -369,7 +432,35 @@ Keep it professional, encouraging, but honest. Use Markdown.
       }
     });
 
-    return response.data.choices[0].message.content;
+    const parsed = JSON.parse(response.data.choices[0].message.content);
+    
+    // Auto-save the experiment as a global lesson if provided
+    if (parsed.one_experiment) {
+      tracker.saveLesson('GLOBAL_EXPERIMENT', 'ADAPTIVE', parsed.one_experiment);
+      logger.info(`🧪 [Strategy Engine] New global experiment applied: ${parsed.one_experiment}`);
+    }
+
+    // Format to Markdown manually
+    const report = `
+📊 *AI PERFORMANCE AUDIT*
+━━━━━━━━━━━━━━━━━━━
+🔢 *Math Check:*
+${parsed.math_check}
+
+🕵️ *Pattern Detected:*
+${parsed.pattern_detected}
+
+💡 *Hypothesis:*
+${parsed.hypothesis}
+
+🧪 *One Experiment:*
+\`${parsed.one_experiment}\`
+
+✅ *Action Items:*
+${parsed.action_items?.map(item => `• ${item}`).join('\n')}
+    `.trim();
+
+    return report;
   } catch (err) {
     logger.error('Failed to generate performance coaching:', err.message);
     return "Gagal mendapatkan input dari AI Coach saat ini.";

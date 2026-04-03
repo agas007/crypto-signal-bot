@@ -3,6 +3,7 @@ const { calculateStochastic } = require('./stochastic');
 const { findSupportResistance } = require('./supportResistance');
 const { analyzeStructure } = require('./structure');
 const { calculateATR, detectAtSpike } = require('./volatility');
+const { detectRetest } = require('./retest');
 
 module.exports = {
   analyzeTrend,
@@ -12,4 +13,5 @@ module.exports = {
   analyzeStructure,
   calculateATR,
   detectAtSpike,
+  detectRetest,
 };

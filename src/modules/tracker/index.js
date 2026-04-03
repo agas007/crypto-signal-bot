@@ -98,10 +98,12 @@ class SignalTracker {
    */
   track(signal) {
     const symbol = signal.symbol.toUpperCase();
+    const now = Date.now();
     this.signals[symbol] = {
       ...signal,
       symbol,
-      timestamp: Date.now(),
+      signalAt: signal.timestamp || now, // Original fetched time
+      entryAt: now,                     // Time when bot started tracking it as active
       status: 'ACTIVE'
     };
     this._save();
@@ -126,12 +128,18 @@ class SignalTracker {
   remove(symbol, reason = 'CLEANUP', finalPrice = null) {
     const sym = symbol.toUpperCase();
     if (this.signals[sym]) {
+      const now = Date.now();
+      const signal = this.signals[sym];
+      
       const trade = {
-        ...this.signals[sym],
-        closedAt: Date.now(),
+        ...signal,
+        closedAt: now,
         close_reason: reason,
         exit_price: finalPrice || null,
-        status: reason.includes('HIT') ? 'COMPLETED' : 'INVALID'
+        status: reason.includes('HIT') ? 'COMPLETED' : 'INVALID',
+        durationMs: now - signal.entryAt,
+        durationMinutes: ((now - signal.entryAt) / 60000).toFixed(2),
+        timeToEntrySeconds: ((signal.entryAt - signal.signalAt) / 1000).toFixed(1)
       };
 
       // Add to history
@@ -278,6 +286,26 @@ class SignalTracker {
     }).length;
 
     return { slHits, baseAsset };
+  }
+
+  /**
+   * Calculate win rates for different technical score brackets.
+   */
+  getScorePerformanceBrackets() {
+    const completed = this.history.filter(t => t.status === 'COMPLETED');
+    
+    const analyzeBracket = (min, max) => {
+      const items = completed.filter(t => t.score >= min && (max ? t.score < max : true));
+      const wins = items.filter(t => t.close_reason === 'TP_HIT').length;
+      const winRate = items.length > 0 ? (wins / items.length * 100).toFixed(1) : 'N/A';
+      return { count: items.length, winRate };
+    };
+
+    return {
+      bracket60_70: analyzeBracket(60, 70),
+      bracket70_80: analyzeBracket(70, 80),
+      bracket80_plus: analyzeBracket(80, null)
+    };
   }
 
   /**

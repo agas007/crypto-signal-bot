@@ -59,6 +59,19 @@ async function runScanCycle() {
     return 0;
   }
 
+  // ─── Market Regime: Fetch BTC Trend ───
+  let btcTrend = 'NEUTRAL';
+  try {
+      const btcCandles = await fetchOHLCV('BTCUSDT', config.timeframes.D1, 50);
+      if (btcCandles.length > 0) {
+          const trend = analyzeTrend(btcCandles);
+          btcTrend = trend.direction;
+          logger.info(`🌐 Market Regime: BTC D1 is ${btcTrend}`);
+      }
+  } catch (err) {
+      logger.error('Failed to fetch BTC trend for market regime:', err.message);
+  }
+
   // 2. Filter + evaluate each pair
   const candidates = [];
   let filtered = 0;
@@ -191,7 +204,7 @@ async function runScanCycle() {
 
   for (const candidate of finalPool) {
     try {
-      const refined = await refineSignal(candidate);
+      const refined = await refineSignal(candidate, { btcTrend });
 
       if (!refined) {
         logger.info(`AI returned no response for ${candidate.symbol}`);
