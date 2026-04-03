@@ -5,11 +5,10 @@ const { initTelegram } = require('./modules/telegram');
 // ─── Banner ─────────────────────────────────────────────
 console.log(`
 ╔═══════════════════════════════════════════╗
-║      🤖 CRYPTO SIGNAL BOT v3.1.0         ║
+║      🤖 CRYPTO SIGNAL BOT v4.4.1         ║
 ║                                           ║
 ║  Binance → TA → AI → Telegram             ║
-║  Multi-TF: D1 · H4 · H1                   ║
-║  Mode: Strict (score ≥ 65, ≥ 3 reasons)    ║
+║  Adaptive Intelligence & OOM Fix          ║
 ╚═══════════════════════════════════════════╝
 `);
 

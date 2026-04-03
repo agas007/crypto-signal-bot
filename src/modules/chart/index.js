@@ -4,10 +4,18 @@ const fs = require('fs');
 const logger = require('../../utils/logger');
 
 let browserInstance = null;
+let chartCount = 0; // Masalah OOM: Restart browser after X charts
 
 async function getBrowser() {
+  // Masalah OOM: If we've generated 10 charts, kill browser to clear memory spikes
+  if (chartCount >= 10 && browserInstance) {
+    logger.info('🧹 [Chart] Max charts reached. Restarting browser to clear memory...');
+    await browserInstance.close();
+    browserInstance = null;
+    chartCount = 0;
+  }
+
   if (browserInstance) {
-    // Check if browser is still connected
     try {
       await browserInstance.version();
       return browserInstance;
@@ -117,7 +125,8 @@ async function generateChartImage(symbol, candles, signal) {
     }, { timeout: 5000 });
 
     await new Promise(resolve => setTimeout(resolve, 1000));
-    await page.screenshot({ path: imagePath, type: 'jpeg', quality: 80 });
+    await page.screenshot({ path: imagePath, type: 'jpeg', quality: 70 }); // Lower quality to save RAM
+    chartCount++;
     
     return imagePath;
   } catch (err) {

@@ -276,7 +276,7 @@ async function runScanCycle() {
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-  logger.info(`🏁 Cycle: ${sentCount} signals sent, ${pool.length - sentCount} rejected by AI, ${elapsed}s`);
+  logger.info(`🏁 Cycle: ${sentCount} signals sent, ${finalPool.length - sentCount} rejected by AI, ${elapsed}s`);
   logger.info('═══════════════════════════════════════════════');
 
   if (sentCount === 0) {
@@ -292,7 +292,7 @@ async function runScanCycle() {
 async function startScanner() {
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
-  await sendStatus('🤖 *Crypto Signal Bot v4.3.0* started!\n_Stability Fix, BE Protect, Stalled Check & Deep Post-Mortem active._\n_Scanning Spot & Futures Market every 1 hour..._');
+  await sendStatus('🤖 *Crypto Signal Bot v4.4.1* started!\n_Adaptive Intelligence, Market Regime, Retest Guard & Memory Fix active._');
 
   // Run first cycle immediately
   await runScanCycle();
