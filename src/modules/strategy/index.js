@@ -1,6 +1,6 @@
 const config = require('../../config');
 const logger = require('../../utils/logger');
-const { analyzeTrend, calculateStochastic, findSupportResistance, analyzeStructure, detectAtSpike } = require('../indicators');
+const { analyzeTrend, calculateStochastic, findSupportResistance, analyzeStructure, detectAtSpike, detectRetest } = require('../indicators');
 
 /**
  * Round quantity to the nearest step size to fulfill LOT_SIZE requirement.

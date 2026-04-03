@@ -10,7 +10,7 @@ const client = axios.create({
     Authorization: `Bearer ${config.openRouter.apiKey}`,
     'Content-Type': 'application/json',
     'HTTP-Referer': 'https://github.com/crypto-signal-bot',
-    'X-Title': 'CryptoSignalBot',
+    'X-Title': 'CryptoSignalBot v4.4',
   },
 });
 
