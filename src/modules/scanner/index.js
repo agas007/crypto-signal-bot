@@ -255,24 +255,23 @@ async function runScanCycle() {
         }
       }
 
-      // ─── ASYNC ENTRY PIPELINE ───
-      // We send the signal immediately, and generate the chart in the background
-      (async () => {
-          try {
-              // 1. Send text first for speed
-              await sendSignal(refined, null); 
-              tracker.track(refined);
-              sentCount++;
+      // ─── 1. Send Text Instan ───
+      await sendSignal(refined, null); 
+      tracker.track(refined);
+      sentCount++;
 
-              // 2. Generate and send chart as follow-up
-              const chartPath = await generateChartImage(candidate.symbol, candidate.candles, refined);
-              if (chartPath) {
-                  await sendSignal({ ...refined, isChartUpdate: true }, chartPath);
-              }
-          } catch (e) {
-              logger.error(`Async delivery failed for ${candidate.symbol}:`, e.message);
+      // ─── 2. Queue Chart Generation (Sequential to save RAM) ───
+      // We don't use the IIFE here to avoid memory spikes.
+      // We'll generate it right after the text is sent, but since it's in a loop,
+      // it will be sequential for each signal found.
+      try {
+          const chartPath = await generateChartImage(candidate.symbol, candidate.candles, refined);
+          if (chartPath) {
+              await sendSignal({ ...refined, isChartUpdate: true }, chartPath);
           }
-      })();
+      } catch (e) {
+          logger.error(`Chart delivery failed for ${symbol}:`, e.message);
+      }
 
     } catch (err) {
       logger.error(`AI validation failed for ${candidate.symbol}:`, err.message);
