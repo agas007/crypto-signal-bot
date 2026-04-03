@@ -47,7 +47,8 @@ function detectAtSpike(candles, period = 14) {
   const ratio = atrData.lastTr / atrData.current;
   return {
     spike: ratio > 2.0,
-    ratio: ratio
+    ratio: ratio,
+    atr: atrData.current, // Added this
   };
 }
 

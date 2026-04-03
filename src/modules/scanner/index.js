@@ -1,7 +1,7 @@
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
-const { fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, fetchFundingRate } = require('../data/binance');
+const { fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, fetchFundingRate, fetchFuturesBalance } = require('../data/binance');
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
 const { evaluateSignal } = require('../strategy');
@@ -26,6 +26,14 @@ async function runScanCycle() {
  
   // ─── -1. Global Daily Limit Check ───
   const dailyCount = tracker.getDailyTradeCount();
+  const globalSlToday = tracker.getGlobalSLCountToday();
+
+  if (globalSlToday >= 2) {
+    logger.info(`🚫 Global Cooldown: ${globalSlToday} SL hits today. Stopping all new trades.`);
+    await checkActiveTrades();
+    return 0;
+  }
+
   if (dailyCount >= 3) {
     logger.info(`🚫 Daily limit reached (${dailyCount}/3). No new signals this cycle.`);
     // Still monitor active trades though!
@@ -33,9 +41,19 @@ async function runScanCycle() {
     return 0;
   }
  
-  logger.info(`📈 Daily trade count: ${dailyCount}/3 slots filled.`);
+  logger.info(`📈 Status: ${dailyCount}/3 trades, ${globalSlToday}/2 global SL hits.`);
 
-  // ─── 0. Monitor Active Trades ──────────────────────────
+  // ─── 0. Fetch Real Balance ───
+  // We fetch account balance from Binance to use in position sizing
+  const balance = await fetchFuturesBalance();
+  const effectiveBalance = balance > 0 ? balance : config.strategy.accountBalance;
+  if (balance > 0) {
+    logger.info(`💰 Current Futures Balance: $${balance.toFixed(2)} USDT`);
+  } else {
+    logger.warn(`⚠️ Could not fetch real balance, using fallback: $${config.strategy.accountBalance}`);
+  }
+
+  // ─── 1. Monitor Active Trades ──────────────────────────
   // Now returns symbols that hit TP/SL to prevent re-tracking in SAME cycle
   const hitSymbols = await checkActiveTrades();
 
@@ -61,11 +79,11 @@ async function runScanCycle() {
 
     // ─── Pair-Specific Constraints Check ───
     const sym = symbol.toUpperCase();
-    const stats = tracker.getPairStats(sym, 'ANY'); // We'll check direction specifically later
+    const stats = tracker.getPairStats(sym, 'ANY'); 
     
-    // Rule: After 2 SL -> 24h no trade on that pair (Total SL hits in last 24h)
+    // Rule: After 2 SL on BASE ASSET -> 24h no trade
     if (stats.slHits >= 2) {
-      logger.info(`🚫 Skipping ${sym}: Pair on cooldown (2 SL hits in 24h)`);
+      logger.info(`🚫 Skipping ${sym}: Base Asset (${stats.baseAsset}) on cooldown (2 SL hits in 24h)`);
       continue;
     }
 
@@ -127,7 +145,10 @@ async function runScanCycle() {
       }
 
       // Run strategy evaluation (includes hard kill-switches + R:R check)
-      const signal = evaluateSignal(symbol, mtfData, { fundingRate });
+      const signal = evaluateSignal(symbol, mtfData, { 
+          fundingRate,
+          accountBalance: effectiveBalance 
+      });
       if (signal) {
         signal.candles = mtfData.H1; // Save candles for the chart later
         candidates.push(signal);
@@ -171,22 +192,18 @@ async function runScanCycle() {
     ...okCandidates.slice(0, Math.max(0, totalSlots - qualityCandidates.length)),
   ].slice(0, totalSlots);
 
-  const isFallbackOnly = qualityCandidates.length === 0;
-  const isMixedMode = qualityCandidates.length > 0 && okCandidates.length > 0;
+  // Rule 6: Technical score >= 70% first. AI is final sanity check.
+  const technicalPool = pool.filter(c => c.score >= 70);
 
-  if (isFallbackOnly) {
-    logger.info(`⚠️  No quality signals (R:R>=2.0) — sending top ${pool.length} BEST AVAILABLE to AI...`);
-    await sendStatus(`⚠️ *Scan Cycle:* No high-quality signals. Sending top ${pool.length} best available (lower R:R).`);
-  } else if (isMixedMode) {
-    logger.info(`🤖 Mixed pool: ${qualityCandidates.length} high-quality + ${pool.length - qualityCandidates.length} standard signals → ${pool.length} total to AI...`);
-  } else {
-    logger.info(`🤖 Sending top ${pool.length} HIGH QUALITY candidates to AI for validation...`);
+  if (!technicalPool.length) {
+    logger.info('⛔ No candidates passed the 70% technical threshold.');
+    return 0;
   }
 
   // 4. AI validation + Telegram delivery
   let sentCount = 0;
 
-  for (const candidate of pool) {
+  for (const candidate of technicalPool) {
     try {
       const refined = await refineSignal(candidate);
 
@@ -197,25 +214,10 @@ async function runScanCycle() {
 
       // AI said NO TRADE
       if (refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE') {
-        logger.info(`🚫 ${candidate.symbol}: AI rejected — ${refined.reason}`);
+        logger.info(`🚫 ${candidate.symbol}: AI rejected (Sanity Check) — ${refined.reason}`);
         continue;
       }
-
-      // Relax confidence for best-available candidates
-      const minConfidence = candidate.lowConfidence ? 45 : 60;
-      if (refined.confidence < minConfidence) {
-        logger.info(`⚠️ ${candidate.symbol}: AI confidence too low ${refined.confidence}/100 — ${refined.reason}`);
-        continue;
-      }
-
-      // Quality gate: only reject LOW quality with very low confidence
-      if (refined.quality === 'LOW' && refined.confidence < (candidate.lowConfidence ? 35 : 40)) {
-        logger.info(`⚠️ ${candidate.symbol}: AI quality LOW + low confidence — ${refined.reason}`);
-        continue;
-      }
-
-      refined.isFallback = candidate.lowConfidence;
-
+      
       // ─── Deduplication / Update Check ───
       const active = tracker.getActive(candidate.symbol);
       if (active) {
@@ -253,17 +255,28 @@ async function runScanCycle() {
         }
       }
 
-      // ─── Generate and Send Chart ───
-      const chartPath = await generateChartImage(candidate.symbol, candidate.candles, refined);
+      // ─── ASYNC ENTRY PIPELINE ───
+      // We send the signal immediately, and generate the chart in the background
+      (async () => {
+          try {
+              // 1. Send text first for speed
+              await sendSignal(refined, null); 
+              tracker.track(refined);
+              sentCount++;
 
-      await sendSignal(refined, chartPath);
-      tracker.track(refined); // Save to memory
-      sentCount++;
+              // 2. Generate and send chart as follow-up
+              const chartPath = await generateChartImage(candidate.symbol, candidate.candles, refined);
+              if (chartPath) {
+                  await sendSignal({ ...refined, isChartUpdate: true }, chartPath);
+              }
+          } catch (e) {
+              logger.error(`Async delivery failed for ${candidate.symbol}:`, e.message);
+          }
+      })();
+
     } catch (err) {
       logger.error(`AI validation failed for ${candidate.symbol}:`, err.message);
     }
-
-    await sleep(2000); // space out AI calls
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);

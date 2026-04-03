@@ -152,10 +152,16 @@ function initTelegram() {
       const risk = Math.abs(s.entry - s.stop_loss);
       const reward = Math.abs(s.take_profit - s.entry);
       const rrRatio = risk > 0 ? (reward / risk).toFixed(2) : (s.slMovedToEntry ? '∞ (Risk-Free)' : 'N/A');
+      
+      const ps = s.riskReward?.positionSize;
+      const psStr = ps 
+        ? `• Position (20x): \`${(ps.margin).toFixed(2)} USDT\` (Qty: \`${ps.quantity.toFixed(3)}\`)\n`
+        : '';
 
       report += `${i+1}. *${s.symbol}* (${s.bias})\n` +
                 `• Entry: \`${s.entry}\`\n` +
                 `• TP: \`${s.take_profit}\` | SL: \`${s.stop_loss}\`\n` +
+                psStr +
                 `• R:R Ratio: \`${rrRatio}\` | Age: \`${ageStr}\`\n\n`;
     });
 
@@ -264,6 +270,11 @@ function escapeMarkdown(text) {
  * Format a validated AI signal into a Telegram message.
  */
 function formatSignalMessage(signal) {
+  const isChartUpdate = signal.isChartUpdate;
+  if (isChartUpdate) {
+    return `📊 *CHART CONFIRMATION: ${signal.symbol}* \n_Sinyal sudah masuk, ini adalah chart pendukungnya._`;
+  }
+
   const biasEmoji = signal.bias === 'LONG' ? '🟢' : '🔴';
   const qualityEmoji = signal.quality === 'HIGH' ? '⭐' : '🔶';
 
@@ -304,6 +315,12 @@ ${fundingEmoji} *Funding:* \`${signal.fundingRate || '0.0000%'}\`
 🛑 *Stop Loss:* \`${signal.stop_loss}\`
 📐 *R:R Ratio:* \`${rrRatio.toFixed(2)}\`
 
+🧮 *Position Size (Risk $${signal.riskReward.positionSize.risk.toFixed(2)} / 20x):*
+• *Margin (Cost):* \`${signal.riskReward.positionSize.margin.toFixed(2)} USDT\`
+• *Quantity:* \`${signal.riskReward.positionSize.quantity.toFixed(3)}\`
+• *Notional:* \`$${signal.riskReward.positionSize.notional.toFixed(2)}\`
+
+${signal.warnings && signal.warnings.length > 0 ? `⚠️ *Warnings:*\n${signal.warnings.map(w => `_• ${escapeMarkdown(w)}_`).join('\n')}\n` : ''}
 💬 *Reason:*
 `.trim();
 

@@ -48,6 +48,9 @@ const config = {
 
   strategy: {
     minRrRatio: parseFloat(process.env.MIN_RR_RATIO) || 1.5,
+    accountBalance: parseFloat(process.env.ACCOUNT_BALANCE) || 1000,
+    riskPercentage: parseFloat(process.env.RISK_PERCENTAGE) || 0.02,
+    maxPositionPercentage: parseFloat(process.env.MAX_POSITION_PERCENTAGE) || 0.05,
   },
 };
 

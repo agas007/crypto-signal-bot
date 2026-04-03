@@ -30,11 +30,17 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = 4.0)
  * @param {number} resistance
  * @returns {{ entry: number, sl: number, tp: number, rr: number }}
  */
-function calculateRiskReward(bias, currentPrice, support, resistance) {
+function calculateRiskReward(bias, currentPrice, support, resistance, options = {}) {
   const MIN_RR = config.strategy.minRrRatio;
   const MAX_SL_ALLOWED = 0.04;      // 4% Max Risk
   const MIN_SL_DISTANCE = 0.005;   // 0.5% Min Distance (avoid tight noise)
   const ATR_MULTIPLIER = 1.5;      // Rule 4: SL min 1.5x ATR
+  
+  // Position Sizing (Rule: 2% Risk, Max 5% Notional)
+  const ACCOUNT_BALANCE = options.accountBalance || config.strategy.accountBalance;
+  const RISK_PCT = config.strategy.riskPercentage;
+  const MAX_POS_PCT = config.strategy.maxPositionPercentage;
+  const LEVERAGE = 20;             // 20x leverage
   
   const atrDist = options.atr ? options.atr * ATR_MULTIPLIER : 0;
   const atrDistPercent = options.atr ? atrDist / currentPrice : 0;
@@ -55,10 +61,34 @@ function calculateRiskReward(bias, currentPrice, support, resistance) {
       ? resistance * 0.998
       : entry * (1 + (entry - sl) * MIN_RR / entry);
     
-    const risk = entry - sl;
-    const reward = tp - entry;
-    const rr = risk > 0 ? reward / risk : 0;
-    return { entry, sl, tp, rr };
+    const riskPerUnit = entry - sl;
+    const rewardPerUnit = tp - entry;
+    const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
+
+    // Position Sizing
+    const riskDollar = ACCOUNT_BALANCE * RISK_PCT;
+    let quantity = riskDollar / riskPerUnit;
+    let notionalValue = quantity * entry;
+    
+    // Cap at Max Position Size (5% of account)
+    const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
+    if (notionalValue > maxNotional) {
+      notionalValue = maxNotional;
+      quantity = notionalValue / entry;
+    }
+
+    const marginRequired = notionalValue / LEVERAGE;
+
+    return { 
+      entry, sl, tp, rr, 
+      positionSize: {
+        risk: riskDollar,
+        leverage: LEVERAGE,
+        quantity: quantity,
+        margin: marginRequired,
+        notional: notionalValue
+      }
+    };
   } else {
     const entry = currentPrice;
     const structureSl = resistance !== Infinity ? resistance * 1.002 : entry * 1.02;
@@ -74,10 +104,34 @@ function calculateRiskReward(bias, currentPrice, support, resistance) {
       ? support * 1.002
       : entry * (1 - (sl - entry) * MIN_RR / entry);
     
-    const risk = sl - entry;
-    const reward = entry - tp;
-    const rr = risk > 0 ? reward / risk : 0;
-    return { entry, sl, tp, rr };
+    const riskPerUnit = sl - entry;
+    const rewardPerUnit = entry - tp;
+    const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
+
+    // Position Sizing
+    const riskDollar = ACCOUNT_BALANCE * RISK_PCT;
+    let quantity = riskDollar / riskPerUnit;
+    let notionalValue = quantity * entry;
+    
+    // Cap at Max Position Size (5% of account)
+    const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
+    if (notionalValue > maxNotional) {
+      notionalValue = maxNotional;
+      quantity = notionalValue / entry;
+    }
+
+    const marginRequired = notionalValue / LEVERAGE;
+
+    return { 
+      entry, sl, tp, rr,
+      positionSize: {
+        risk: riskDollar,
+        leverage: LEVERAGE,
+        quantity: quantity,
+        margin: marginRequired,
+        notional: notionalValue
+      }
+    };
   }
 }
 
@@ -127,8 +181,11 @@ function evaluateSignal(symbol, data, options = {}) {
   const atr = h1Spike.atr; // Access ATR from the existing h1Spike analysis
 
   const longReasons = [];
-  let longScore = 0;
+  const shortReasons = [];
+  const warnings = [];
   const tags = [];
+  let longScore = 0;
+  let shortScore = 0;
 
   // 1. D1 Trend alignment (Rule 5: Hard Filter)
   if (d1Trend.direction === 'bullish') {
@@ -170,14 +227,12 @@ function evaluateSignal(symbol, data, options = {}) {
   if (fundingRate > 0.03) {
     longScore -= 15;
     tags.push('HIGH FUNDING: LONG TRAP RISK');
-    longReasons.push(`⚠️ Funding Rate tinggi (${(fundingRate*100).toFixed(3)}%) - Risiko long squeeze.`);
+    warnings.push(`⚠️ Funding Rate tinggi (${(fundingRate*100).toFixed(3)}%) - Risiko long squeeze.`);
   }
 
   // ═══════════════════════════════════════════════════════
   // SHORT SCORING
   // ═══════════════════════════════════════════════════════
-  const shortReasons = [];
-  let shortScore = 0;
   if (d1Trend.direction === 'bearish') {
     shortScore += 25;
     shortReasons.push(`D1 trend bearish`);
@@ -193,21 +248,31 @@ function evaluateSignal(symbol, data, options = {}) {
   if (fundingRate < -0.03) {
     shortScore -= 15;
     tags.push('LOW FUNDING: SHORT SQUEEZE RISK');
-    shortReasons.push(`⚠️ Funding Rate sangat negatif (${(fundingRate*100).toFixed(3)}%) - Risiko short squeeze.`);
+    warnings.push(`⚠️ Funding Rate sangat negatif (${(fundingRate*100).toFixed(3)}%) - Risiko short squeeze.`);
   }
+
+  // 5. Stochastic (0-15 pts)
+  if (h4Stoch.signal === 'overbought') shortScore += 10;
+  if (h1Stoch.signal === 'overbought') shortScore += 5;
 
   // ═══════════════════════════════════════════════════════
   // PICK BIAS + FINAL REFINEMENT
   // ═══════════════════════════════════════════════════════
   // Pick Bias
-  let bias = longScore >= shortScore ? 'LONG' : 'SHORT';
-  let score = longScore >= shortScore ? longScore : shortScore;
-  let reasons = longScore >= shortScore ? longReasons : shortReasons;
+  // Rule 4: Ambiguitas check (lebih besar, bukan lebih besar sama dengan)
+  if (longScore === shortScore && longScore > 0) return null; // Neutral conflict
+  
+  let bias = longScore > shortScore ? 'LONG' : 'SHORT';
+  let score = longScore > shortScore ? longScore : shortScore;
+  let reasons = longScore > shortScore ? longReasons : shortReasons;
 
   if (score < 30) return null; // Hard reject low scores early
 
   // Risk:Reward check (includes the 4% Hard SL Reject + 1.5x ATR min SL)
-  const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance, { atr });
+  const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance, { 
+    atr,
+    accountBalance: options.accountBalance || config.strategy.accountBalance 
+  });
   if (!riskReward) return null; 
 
   // Verticality & Mean Reversion Protection
@@ -215,27 +280,30 @@ function evaluateSignal(symbol, data, options = {}) {
   if (distFromLvl > 5.0) {
     score -= 10;
     tags.push('WAIT FOR RETEST');
-    reasons.push(`✋ Price is floating ${distFromLvl.toFixed(1)}% away from key level. Entry is currently 'vertical'.`);
+    warnings.push(`✋ Price is floating ${distFromLvl.toFixed(1)}% away from key level. Entry is currently 'vertical'.`);
   }
 
   // God-Candle Penalty (ATR Spike)
   if (h1Spike.spike) {
     score -= 20;
     tags.push('GOD-CANDLE ALERT');
-    reasons.push(`☄️ Abnormal H1 ATR Spike (${h1Spike.ratio.toFixed(1)}x average). Avoid FOMO at price peaks.`);
+    warnings.push(`☄️ Abnormal H1 ATR Spike (${h1Spike.ratio.toFixed(1)}x average). Avoid FOMO at price peaks.`);
   }
 
   // Trading Type Classification logic for AI
   const isRetested = distFromLvl < 4.0;
   const tradingType = isRetested ? 'SWING / DAY TRADING' : 'MOMENTUM SCALP';
 
-  const isStrict = score >= 65 && reasons.length >= 3;
+  // Rule 6: Technical score >= 70% first. AI is final sanity check.
+  // Rule 3: Hanya hitung POSITIVE reasons untuk isStrict (menghindari false positive dari warnings)
+  const isStrict = score >= 70 && reasons.length >= 3;
 
   return {
     symbol,
     bias,
     score,
     reasons,
+    warnings,
     tags,
     analysis,
     riskReward,

@@ -200,7 +200,8 @@ async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
 async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
   try {
     const params = { symbol, interval, limit, ...options };
-    const data = await getWithFallback('/api/v3/klines', params);
+    // Use Futures candles for bot accuracy
+    const data = await getWithFallback('/fapi/v1/klines', params, false, true);
     if (!data || !Array.isArray(data)) return [];
 
     return data.map((candle) => ({
@@ -232,7 +233,7 @@ async function fetchMultiTimeframe(symbol) {
 
 async function fetchTopPairs(limit = config.scanner.maxPairs) {
   try {
-    const data = await getWithFallback('/api/v3/ticker/24hr');
+    const data = await getWithFallback('/fapi/v1/ticker/24hr', {}, false, true);
     if (!data || !Array.isArray(data)) return [];
 
     return data
@@ -248,7 +249,7 @@ async function fetchTopPairs(limit = config.scanner.maxPairs) {
 
 async function fetch24hTicker(symbol) {
   try {
-    const data = await getWithFallback('/api/v3/ticker/24hr', { symbol });
+    const data = await getWithFallback('/fapi/v1/ticker/24hr', { symbol }, false, true);
     return {
       symbol: data.symbol,
       priceChangePercent: parseFloat(data.priceChangePercent),
@@ -302,6 +303,21 @@ async function fetchFundingRate(symbol) {
     return null;
   }
 }
+/**
+ * Fetch total USDT balance from Binance Futures (PRIVATE).
+ */
+async function fetchFuturesBalance() {
+    try {
+        const data = await getWithFallback('/fapi/v2/balance', {}, true, true);
+        if (!data || !Array.isArray(data)) return 0;
+
+        const usdtAsset = data.find(asset => asset.asset === 'USDT');
+        return usdtAsset ? parseFloat(usdtAsset.balance) : 0;
+    } catch (err) {
+        logger.error(`Failed to fetch futures balance: ${err.message}`);
+        return 0;
+    }
+}
 
 module.exports = {
   fetchOHLCV,
@@ -310,4 +326,5 @@ module.exports = {
   fetch24hTicker,
   fetchUserTrades,
   fetchFundingRate,
+  fetchFuturesBalance,
 };

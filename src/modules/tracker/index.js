@@ -258,15 +258,37 @@ class SignalTracker {
     const completedRecently = this.history.filter(t => t.closedAt > dayAgo).length;
     return activeCount + completedRecently;
   }
+  getGlobalSLCountToday() {
+    const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
+    return this.history.filter(t => t.close_reason === 'SL_HIT' && t.closedAt > dayAgo).length;
+  }
+
+  /**
+   * Check stats for a specific base asset (e.g. NMR from NMRUSDT, NMRBTC).
+   */
+  getAssetStats(symbol) {
+    const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
+    // Extract base asset (Naive approach: remove USDT, BTC, etc. from end)
+    const baseAsset = symbol.toUpperCase().replace(/(USDT|BTC|ETH|BNB|PERP)$/, '');
+    
+    // Count SL hits for this base asset in any pair
+    const slHits = this.history.filter(t => {
+      const tBase = t.symbol.toUpperCase().replace(/(USDT|BTC|ETH|BNB|PERP)$/, '');
+      return tBase === baseAsset && t.close_reason === 'SL_HIT' && t.closedAt > dayAgo;
+    }).length;
+
+    return { slHits, baseAsset };
+  }
 
   /**
    * Check stats for a specific pair and direction.
+   * Now incorporates base-asset level SL cooldown.
    */
   getPairStats(symbol, bias) {
     const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
     const sym = symbol.toUpperCase();
     
-    // Count attempts (Active + History)
+    // 1. Count attempts (Active + History)
     const activeAttempt = this.signals[sym] && this.signals[sym].bias === bias ? 1 : 0;
     const historyAttempts = this.history.filter(t => 
       t.symbol === sym && 
@@ -274,18 +296,16 @@ class SignalTracker {
       t.closedAt > dayAgo
     ).length;
 
-    // Count SL hits specifically for this pair (any direction in last 24h)
-    const slHits = this.history.filter(t => 
-      t.symbol === sym && 
-      t.close_reason === 'SL_HIT' && 
-      t.closedAt > dayAgo
-    ).length;
+    // 2. Count SL hits at ASSET level (e.g. any NMR pair)
+    const assetStats = this.getAssetStats(sym);
 
     return {
       attempts: activeAttempt + historyAttempts,
-      slHits
+      slHits: assetStats.slHits, // Global SL hits for this asset
+      baseAsset: assetStats.baseAsset
     };
   }
+
 }
 
 module.exports = new SignalTracker();
