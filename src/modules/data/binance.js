@@ -319,6 +319,29 @@ async function fetchFuturesBalance() {
     }
 }
 
+/**
+ * Fetch trading constraints (LOT_SIZE) for all futures symbols.
+ */
+async function fetchExchangeSpecs() {
+    try {
+        const data = await getWithFallback('/fapi/v1/exchangeInfo', {}, false, true);
+        const specs = {};
+        if (data && data.symbols) {
+            data.symbols.forEach(s => {
+                const lotFilter = s.filters.find(f => f.filterType === 'LOT_SIZE');
+                specs[s.symbol] = {
+                    stepSize: lotFilter ? parseFloat(lotFilter.stepSize) : 0.001,
+                    precision: s.quantityPrecision
+                };
+            });
+        }
+        return specs;
+    } catch (err) {
+        logger.error(`Failed to fetch exchange info: ${err.message}`);
+        return {};
+    }
+}
+
 module.exports = {
   fetchOHLCV,
   fetchMultiTimeframe,
@@ -327,4 +350,5 @@ module.exports = {
   fetchUserTrades,
   fetchFundingRate,
   fetchFuturesBalance,
+  fetchExchangeSpecs,
 };

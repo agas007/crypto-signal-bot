@@ -3,6 +3,15 @@ const logger = require('../../utils/logger');
 const { analyzeTrend, calculateStochastic, findSupportResistance, analyzeStructure, detectAtSpike } = require('../indicators');
 
 /**
+ * Round quantity to the nearest step size to fulfill LOT_SIZE requirement.
+ */
+function roundStep(quantity, stepSize) {
+    if (!stepSize || stepSize === 0) return quantity;
+    const precision = stepSize.toString().split('.')[1]?.length || 0;
+    return parseFloat((Math.floor(quantity / stepSize) * stepSize).toFixed(precision));
+}
+
+/**
  * Classify price position relative to support/resistance.
  * Relaxed version: wider threshold (4% instead of 2%).
  *
@@ -68,13 +77,15 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
     // Position Sizing
     const riskDollar = ACCOUNT_BALANCE * RISK_PCT;
     let quantity = riskDollar / riskPerUnit;
+    if (options.stepSize) quantity = roundStep(quantity, options.stepSize);
     let notionalValue = quantity * entry;
     
     // Cap at Max Position Size (5% of account)
     const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
     if (notionalValue > maxNotional) {
       notionalValue = maxNotional;
-      quantity = notionalValue / entry;
+      quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
+      notionalValue = quantity * entry;
     }
 
     const marginRequired = notionalValue / LEVERAGE;
@@ -111,13 +122,15 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
     // Position Sizing
     const riskDollar = ACCOUNT_BALANCE * RISK_PCT;
     let quantity = riskDollar / riskPerUnit;
+    if (options.stepSize) quantity = roundStep(quantity, options.stepSize);
     let notionalValue = quantity * entry;
     
     // Cap at Max Position Size (5% of account)
     const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
     if (notionalValue > maxNotional) {
       notionalValue = maxNotional;
-      quantity = notionalValue / entry;
+      quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
+      notionalValue = quantity * entry;
     }
 
     const marginRequired = notionalValue / LEVERAGE;
@@ -271,7 +284,8 @@ function evaluateSignal(symbol, data, options = {}) {
   // Risk:Reward check (includes the 4% Hard SL Reject + 1.5x ATR min SL)
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance, { 
     atr,
-    accountBalance: options.accountBalance || config.strategy.accountBalance 
+    accountBalance: options.accountBalance || config.strategy.accountBalance,
+    stepSize: options.stepSize
   });
   if (!riskReward) return null; 
 

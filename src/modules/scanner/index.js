@@ -28,20 +28,15 @@ async function runScanCycle() {
   const dailyCount = tracker.getDailyTradeCount();
   const globalSlToday = tracker.getGlobalSLCountToday();
 
-  if (globalSlToday >= 2) {
-    logger.info(`🚫 Global Cooldown: ${globalSlToday} SL hits today. Stopping all new trades.`);
+  // ─── 0. Early Exit Check (Hard Killswitch) ───
+  // Rule: Stop all trades if we hit 3 SLs globally in 24h
+  if (globalSlToday >= 3) {
+    logger.info(`🚫 Global Killswitch Active: 3/3 Stop Loss hits in 24h. Protecting capital.`);
     await checkActiveTrades();
     return 0;
   }
 
-  if (dailyCount >= 3) {
-    logger.info(`🚫 Daily limit reached (${dailyCount}/3). No new signals this cycle.`);
-    // Still monitor active trades though!
-    await checkActiveTrades();
-    return 0;
-  }
- 
-  logger.info(`📈 Status: ${dailyCount}/3 trades, ${globalSlToday}/2 global SL hits.`);
+  logger.info(`📈 Status: ${dailyCount}/5 trades, ${globalSlToday}/3 global SL hits.`);
 
   // ─── 0. Fetch Real Balance ───
   // We fetch account balance from Binance to use in position sizing
@@ -164,46 +159,37 @@ async function runScanCycle() {
     }
   }
 
-  // Split strict vs fallback candidates
-  const strictCandidates = candidates.filter(c => c.isStrict);
-  const fallbackCandidates = candidates.filter(c => !c.isStrict);
+  // 3. Selection & Batching
+  // Priority: 1. Technical Score 2. Quality/Reliability
+  const qualityCandidates = candidates.filter((c) => c.isStrict);
+  const okCandidates = candidates.filter((c) => !c.isStrict);
 
-  logger.info(`Scan: ${strictCandidates.length} strict, ${fallbackCandidates.length} low-confidence, ${filtered} pre-filtered, ${errors} errors / ${pairs.length} pairs`);
+  // Logic: 
+  // If we have room (total < 5), take all quality ones.
+  // If we are FULL (total >= 5), ONLY allow "Awesome" pairs (Score > 80 AND isStrict)
+  const isDailyLimitReached = dailyCount >= 5;
+  
+  const finalPool = isDailyLimitReached
+    ? qualityCandidates.filter(c => c.score >= 82) // The "Awesome" Exception
+    : [...qualityCandidates, ...okCandidates].slice(0, 5 - dailyCount);
 
-  if (!candidates.length) {
-    logger.info('⛔ No trade candidates found at all this cycle');
-    await sendStatus('😴 *Scan Cycle:* No directional candidates found across all pairs.');
-    return 0;
+  if (isDailyLimitReached && finalPool.length > 0) {
+    logger.info(`🌟 [Awesome Exception] Found ${finalPool.length} elite signals despite daily limit!`);
   }
 
-  // 3. Build mixed pool: all strict first, then fill with best available
-  const totalSlots = config.scanner.topSignalsToAi;
-
-  // Filter out signals with terrible R:R (e.g. < 2.0) if we want quality
-  const qualityCandidates = candidates.filter(c => c.riskReward.rr >= 2.0);
-  const okCandidates = candidates.filter(c => c.riskReward.rr < 2.0);
-
-  // Sort by R:R DESCENDING (Highest R:R first)
-  qualityCandidates.sort((a, b) => b.riskReward.rr - a.riskReward.rr);
-  okCandidates.sort((a, b) => b.riskReward.rr - a.riskReward.rr);
-
-  const pool = [
-    ...qualityCandidates,
-    ...okCandidates.slice(0, Math.max(0, totalSlots - qualityCandidates.length)),
-  ].slice(0, totalSlots);
-
-  // Rule 6: Technical score >= 70% first. AI is final sanity check.
-  const technicalPool = pool.filter(c => c.score >= 70);
-
-  if (!technicalPool.length) {
-    logger.info('⛔ No candidates passed the 70% technical threshold.');
+  if (!finalPool.length) {
+    if (isDailyLimitReached) {
+        logger.info('🚫 Daily trade limit reached (5/5). No elite signals found.');
+    } else {
+        logger.info('⛔ No high-quality candidates found after technical scoring.');
+    }
     return 0;
   }
 
   // 4. AI validation + Telegram delivery
   let sentCount = 0;
 
-  for (const candidate of technicalPool) {
+  for (const candidate of finalPool) {
     try {
       const refined = await refineSignal(candidate);
 
