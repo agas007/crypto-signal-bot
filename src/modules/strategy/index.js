@@ -31,21 +31,29 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = 4.0)
  * @returns {{ entry: number, sl: number, tp: number, rr: number }}
  */
 function calculateRiskReward(bias, currentPrice, support, resistance) {
-  const minRr = config.strategy.minRrRatio;
+  const MIN_RR = config.strategy.minRrRatio;
   const MAX_SL_ALLOWED = 0.04;      // 4% Max Risk
   const MIN_SL_DISTANCE = 0.005;   // 0.5% Min Distance (avoid tight noise)
+  const ATR_MULTIPLIER = 1.5;      // Rule 4: SL min 1.5x ATR
+  
+  const atrDist = options.atr ? options.atr * ATR_MULTIPLIER : 0;
+  const atrDistPercent = options.atr ? atrDist / currentPrice : 0;
 
   if (bias === 'LONG') {
     const entry = currentPrice;
-    const sl = support * 0.998;
+    // Rule 4: SL must be at least 1.5x ATR below entry, or below structure
+    const structureSl = support * 0.998;
+    const minAtrSl = entry - atrDist;
+    const sl = Math.min(structureSl, minAtrSl); // Use whichever is lower (safer)
     
     const slDistPercent = (entry - sl) / entry;
-    // Reject if too tight (<0.5%) or too wide (>4%)
-    if (slDistPercent < MIN_SL_DISTANCE || slDistPercent > MAX_SL_ALLOWED) return null;
+    
+    // Reject if too tight (<1.5x ATR or <0.5%) or too wide (>4%)
+    if (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED) return null;
 
     const tp = resistance !== Infinity
       ? resistance * 0.998
-      : entry * (1 + (entry - sl) * minRr / entry);
+      : entry * (1 + (entry - sl) * MIN_RR / entry);
     
     const risk = entry - sl;
     const reward = tp - entry;
@@ -53,15 +61,18 @@ function calculateRiskReward(bias, currentPrice, support, resistance) {
     return { entry, sl, tp, rr };
   } else {
     const entry = currentPrice;
-    const sl = resistance !== Infinity ? resistance * 1.002 : entry * 1.02;
+    const structureSl = resistance !== Infinity ? resistance * 1.002 : entry * 1.02;
+    const minAtrSl = entry + atrDist;
+    const sl = Math.max(structureSl, minAtrSl); // Use whichever is higher (safer)
 
     const slDistPercent = (sl - entry) / entry;
-    // Reject if too tight (<0.5%) or too wide (>4%)
-    if (slDistPercent < MIN_SL_DISTANCE || slDistPercent > MAX_SL_ALLOWED) return null;
+    
+    // Reject if too tight (<1.5x ATR or <0.5%) or too wide (>4%)
+    if (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED) return null;
 
     const tp = support > 0
       ? support * 1.002
-      : entry * (1 - (sl - entry) * minRr / entry);
+      : entry * (1 - (sl - entry) * MIN_RR / entry);
     
     const risk = sl - entry;
     const reward = entry - tp;
@@ -107,22 +118,24 @@ function evaluateSignal(symbol, data, options = {}) {
     pricePosition,
   };
 
-  // Basic Filter: Directional Info Required
-  if (d1Trend.direction === 'neutral' && h4Trend.direction === 'neutral' && h1Trend.direction === 'neutral') {
-    return null;
-  }
+  // Rule 5: No entry if against HTF trend (4H/1D)
+  // If D1 is bullish, we can only LONG. If D1 is bearish, we can only SHORT.
+  // If D1 is neutral, we check H4.
+  const globalTrend = d1Trend.direction !== 'neutral' ? d1Trend : h4Trend;
+  if (globalTrend.direction === 'neutral') return null; // No clear HTF trend
+  
+  const atr = h1Spike.atr; // Access ATR from the existing h1Spike analysis
 
   const longReasons = [];
   let longScore = 0;
   const tags = [];
 
-  // 1. D1 Trend alignment (0-25 pts)
+  // 1. D1 Trend alignment (Rule 5: Hard Filter)
   if (d1Trend.direction === 'bullish') {
     longScore += d1Trend.strengthLabel === 'strong' ? 25 : d1Trend.strengthLabel === 'moderate' ? 20 : 10;
     longReasons.push(`D1 trend bullish (${d1Trend.strengthLabel})`);
-  }
-  if (d1Trend.direction === 'bearish' && d1Trend.strengthLabel === 'strong') {
-    longScore -= 30; // Strong counter-trend filter
+  } else if (d1Trend.direction === 'bearish') {
+    longScore -= 100; // Rule 5: Hard reject LONG against D1 Bearish
   }
 
   // 2. H4 Trend alignment (0-15 pts)
@@ -165,7 +178,13 @@ function evaluateSignal(symbol, data, options = {}) {
   // ═══════════════════════════════════════════════════════
   const shortReasons = [];
   let shortScore = 0;
-  if (d1Trend.direction === 'bearish') shortScore += 25;
+  if (d1Trend.direction === 'bearish') {
+    shortScore += 25;
+    shortReasons.push(`D1 trend bearish`);
+  } else if (d1Trend.direction === 'bullish') {
+    shortScore -= 100; // Rule 5: Hard reject SHORT against D1 Bullish
+  }
+
   if (h4Trend.direction === 'bearish') shortScore += 15;
   if (pricePosition === 'near_resistance') shortScore += 20;
   if (h1Structure.structure === 'bearish') shortScore += 15;
@@ -180,13 +199,16 @@ function evaluateSignal(symbol, data, options = {}) {
   // ═══════════════════════════════════════════════════════
   // PICK BIAS + FINAL REFINEMENT
   // ═══════════════════════════════════════════════════════
+  // Pick Bias
   let bias = longScore >= shortScore ? 'LONG' : 'SHORT';
   let score = longScore >= shortScore ? longScore : shortScore;
   let reasons = longScore >= shortScore ? longReasons : shortReasons;
 
-  // Risk:Reward check (includes the 4% Hard SL Reject)
-  const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance);
-  if (!riskReward) return null; // Rejected due to SL > 4%
+  if (score < 30) return null; // Hard reject low scores early
+
+  // Risk:Reward check (includes the 4% Hard SL Reject + 1.5x ATR min SL)
+  const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance, { atr });
+  if (!riskReward) return null; 
 
   // Verticality & Mean Reversion Protection
   const distFromLvl = bias === 'LONG' ? h4SR.distToSupport : h4SR.distToResistance;

@@ -2,9 +2,19 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
 
-const STORAGE_PATH = path.join(process.cwd(), 'active_signals.json');
-const LESSONS_PATH = path.join(process.cwd(), 'history_lessons.json');
-const HISTORY_PATH = path.join(process.cwd(), 'trade_history.json');
+const DATA_DIR = process.env.DATA_DIR || process.cwd();
+const STORAGE_PATH = path.join(DATA_DIR, 'active_signals.json');
+const LESSONS_PATH = path.join(DATA_DIR, 'history_lessons.json');
+const HISTORY_PATH = path.join(DATA_DIR, 'trade_history.json');
+
+// Ensure directory exists if it's not the root or current directory
+if (DATA_DIR !== process.cwd() && !fs.existsSync(DATA_DIR)) {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+  } catch (err) {
+    logger.error(`Failed to create DATA_DIR: ${DATA_DIR}`, err.message);
+  }
+}
 
 /**
  * Memory module to track active trade signals and history.
@@ -238,6 +248,43 @@ class SignalTracker {
     this.lessons = [];
     this._saveLessons();
     logger.info('🧠 [Tracker] AI lessons cleared.');
+  }
+  /**
+   * Check if we are over the daily trade limit (Global).
+   */
+  getDailyTradeCount() {
+    const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const activeCount = Object.keys(this.signals).length;
+    const completedRecently = this.history.filter(t => t.closedAt > dayAgo).length;
+    return activeCount + completedRecently;
+  }
+
+  /**
+   * Check stats for a specific pair and direction.
+   */
+  getPairStats(symbol, bias) {
+    const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const sym = symbol.toUpperCase();
+    
+    // Count attempts (Active + History)
+    const activeAttempt = this.signals[sym] && this.signals[sym].bias === bias ? 1 : 0;
+    const historyAttempts = this.history.filter(t => 
+      t.symbol === sym && 
+      t.bias === bias && 
+      t.closedAt > dayAgo
+    ).length;
+
+    // Count SL hits specifically for this pair (any direction in last 24h)
+    const slHits = this.history.filter(t => 
+      t.symbol === sym && 
+      t.close_reason === 'SL_HIT' && 
+      t.closedAt > dayAgo
+    ).length;
+
+    return {
+      attempts: activeAttempt + historyAttempts,
+      slHits
+    };
   }
 }
 

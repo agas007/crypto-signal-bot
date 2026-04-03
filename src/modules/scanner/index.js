@@ -23,6 +23,17 @@ async function runScanCycle() {
   const startTime = Date.now();
   logger.info('═══════════════════════════════════════════════');
   logger.info('🔍 Starting scan cycle...');
+ 
+  // ─── -1. Global Daily Limit Check ───
+  const dailyCount = tracker.getDailyTradeCount();
+  if (dailyCount >= 3) {
+    logger.info(`🚫 Daily limit reached (${dailyCount}/3). No new signals this cycle.`);
+    // Still monitor active trades though!
+    await checkActiveTrades();
+    return 0;
+  }
+ 
+  logger.info(`📈 Daily trade count: ${dailyCount}/3 slots filled.`);
 
   // ─── 0. Monitor Active Trades ──────────────────────────
   // Now returns symbols that hit TP/SL to prevent re-tracking in SAME cycle
@@ -45,6 +56,16 @@ async function runScanCycle() {
     // Skip if just hit TP/SL in this cycle to avoid duplicate signals
     if (hitSymbols.includes(symbol.toUpperCase())) {
       logger.info(`⏭️ Skipping ${symbol} - just hit TP/SL in this cycle.`);
+      continue;
+    }
+
+    // ─── Pair-Specific Constraints Check ───
+    const sym = symbol.toUpperCase();
+    const stats = tracker.getPairStats(sym, 'ANY'); // We'll check direction specifically later
+    
+    // Rule: After 2 SL -> 24h no trade on that pair (Total SL hits in last 24h)
+    if (stats.slHits >= 2) {
+      logger.info(`🚫 Skipping ${sym}: Pair on cooldown (2 SL hits in 24h)`);
       continue;
     }
 
@@ -89,6 +110,19 @@ async function runScanCycle() {
       
       if (!mtfData) {
         errors++;
+        continue;
+      }
+
+      // Check Direction (Bias) and Attempt Limit
+      // We don't have the bias yet, so we get it from indicators first
+      // or evaluate it quickly. For now, let's keep it simple:
+      // fetch indicators to decide direction, then check stats.
+      const tempTrend = analyzeTrend(mtfData.H1, config.indicators.ema);
+      const estimatedBias = tempTrend.ema200 === 'UP' ? 'LONG' : 'SHORT';
+      const dirStats = tracker.getPairStats(sym, estimatedBias);
+      
+      if (dirStats.attempts >= 2) {
+        logger.info(`🚫 Skipping ${sym} ${estimatedBias}: Direction limit reached (2 attempts)`);
         continue;
       }
 
