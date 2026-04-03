@@ -1,7 +1,7 @@
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
-const { fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, fetchFundingRate, fetchFuturesBalance } = require('../data/binance');
+const { fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, fetchFundingRate, fetchFuturesBalance, fetchOHLCV } = require('../data/binance');
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
 const { evaluateSignal } = require('../strategy');
