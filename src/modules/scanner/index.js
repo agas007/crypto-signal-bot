@@ -242,14 +242,12 @@ async function runScanCycle() {
       }
 
       // ─── 1. Send Text Instan ───
+      refined.freshness = Math.round((Date.now() - startTime) / 1000);
       await sendSignal(refined, null); 
       tracker.track(refined);
       sentCount++;
 
       // ─── 2. Queue Chart Generation (Sequential to save RAM) ───
-      // We don't use the IIFE here to avoid memory spikes.
-      // We'll generate it right after the text is sent, but since it's in a loop,
-      // it will be sequential for each signal found.
       try {
           const chartPath = await generateChartImage(candidate.symbol, candidate.candles, refined);
           if (chartPath) {

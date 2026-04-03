@@ -315,6 +315,9 @@ ${fundingEmoji} *Funding:* \`${signal.fundingRate || '0.0000%'}\`
 🛑 *Stop Loss:* \`${signal.stop_loss}\`
 📐 *R:R Ratio:* \`${rrRatio.toFixed(2)}\`
 
+⏱️ *Valid:* \`${signal.freshness || 0}s ago\`
+🚫 *No Entry If:* \`${signal.bias === 'LONG' ? '>' : '<'} ${signal.bias === 'LONG' ? (signal.entry * 1.003).toFixed(5) : (signal.entry * 0.997).toFixed(5)}\`
+
 🧮 *Position Size (Risk $${signal.riskReward.positionSize.risk.toFixed(2)} / 20x):*
 • *Margin (Cost):* \`${signal.riskReward.positionSize.margin.toFixed(2)} USDT\`
 • *Quantity:* \`${signal.riskReward.positionSize.quantity.toFixed(3)}\`
