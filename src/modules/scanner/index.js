@@ -194,14 +194,20 @@ async function runScanCycle() {
 
   // 4. Validation & Delivery
   let sentCount = 0;
+  const rejections = [];
 
   // Inform user about technical candidates found
-  if (finalPool.length > 0) {
-    const candidateList = finalPool.map(c => 
-      `• *${c.symbol}* (${c.bias}): Score \`${c.score}\` ${c.isStrict ? '💎' : '⚙️'}`
-    ).join('\n');
-    
-    await sendStatus(`🔎 *Technical Candidates Found:* ${finalPool.length}\n_Sending to AI for final validation..._\n\n${candidateList}`);
+  if (sentCount === 0 && rejections.length > 0) {
+    const watchlist = rejections.map(r => {
+        const label = r.quality === 'WATCHLIST' ? '📋 *WATCHLIST*' : '🚫 *REJECTED*';
+        return `• *${r.symbol}* (Score ${r.score}) ${label}: _${r.reason}_`;
+    }).join('\n');
+
+    const msg = `📡 *𝐑𝐞𝐬𝐮𝐥𝐭: 𝐇𝐢𝐠𝐡 𝐀𝐥𝐞𝐫𝐭 𝐖𝐚𝐭𝐜𝐡𝐥𝐢𝐬𝐭*\n\n` +
+                `${watchlist}\n\n` +
+                `🛡️ *Status:* Standing by. Waiting for Market Regime shift or better RR Ratio.`;
+
+    await sendStatus(msg);
   }
 
   for (const candidate of finalPool) {
@@ -214,10 +220,18 @@ async function runScanCycle() {
         continue;
       }
 
-      // AI said NO TRADE
-      if (refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE') {
-        logger.info(`🚫 ${candidate.symbol}: AI rejected (Sanity Check) — ${refined.reason}`);
-        logAudit(candidate.symbol, 'AI', 'REJECTED', candidate.score, refined.reason);
+      // AI said NO TRADE or WATCHLIST
+      if (refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE' || refined.bias === 'WATCHLIST') {
+        const isWatchlist = refined.bias === 'WATCHLIST';
+        logger.info(`${isWatchlist ? '👀' : '🚫'} ${candidate.symbol}: AI ${isWatchlist ? 'Watchlist' : 'Rejected'} — ${refined.reason}`);
+        
+        logAudit(candidate.symbol, 'AI', isWatchlist ? 'WATCHLIST' : 'REJECTED', candidate.score, refined.reason);
+        rejections.push({ 
+            symbol: candidate.symbol, 
+            score: candidate.score, 
+            reason: refined.reason, 
+            quality: refined.quality || (isWatchlist ? 'WATCHLIST' : 'LOW') 
+        });
         continue;
       }
       

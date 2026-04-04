@@ -41,7 +41,7 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = 4.0)
  */
 function calculateRiskReward(bias, currentPrice, support, resistance, options = {}) {
   const MIN_RR = config.strategy.minRrRatio;
-  const MAX_SL_ALLOWED = 0.04;      // 4% Max Risk
+  const MAX_SL_ALLOWED = 0.08;      // 8% Max Risk (increased from 4% to allow structural SL)
   const MIN_SL_DISTANCE = 0.005;   // 0.5% Min Distance (avoid tight noise)
   const ATR_MULTIPLIER = 1.5;      // Rule 4: SL min 1.5x ATR
   

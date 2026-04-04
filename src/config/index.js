@@ -49,7 +49,7 @@ const config = {
   strategy: {
     minRrRatio: parseFloat(process.env.MIN_RR_RATIO) || 1.5,
     accountBalance: parseFloat(process.env.ACCOUNT_BALANCE) || 1000,
-    riskPercentage: parseFloat(process.env.RISK_PERCENTAGE) || 0.02,
+    riskPercentage: 0.05,           // Risk 5% of account balance per trade
     maxPositionPercentage: parseFloat(process.env.MAX_POSITION_PERCENTAGE) || 0.05,
   },
 };

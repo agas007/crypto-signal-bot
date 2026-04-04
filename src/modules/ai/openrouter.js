@@ -53,15 +53,16 @@ ${marketContext}
 QUALITY ASSESSMENT:
 - HIGH: Strong confluence, clear structure, high confidence (APPROVE)
 - MEDIUM: Good setup, valid confluence (APPROVE)
-- LOW: Weak setup, conflicting data (REJECT)
+- WATCHLIST: Setup is developing, needs one more confirmation like volume or retest (WATCHLIST)
+- LOW: Weak setup, conflicting data or dangerous volatility (REJECT)
 
 CONFIDENCE THRESHOLDS:
-- 75-100: APPROVE (HIGH quality)
-- 60-74: APPROVE (MEDIUM quality) 
-- 40-59: REJECT (too weak)
-- Below 40: REJECT (dangerous)
+- 75-100: APPROVE (HIGH quality - execute trade)
+- 60-74: APPROVE (MEDIUM quality - execute trade) 
+- 40-59: WATCHLIST (Do not execute, but monitor for next cycle)
+- Below 40: REJECT (Dangerous, ignore)
 
-NO 'trade with caution' allowed. Either approve with confidence 60+ or reject.
+No 'trade with caution' allowed. Choose explicitly between APPROVE (Score 60+), WATCHLIST (Score 40-59), or REJECT (Below 40).
 
 You MUST respond with ONLY valid JSON (no markdown, no explanation, no fences).`;
 }
@@ -98,41 +99,32 @@ H1:
 - Break of Structure: ${h1Structure?.bos ?? false} ${h1Structure?.bosType ? `(${h1Structure.bosType})` : ''}
 - Trend: ${h1Trend.direction} (${h1Trend.strengthLabel})
 - Stochastic: K=${h1Stoch.k.toFixed(1)}, D=${h1Stoch.d.toFixed(1)} (${h1Stoch.signal})
-- Detail: ${h1Structure?.detail ?? 'N/A'}
-
-PRE-SCREENED:
-- Bias: ${bias}
-- Score: ${score}/100
-- Pre-calc Entry: ${riskReward.entry.toFixed(4)}
-- Pre-calc SL: ${riskReward.sl.toFixed(4)}
-- Pre-calc TP: ${riskReward.tp.toFixed(4)}
-- Pre-calc R:R: ${riskReward.rr.toFixed(2)}
 
 TECHNICAL REASONS:
 ${reasons.map((r, i) => `${i + 1}. ${r}`).join('\n')}
 
 INSTRUCTIONS:
 1. Evaluate whether the overall confluence supports the ${bias} bias.
-2. If valid: refine entry, SL, TP levels.
-3. 🛑 CRITICAL RULE: Stop Loss (SL) distance MUST NOT exceed 4% from the entry price (Max SL = 4.0% for 20x leverage safety).
+2. If valid or developing: refine entry, SL, TP levels based on structural invalidation.
+3. 🛑 DYNAMIC SL RULE: Stop Loss MUST be placed beyond the nearest logical Support/Resistance. Do not use a fixed percentage. However, if the required SL is wider than 8% due to extreme volatility, you MUST reject the trade (NO TRADE).
 4. VERIFIKASI RETEST: Cek apakah sudah terjadi retest pada breakout level?
-   - Jika BELUM (kenaikan vertikal/ngawang), set trading_type menjadi 'MOMENTUM SCALP'.
+   - Jika BELUM (kenaikan vertikal/ngawang), set trading_type menjadi 'MOMENTUM SCALP' atau kembalikan sebagai 'WATCHLIST'.
    - Jika SUDAH ada retest jelas, set trading_type ke 'SWING' atau 'DAY TRADING'.
-5. Only reject if conditions clearly conflict or are dangerous.
-6. Confidence scale: 0-100 (60+ is tradeable, 80+ is strong).
-7. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia).
+5. Only reject (NO TRADE) if conditions clearly conflict, or if the R:R drops below 1.5 due to wide SL.
+6. Confidence scale: 0-100. (60+ is tradeable, 40-59 is Watchlist).
+7. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia). Provide explicit reasoning for your decision.
 
 Respond with ONLY this JSON format:
 {
   "symbol": "${symbol}",
-  "bias": "LONG" | "SHORT" | "NO TRADE",
+  "bias": "LONG" | "SHORT" | "WATCHLIST" | "NO TRADE",
   "confidence": 0-100,
-  "quality": "LOW" | "MEDIUM" | "HIGH",
-  "trading_type": "SCALPING" | "DAY TRADING" | "SWING" | "MOMENTUM SCALP",
+  "quality": "LOW" | "MEDIUM" | "WATCHLIST" | "HIGH",
+  "trading_type": "SCALPING" | "DAY TRADING" | "SWING" | "MOMENTUM SCALP" | "MONITORING",
   "entry": price_number_or_null,
   "stop_loss": price_number_or_null,
   "take_profit": price_number_or_null,
-  "reason": "Penjelasan terperinci dalam Bahasa Indonesia. Wajib sebutkan status retest (Sudah retest/Belum retest) dan alasan pemilihan trading_type."
+  "reason": "Penjelasan terperinci dalam Bahasa Indonesia. Wajib sebutkan status retest dan alasan penempatan SL."
 }`;
 }
 
@@ -159,7 +151,6 @@ async function refineSignal(signal, options = {}) {
             {
               type: 'text',
               text: systemPrompt,
-              // Cache this large system prompt (Claude/DeepSeek optimization)
               cache_control: { type: 'ephemeral' }
             }
           ] 
@@ -177,11 +168,9 @@ async function refineSignal(signal, options = {}) {
       return null;
     }
 
-    // Parse JSON (strip markdown fences if model includes them)
     const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const parsed = JSON.parse(cleaned);
 
-    // Validate required fields
     const requiredFields = ['symbol', 'bias', 'confidence', 'reason'];
     for (const field of requiredFields) {
       if (parsed[field] === undefined) {
@@ -190,32 +179,33 @@ async function refineSignal(signal, options = {}) {
       }
     }
 
-    // Normalize confidence to 0-100 scale
     let confidence = parseFloat(parsed.confidence);
     if (confidence <= 1.0 && confidence > 0) {
-      confidence = confidence * 100; // Convert 0.0-1.0 to 0-100
+      confidence = confidence * 100;
     }
     parsed.confidence = confidence;
 
-    // Handle NO TRADE response
     if (parsed.bias === 'NO TRADE' || parsed.bias === 'NO_TRADE') {
       logger.info(`${signal.symbol} ✘ AI says NO TRADE: ${parsed.reason}`);
       return parsed;
     }
 
-    // Validate price fields and trading_type
-    if (parsed.entry === undefined || parsed.stop_loss === undefined || parsed.take_profit === undefined) {
-      logger.warn(`AI response missing price fields for ${signal.symbol}`);
-      return null;
+    if (parsed.bias === 'WATCHLIST') {
+      logger.info(`${signal.symbol} 👀 AI placed on WATCHLIST: ${parsed.reason}`);
+      return parsed; 
     }
-    
-    if (!parsed.trading_type) parsed.trading_type = 'DAY TRADING';
 
     parsed.entry = parseFloat(parsed.entry);
     parsed.stop_loss = parseFloat(parsed.stop_loss);
     parsed.take_profit = parseFloat(parsed.take_profit);
 
-    // Post-AI R:R validation
+    if (isNaN(parsed.entry) || isNaN(parsed.stop_loss) || isNaN(parsed.take_profit)) {
+      logger.warn(`${signal.symbol} ✘ AI returned invalid prices. Rejected.`);
+      return null;
+    }
+    
+    if (!parsed.trading_type) parsed.trading_type = 'DAY TRADING';
+
     const risk = parsed.bias === 'LONG'
       ? parsed.entry - parsed.stop_loss
       : parsed.stop_loss - parsed.entry;
@@ -224,14 +214,13 @@ async function refineSignal(signal, options = {}) {
       : parsed.entry - parsed.take_profit;
     const rrRatio = risk > 0 ? reward / risk : 0;
 
-    if (rrRatio < config.strategy.minRrRatio) {
+    if (parsed.bias !== 'WATCHLIST' && rrRatio < config.strategy.minRrRatio) {
       logger.info(`${signal.symbol} ✘ Post-AI R:R too low: ${rrRatio.toFixed(2)} (need ${config.strategy.minRrRatio}+)`);
       parsed.bias = 'NO TRADE';
-      parsed.reason = `R:R ratio ${rrRatio.toFixed(2)} below minimum ${config.strategy.minRrRatio}. Original reason: ${parsed.reason}`;
+      parsed.reason = `R:R ratio ${rrRatio.toFixed(2)} bawah minimum ${config.strategy.minRrRatio}. Alasan asli: ${parsed.reason}`;
       return parsed;
     }
 
-    // Rule: AI must not exceed 4% SL distance
     const slDistance = parsed.bias === 'LONG'
       ? (parsed.entry - parsed.stop_loss) / parsed.entry
       : (parsed.stop_loss - parsed.entry) / parsed.entry;
