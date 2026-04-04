@@ -265,10 +265,12 @@ function initTelegram() {
   });
 
   // /check [SYMBOL] command
-  bot.onText(/\/check\s+(\w+)/, async (msg, match) => {
-    const symbol = match[1].toUpperCase().replace(/_/, '');
+  bot.onText(/\/check\s+(.+)/, async (msg, match) => {
+    const rawInput = match[1].trim().toUpperCase();
+    const symbol = rawInput.replace(/[\s_]/g, '');
     const finalSym = symbol.endsWith('USDT') ? symbol : symbol + 'USDT';
     
+    logger.info(`🔍 Manual check triggered for: raw="${match[1]}", sanitized="${finalSym}"`);
     bot.sendMessage(msg.chat.id, `🔍 *Manual Analysis Request: ${finalSym}*\n_Fetching multi-TF data and calling AI..._`, { parse_mode: 'Markdown' });
 
     try {

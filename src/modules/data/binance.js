@@ -29,6 +29,24 @@ function checkIpBlock() {
 }
 
 /**
+ * Map assets to their Futures-specific symbols (e.g. PEPE -> 1000PEPE).
+ */
+function toFuturesSymbol(symbol) {
+    const sym = symbol.toUpperCase();
+    const mapping = {
+        'PEPEUSDT': '1000PEPEUSDT',
+        'SHIBUSDT': '1000SHIBUSDT',
+        'FLOKIUSDT': '1000FLOKIUSDT',
+        'BONKUSDT': '1000BONKUSDT',
+        'LUNCUSDT': '1000LUNCUSDT',
+        'XECUSDT': '1000XECUSDT',
+        'SATSUSDT': '1000SATSUSDT',
+        'RATSUSDT': '1000RATSUSDT',
+    };
+    return mapping[sym] || sym;
+}
+
+/**
  * Perform a GET request with fallback or signed security.
  */
 async function getWithFallback(path, params = {}, isSigned = false, isFutures = false) {
@@ -199,7 +217,8 @@ async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
  */
 async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
   try {
-    const params = { symbol, interval, limit, ...options };
+    const futuresSymbol = toFuturesSymbol(symbol);
+    const params = { symbol: futuresSymbol, interval, limit, ...options };
     // Use Futures candles for bot accuracy
     const data = await getWithFallback('/fapi/v1/klines', params, false, true);
     if (!data || !Array.isArray(data)) return [];
@@ -249,7 +268,8 @@ async function fetchTopPairs(limit = config.scanner.maxPairs) {
 
 async function fetch24hTicker(symbol) {
   try {
-    const data = await getWithFallback('/fapi/v1/ticker/24hr', { symbol }, false, true);
+    const futuresSymbol = toFuturesSymbol(symbol);
+    const data = await getWithFallback('/fapi/v1/ticker/24hr', { symbol: futuresSymbol }, false, true);
     return {
       symbol: data.symbol,
       priceChangePercent: parseFloat(data.priceChangePercent),
@@ -271,23 +291,7 @@ async function fetch24hTicker(symbol) {
  */
 async function fetchFundingRate(symbol) {
   try {
-    let futuresSymbol = symbol.toUpperCase();
-    
-    // Binance Futures mapping for meme coins
-    const mapping = {
-        'PEPEUSDT': '1000PEPEUSDT',
-        'SHIBUSDT': '1000SHIBUSDT',
-        'FLOKIUSDT': '1000FLOKIUSDT',
-        'BONKUSDT': '1000BONKUSDT',
-        'LUNCUSDT': '1000LUNCUSDT',
-        'XECUSDT': '1000XECUSDT',
-        'SATSUSDT': '1000SATSUSDT',
-        'RATSUSDT': '1000RATSUSDT',
-    };
-
-    if (mapping[futuresSymbol]) {
-        futuresSymbol = mapping[futuresSymbol];
-    }
+    const futuresSymbol = toFuturesSymbol(symbol);
 
     const res = await axios.get(`${FUTURES_URL}/fapi/v1/premiumIndex`, {
       params: { symbol: futuresSymbol }
