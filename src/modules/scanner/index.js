@@ -296,6 +296,9 @@ async function runScanCycle() {
     }
   }
 
+  // Save for /watchlist command
+  tracker.saveWatchlist(rejections);
+
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   logger.info(`🏁 Cycle: ${sentCount} signals sent, ${finalPool.length - sentCount} rejected by AI, ${elapsed}s`);
   logger.info('═══════════════════════════════════════════════');

@@ -24,6 +24,7 @@ class SignalTracker {
     this.signals = this._load();
     this.lessons = this._loadLessons();
     this.history = this._loadHistory();
+    this.latestWatchlist = [];
   }
 
   _load() {
@@ -334,6 +335,16 @@ class SignalTracker {
     };
   }
 
+  /**
+   * Store the latest watchlist for the /watchlist command.
+   */
+  saveWatchlist(list) {
+    this.latestWatchlist = list || [];
+  }
+
+  getWatchlist() {
+    return this.latestWatchlist;
+  }
 }
 
 module.exports = new SignalTracker();

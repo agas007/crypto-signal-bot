@@ -23,6 +23,7 @@ function getHelpMessage(chatId) {
     `📜 /history - View last 10 trade results\n` +
     `🧠 /lessons - View recent AI learnings\n` +
     `📐 /strategy - View current trading logic\n` +
+    `📋 /watchlist - View last cycle high-alert watchlist\n` +
     `📋 /log - View last 15 scan audit logs\n` +
     `❓ /help - Show this help menu\n\n` +
     `⚙️ /adjust SYMBOL TP SL - Manual level adjust\n\n` +
@@ -262,6 +263,26 @@ function initTelegram() {
       `• *Filter:* ATR > ${config.filters.minAtrPercent}%, Vol > $${(config.filters.minVolume24hUsd/1e6).toFixed(0)}M`,
       { parse_mode: 'Markdown' }
     );
+  });
+
+  // /watchlist command
+  bot.onText(/\/watchlist/, (msg) => {
+    const watchlistData = tracker.getWatchlist();
+    
+    if (!watchlistData || watchlistData.length === 0) {
+      return bot.sendMessage(msg.chat.id, '😴 *The High Alert Watchlist is empty.* \n_Wait for the next scan cycle..._');
+    }
+
+    const report = watchlistData.map(r => {
+        const label = r.quality === 'WATCHLIST' ? '📋 *WATCHLIST*' : '🚫 *REJECTED*';
+        return `• *${r.symbol}* (Score ${r.score}) ${label}: _${r.reason}_`;
+    }).join('\n');
+
+    const fullMsg = `📡 *𝐑𝐞𝐬𝐮𝐥𝐭: 𝐇𝐢𝐠𝐡 𝐀𝐥𝐞𝐠𝐭 𝐖𝐚𝐭𝐜𝐡𝐥𝐢𝐬𝐭*\n\n` +
+                    `${report}\n\n` +
+                    `🛡️ *Status:* Standing by. Waiting for Market Regime shift or better RR Ratio.`;
+
+    bot.sendMessage(msg.chat.id, fullMsg, { parse_mode: 'Markdown' });
   });
 
   // /check [SYMBOL] command
