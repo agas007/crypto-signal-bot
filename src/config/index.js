@@ -41,7 +41,7 @@ const config = {
 
   // Filter thresholds
   filters: {
-    minVolume24hUsd: 5_000_000,    // $5M minimum daily volume (was $10M)
+    minVolume24hUsd: 1_000_000,    // $1M minimum daily volume (was $5M)
     minAtrPercent: 0.8,             // 0.8% minimum ATR (was 1.5%)
     minTrendStrength: 0.2,          // Allow moderate trends through (was 0.6)
   },

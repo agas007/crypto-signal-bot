@@ -9,6 +9,7 @@ const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../telegram');
 const { generateChartImage } = require('../chart');
 const tracker = require('../tracker');
+const { logAudit, initAudit } = require('../../utils/audit');
 
 /**
  * Run a single scan cycle:
@@ -92,6 +93,7 @@ async function runScanCycle() {
     // Rule: After 2 SL on BASE ASSET -> 24h no trade
     if (stats.slHits >= 2) {
       logger.info(`🚫 Skipping ${sym}: Base Asset (${stats.baseAsset}) on cooldown (2 SL hits in 24h)`);
+      logAudit(sym, 'PRE-FILTER', 'REJECTED', 0, 'Asset SL Cooldown (2 hits in 24h)');
       continue;
     }
 
@@ -126,29 +128,18 @@ async function runScanCycle() {
 
       if (!filterResult.pass) {
         filtered++;
+        logAudit(symbol, 'PRE-FILTER', 'REJECTED', 0, filterResult.reasons.join(', '));
         continue;
       }
 
       // Passed filter → fetch multi-TF data + Funding Rate
       logger.info(`📊 ${symbol} passed pre-filters, fetching multi-TF data...`);
+      logAudit(symbol, 'PRE-FILTER', 'PASSED', 0, 'Liquid & Volatile');
       const mtfData = await fetchMultiTimeframe(symbol);
       const fundingRate = await fetchFundingRate(symbol);
       
       if (!mtfData) {
         errors++;
-        continue;
-      }
-
-      // Check Direction (Bias) and Attempt Limit
-      // We don't have the bias yet, so we get it from indicators first
-      // or evaluate it quickly. For now, let's keep it simple:
-      // fetch indicators to decide direction, then check stats.
-      const tempTrend = analyzeTrend(mtfData.H1, config.indicators.ema);
-      const estimatedBias = tempTrend.ema200 === 'UP' ? 'LONG' : 'SHORT';
-      const dirStats = tracker.getPairStats(sym, estimatedBias);
-      
-      if (dirStats.attempts >= 2) {
-        logger.info(`🚫 Skipping ${sym} ${estimatedBias}: Direction limit reached (2 attempts)`);
         continue;
       }
 
@@ -160,9 +151,11 @@ async function runScanCycle() {
       if (signal) {
         signal.candles = mtfData.H1; // Save candles for the chart later
         candidates.push(signal);
-        logger.info(`✅ ${symbol}: ${signal.bias} (score: ${signal.score}, R:R: ${signal.riskReward.rr.toFixed(2)})`);
+        logger.info(`✅ ${symbol}: ${signal.bias} (score: ${signal.score})`);
+        logAudit(symbol, 'STRATEGY', 'PASSED', signal.score, signal.reasons.join(', '));
       } else {
         rejected++;
+        logAudit(symbol, 'STRATEGY', 'REJECTED', 0, 'Technical requirements not met');
       }
 
       await sleep(config.binance.rateLimitMs);
@@ -199,8 +192,17 @@ async function runScanCycle() {
     return 0;
   }
 
-  // 4. AI validation + Telegram delivery
+  // 4. Validation & Delivery
   let sentCount = 0;
+
+  // Inform user about technical candidates found
+  if (finalPool.length > 0) {
+    const candidateList = finalPool.map(c => 
+      `• *${c.symbol}* (${c.bias}): Score \`${c.score}\` ${c.isStrict ? '💎' : '⚙️'}`
+    ).join('\n');
+    
+    await sendStatus(`🔎 *Technical Candidates Found:* ${finalPool.length}\n_Sending to AI for final validation..._\n\n${candidateList}`);
+  }
 
   for (const candidate of finalPool) {
     try {
@@ -208,15 +210,20 @@ async function runScanCycle() {
 
       if (!refined) {
         logger.info(`AI returned no response for ${candidate.symbol}`);
+        logAudit(candidate.symbol, 'AI', 'ERROR', candidate.score, 'Empty AI Response');
         continue;
       }
 
       // AI said NO TRADE
       if (refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE') {
         logger.info(`🚫 ${candidate.symbol}: AI rejected (Sanity Check) — ${refined.reason}`);
+        logAudit(candidate.symbol, 'AI', 'REJECTED', candidate.score, refined.reason);
         continue;
       }
       
+      // AI APPROVED - Proceed with standard delivery and tracker
+      logAudit(candidate.symbol, 'AI', 'APPROVED', refined.confidence, `Trading type: ${refined.trading_type}. Sent to Telegram.`);
+
       // ─── Deduplication / Update Check ───
       const active = tracker.getActive(candidate.symbol);
       if (active) {
@@ -267,7 +274,7 @@ async function runScanCycle() {
               await sendSignal({ ...refined, isChartUpdate: true }, chartPath);
           }
       } catch (e) {
-          logger.error(`Chart delivery failed for ${symbol}:`, e.message);
+          logger.error(`Chart delivery failed for ${candidate.symbol}:`, e.message);
       }
 
     } catch (err) {
@@ -279,8 +286,8 @@ async function runScanCycle() {
   logger.info(`🏁 Cycle: ${sentCount} signals sent, ${finalPool.length - sentCount} rejected by AI, ${elapsed}s`);
   logger.info('═══════════════════════════════════════════════');
 
-  if (sentCount === 0) {
-    await sendStatus('🛡️ *Scan Cycle:* Candidates were found but rejected by AI validation.');
+  if (sentCount === 0 && finalPool.length > 0) {
+    await sendStatus('🛡️ *Scan Cycle:* Candidates were found but rejected by AI validation (Detailed audit logged).');
   }
 
   return sentCount;
@@ -290,6 +297,7 @@ async function runScanCycle() {
  * Start the scanner loop. Runs a cycle immediately, then every `intervalMs`.
  */
 async function startScanner() {
+  initAudit();
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
   await sendStatus('🤖 *Crypto Signal Bot v4.4.1* started!\n_Adaptive Intelligence, Market Regime, Retest Guard & Memory Fix active._');

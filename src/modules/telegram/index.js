@@ -22,6 +22,7 @@ function getHelpMessage(chatId) {
     `📜 /history - View last 10 trade results\n` +
     `🧠 /lessons - View recent AI learnings\n` +
     `📐 /strategy - View current trading logic\n` +
+    `📋 /log - View last 15 scan audit logs\n` +
     `❓ /help - Show this help menu\n\n` +
     `⚙️ /adjust SYMBOL TP SL - Manual level adjust\n\n` +
     `🛠 *Admin Commands:* \n` +
@@ -223,6 +224,30 @@ function initTelegram() {
   bot.onText(/\/reset_lessons/, (msg) => {
     tracker.clearLessons();
     bot.sendMessage(msg.chat.id, '🧠 *AI lessons cleared!*');
+  });
+
+  // /log command
+  bot.onText(/\/log/, (msg) => {
+    const logPath = require('path').join(process.cwd(), 'scan_audit.log');
+    if (!fs.existsSync(logPath)) {
+        return bot.sendMessage(msg.chat.id, '📋 *Audit log is empty* or hasn\'t been created yet.');
+    }
+
+    try {
+        const content = fs.readFileSync(logPath, 'utf8');
+        const lines = content.trim().split('\n');
+        // Take header (lines 0 and 1) + last 15 lines
+        const header = lines.slice(0, 2).join('\n');
+        const lastEntries = lines.slice(-15).join('\n');
+        
+        const report = `📋 *SCAN AUDIT LOG (Last 15 entries)*\n\n` +
+                       `\`\`\`\n${header}\n${lastEntries}\n\`\`\``;
+        
+        bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+    } catch (err) {
+        logger.error('Failed to read audit log:', err.message);
+        bot.sendMessage(msg.chat.id, '❌ Failed to read audit log.');
+    }
   });
 
   // /strategy command
