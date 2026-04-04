@@ -18,6 +18,7 @@ function getHelpMessage(chatId) {
     `_Markets: spot, futures, combined_\n` +
     `_Example: /performance weekly futures_\n\n` +
     `⏳ /active - List all currently active signals\n` +
+    `🔎 /check SYMBOL - Manual deep analysis for a pair\n` +
     `📊 /status - Bot health & info\n` +
     `📜 /history - View last 10 trade results\n` +
     `🧠 /lessons - View recent AI learnings\n` +
@@ -261,6 +262,60 @@ function initTelegram() {
       `• *Filter:* ATR > ${config.filters.minAtrPercent}%, Vol > $${(config.filters.minVolume24hUsd/1e6).toFixed(0)}M`,
       { parse_mode: 'Markdown' }
     );
+  });
+
+  // /check [SYMBOL] command
+  bot.onText(/\/check\s+(\w+)/, async (msg, match) => {
+    const symbol = match[1].toUpperCase().replace(/_/, '');
+    const finalSym = symbol.endsWith('USDT') ? symbol : symbol + 'USDT';
+    
+    bot.sendMessage(msg.chat.id, `🔍 *Manual Analysis Request: ${finalSym}*\n_Fetching multi-TF data and calling AI..._`, { parse_mode: 'Markdown' });
+
+    try {
+        const { fetchMultiTimeframe, fetchFundingRate, fetchOHLCV } = require('../data/binance');
+        const { evaluateSignal } = require('../strategy');
+        const { refineSignal } = require('../ai/openrouter');
+        const { analyzeTrend } = require('../indicators');
+
+        const mtfData = await fetchMultiTimeframe(finalSym);
+        const fundingRate = await fetchFundingRate(finalSym);
+
+        if (!mtfData) {
+            return bot.sendMessage(msg.chat.id, `❌ *Failed:* Could not fetch data for \`${finalSym}\`. Check symbol.`, { parse_mode: 'Markdown' });
+        }
+
+        // Evaluate technically
+        const signal = evaluateSignal(finalSym, mtfData, { fundingRate });
+        
+        // Even if technical score is low, we'll try AI if user forced check
+        // But we need a basic structure to send to AI
+        if (!signal) {
+            return bot.sendMessage(msg.chat.id, `🚫 *Analysis:* \`${finalSym}\` rejected by technical strategy (Score < 30 or SL Out of Range).`, { parse_mode: 'Markdown' });
+        }
+
+        // Market Regime (BTC check)
+        let btcTrend = null;
+        try {
+            const btcCandles = await fetchOHLCV('BTCUSDT', config.timeframes.D1, 50);
+            if (btcCandles.length > 0) btcTrend = analyzeTrend(btcCandles).direction;
+        } catch (e) {}
+
+        const refined = await refineSignal(signal, { btcTrend });
+
+        if (!refined || refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE') {
+            const reason = refined ? `\n\n*Reason:* _${refined.reason}_` : '';
+            return bot.sendMessage(msg.chat.id, `🚫 *AI REJECTED:* Analysis complete but AI says NO TRADE.${reason}`, { parse_mode: 'Markdown' });
+        }
+
+        // Format and send as a full signal (but don't track it automatically unless it was a real scan?)
+        // User asked for the data, let's just send the signal message.
+        const message = formatSignalMessage(refined);
+        bot.sendMessage(msg.chat.id, `✅ *MANUAL CHECK RESULT*\n\n${message}`, { parse_mode: 'Markdown' });
+
+    } catch (err) {
+        logger.error(`Manual check failed for ${finalSym}:`, err.message);
+        bot.sendMessage(msg.chat.id, `❌ *Error:* Analysis failed for \`${finalSym}\`. \nDetail: ${err.message}`, { parse_mode: 'Markdown' });
+    }
   });
 
   // /pairs command
