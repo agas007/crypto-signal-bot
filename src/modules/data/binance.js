@@ -4,7 +4,7 @@ const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
 
-const FALLBACK_ENDPOINTS = [
+ const FALLBACK_ENDPOINTS = [
   'https://data-api.binance.vision',
   'https://api.binance.me',
   'https://api-gcp.binance.com',

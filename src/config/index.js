@@ -1,11 +1,14 @@
-require('dotenv').config();
+const path = require('path');
+const envPath = path.resolve(__dirname, '../../.env');
+require('dotenv').config({ path: envPath });
+
 
 const config = {
   binance: {
     baseUrl: process.env.BINANCE_BASE_URL || 'https://api.binance.com',
     apiKey: process.env.BINANCE_API_KEY,
     apiSecret: process.env.BINANCE_API_SECRET,
-    rateLimitMs: 200, // delay between requests to stay under rate limits
+    rateLimitMs: parseInt(process.env.BINANCE_RATE_LIMIT_MS, 10) || 200,
   },
 
   openRouter: {
@@ -23,11 +26,6 @@ const config = {
     intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 3_600_000, // 1 hour
     topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 5,
     maxPairs: parseInt(process.env.MAX_PAIRS, 10) || 30,
-  },
-
-  binance: {
-    rateLimitMs: parseInt(process.env.BINANCE_RATE_LIMIT_MS, 10) || 200,
-    baseUrl: 'https://api.binance.com',
   },
 
   // Timeframes mapped to Binance interval codes
@@ -68,7 +66,6 @@ const required = [
 
 for (const [name, value] of required) {
   if (!value) {
-    console.error(`❌ Missing required env variable: ${name}`);
     process.exit(1);
   }
 }
