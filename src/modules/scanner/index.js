@@ -380,7 +380,7 @@ async function checkActiveTrades() {
 
       const lastCandle = candles[candles.length - 1];
       const currentPrice = lastCandle.close;
-      const ageMs = Date.now() - trade.timestamp;
+      const ageMs = Date.now() - (trade.entryAt || trade.signalAt || Date.now());
       const movePercent = (Math.abs(currentPrice - trade.entry) / trade.entry) * 100;
 
       // 1. Time-Based Invalidation Check (Momentum Stalled after 24h)
@@ -418,7 +418,11 @@ async function checkActiveTrades() {
       let hit = null;
       let hitPrice = null;
 
-      for (const candle of candles) {
+      // Filter candles to only include price action AFTER entryAt (-60s buffer)
+      const monitoringStart = (trade.entryAt || trade.signalAt || Date.now()) - 60000;
+      const relevantCandles = candles.filter(c => c.openTime >= monitoringStart);
+
+      for (const candle of relevantCandles) {
         if (trade.bias === 'LONG') {
           if (candle.high >= trade.take_profit) { hit = 'TP'; hitPrice = trade.take_profit; break; }
           if (candle.low <= trade.stop_loss) { hit = 'SL'; hitPrice = trade.stop_loss; break; }
@@ -442,8 +446,9 @@ async function checkActiveTrades() {
         logger.info(`🧠 Requesting AI post-mortem for ${trade.symbol} (${hit})...`);
         
         // Fetch full path candles (from start of signal until now)
-        const ageHours = Math.ceil((Date.now() - trade.timestamp) / (3600 * 1000));
-        const historyCandles = await fetchOHLCV(trade.symbol, '1h', ageHours + 1, { startTime: trade.timestamp });
+        const startTime = (trade.entryAt || trade.signalAt || Date.now());
+        const ageHours = Math.ceil((Date.now() - startTime) / (3600 * 1000));
+        const historyCandles = await fetchOHLCV(trade.symbol, '1h', ageHours + 1, { startTime });
         const summary = historyCandles.map(c => `H:${c.high}/L:${c.low}/C:${c.close}`).join(' | ');
 
         const lesson = await analyzePostMortem(trade, hitPrice, hit, summary);
