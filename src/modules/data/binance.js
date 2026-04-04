@@ -218,9 +218,35 @@ async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
 async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
   try {
     const futuresSymbol = toFuturesSymbol(symbol);
-    const params = { symbol: futuresSymbol, interval, limit, ...options };
-    // Use Futures candles for bot accuracy
-    const data = await getWithFallback('/fapi/v1/klines', params, false, true);
+    const safeLimit = parseInt(limit, 10) || 100;
+    const params = { symbol: futuresSymbol, interval, limit: safeLimit, ...options };
+    
+    // Try Futures first
+    try {
+      const data = await getWithFallback('/fapi/v1/klines', params, false, true);
+      if (data && Array.isArray(data)) {
+        return data.map((candle) => ({
+          openTime: candle[0],
+          open: parseFloat(candle[1]),
+          high: parseFloat(candle[2]),
+          low: parseFloat(candle[3]),
+          close: parseFloat(candle[4]),
+          volume: parseFloat(candle[5]),
+          closeTime: candle[6],
+          quoteVolume: parseFloat(candle[7]),
+        }));
+      }
+    } catch (futuresErr) {
+      // If it's an invalid symbol, it might be SPOT only
+      if (futuresErr.message.includes('-1121')) {
+        logger.info(`ℹ️ ${symbol} not found on Futures, falling back to Spot...`);
+      } else {
+        throw futuresErr; // rethrow other errors
+      }
+    }
+
+    // Fallback to Spot
+    const data = await getWithFallback('/api/v3/klines', { ...params, symbol: symbol.toUpperCase() }, false, false);
     if (!data || !Array.isArray(data)) return [];
 
     return data.map((candle) => ({
@@ -234,7 +260,7 @@ async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
       quoteVolume: parseFloat(candle[7]),
     }));
   } catch (err) {
-    logger.error(`Failed to fetch ${symbol} ${interval}:`, err.message);
+    logger.error(`❌ Failed to fetch ${symbol} ${interval}:`, err.message);
     return [];
   }
 }

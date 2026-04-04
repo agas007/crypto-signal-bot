@@ -226,11 +226,11 @@ async function refineSignal(signal, options = {}) {
       : (parsed.stop_loss - parsed.entry) / parsed.entry;
 
     if (slDistance > 0.04) {
-      logger.warn(`${signal.symbol} ✘ AI returned SL > 4%: ${(slDistance * 100).toFixed(2)}%`);
+      logger.warn(`${signal.symbol} X AI returned SL > 4%: ${(slDistance * 100).toFixed(2)}%`);
       return null;
     }
 
-    logger.info(`${signal.symbol} ✓ AI validated: ${parsed.bias} @ ${parsed.entry} (conf: ${parsed.confidence}, quality: ${parsed.quality || 'N/A'}, R:R: ${rrRatio.toFixed(2)})`);
+    logger.info(`${signal.symbol} OK AI validated: ${parsed.bias} @ ${parsed.entry} (conf: ${parsed.confidence}, quality: ${parsed.quality || 'N/A'}, R:R: ${rrRatio.toFixed(2)})`);
     return parsed;
   } catch (err) {
     if (err.response) {
@@ -253,7 +253,7 @@ async function refineSignal(signal, options = {}) {
  */
 async function analyzePostMortem(trade, finalPrice, hitType = 'SL', historySummary = 'N/A') {
   const status = hitType === 'TP' ? 'SUCCESS (TAKE PROFIT HIT)' : 'FAILED (STOP LOSS HIT)';
-  const emoji = hitType === 'TP' ? '✅' : '🚨';
+  const emoji = hitType === 'TP' ? '[SUCCESS]' : '[FAILURE]';
 
   const prompt = `
 ${emoji} TRADE PERFORMANCE REVIEW: ${status}
@@ -383,11 +383,11 @@ Contoh: "Naikkan technical threshold dari 70 ke 80, track win rate change"
 TONE: Direct, data-driven, no motivational fluff. 
 Bahasa Indonesia casual tapi presisi.
 
-❌ BAD OUTPUT (REJECT THIS STYLE):
+[BAD OUTPUT EXAMPLE]:
 "Anda menunjukkan konsistensi dalam trading. Meski win rate rendah, ada peluang untuk meningkatkan dengan manajemen risiko..."
 
-✅ GOOD OUTPUT (FOLLOW THIS STYLE):
-"Math: 25% win rate butuh R:R 3:1 minimum. Lu punya 3.3:1, tapi fees eat it. Real problem: 80% trade di shitcoins volatilitas tinggi → SL hunt.
+[GOOD OUTPUT EXAMPLE]:
+"Math: 25% win rate butuh R:R 3:1 minimum. Lu punya 3.3:1, tapi fees eat it. Real problem: 80% trade di shitcoins volatilitas tinggi -> SL hunt.
 Hypothesis: Meme coin filter terlalu lemah.
 Experiment: Next 10 trade, blacklist < $100M market cap.
 Action: Update scanner filter sekarang."
@@ -426,13 +426,13 @@ ${JSON.stringify(tradeLog, null, 2)}
     // Auto-save the experiment as a global lesson if provided
     if (parsed.one_experiment) {
       tracker.saveLesson('GLOBAL_EXPERIMENT', 'ADAPTIVE', parsed.one_experiment);
-      logger.info(`🧪 [Strategy Engine] New global experiment applied: ${parsed.one_experiment}`);
+      logger.info(`[Experiment] New global experiment applied: ${parsed.one_experiment}`);
     }
 
     // Format to Markdown manually
     const report = `
 📊 *AI PERFORMANCE AUDIT*
-━━━━━━━━━━━━━━━━━━━
+-------------------
 🔢 *Math Check:*
 ${parsed.math_check}
 

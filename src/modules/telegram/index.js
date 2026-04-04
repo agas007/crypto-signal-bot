@@ -43,11 +43,19 @@ function initTelegram() {
   bot = new TelegramBot(config.telegram.botToken, { polling: true });
   logger.info('Telegram bot initialized with interactive POLLING mode');
 
+  // Handle unhandled rejections to prevent crashes
+  process.on('unhandledRejection', (reason, p) => {
+    logger.error(`❌ Unhandled Rejection at: ${p}, reason: ${reason}`);
+  });
+
   // ─── Command Handlers ─────────────────────────────────────
   
   // /start, /help, /commands
   const helpHandler = (msg) => {
-    bot.sendMessage(msg.chat.id, getHelpMessage(msg.chat.id), { parse_mode: 'Markdown' });
+    const text = getHelpMessage(msg.chat.id);
+    bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' }).catch(() => {
+        bot.sendMessage(msg.chat.id, text.replace(/[*_`]/g, ''));
+    });
   };
 
   bot.onText(/\/start/, helpHandler);
@@ -60,15 +68,16 @@ function initTelegram() {
     const hrs = Math.floor(uptimeSec / 3600);
     const mins = Math.floor((uptimeSec % 3600) / 60);
     
-    bot.sendMessage(msg.chat.id, 
-      `✅ *Bot Status: ONLINE*\n\n` +
+    const text = `✅ *Bot Status: ONLINE*\n\n` +
       `🕒 *Uptime:* ${hrs}h ${mins}m\n` +
       `⌛ *Interval:* ${config.scanner.intervalMs / 3600000} hour(s)\n` +
       `🎯 *Mode:* Strict (Score ≥ 65)\n` +
       `🧠 *AI Memory:* ${tracker.lessons.length} lessons learned\n` +
-      `🔄 *Timeframes:* D1 · H4 · H1`,
-      { parse_mode: 'Markdown' }
-    );
+      `🔄 *Timeframes:* D1 · H4 · H1`;
+
+    bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' }).catch(() => {
+        bot.sendMessage(msg.chat.id, text.replace(/[*_`]/g, ''));
+    });
   });
 
   // /performance command
@@ -169,7 +178,9 @@ function initTelegram() {
                 `• R:R Ratio: \`${rrRatio}\` | Age: \`${ageStr}\`\n\n`;
     });
 
-    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(() => {
+        bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
+    });
   });
 
   // /adjust command
@@ -180,7 +191,10 @@ function initTelegram() {
 
     const success = tracker.adjustSignal(symbol, tp, sl);
     if (success) {
-      bot.sendMessage(msg.chat.id, `✅ *Adjusted levels for ${symbol}:*\n• *New TP:* \`${tp}\`\n• *New SL:* \`${sl}\``, { parse_mode: 'Markdown' });
+      const text = `✅ *Adjusted levels for ${symbol}:*\n• *New TP:* \`${tp}\`\n• *New SL:* \`${sl}\``;
+      bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' }).catch(() => {
+        bot.sendMessage(msg.chat.id, text.replace(/[*_`]/g, ''));
+      });
     } else {
       bot.sendMessage(msg.chat.id, `❌ Signal for *${symbol}* not found.`);
     }
@@ -198,7 +212,9 @@ function initTelegram() {
                 `• In: \`${t.entry}\` → Out: \`${t.exit_price || 'N/A'}\`\n` +
                 `• Result: \`${t.close_reason}\`\n\n`;
     });
-    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(() => {
+        bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
+    });
   });
 
   // /lessons command
@@ -210,7 +226,9 @@ function initTelegram() {
     lessons.forEach((l, i) => {
       report += `${i+1}. *${l.symbol}* (${l.bias})\n_${l.analysis}_\n\n`;
     });
-    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(() => {
+        bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
+    });
   });
 
   // ─── Reset Commands ───
@@ -246,7 +264,10 @@ function initTelegram() {
         const report = `📋 *SCAN AUDIT LOG (Last 15 entries)*\n\n` +
                        `\`\`\`\n${header}\n${lastEntries}\n\`\`\``;
         
-        bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' });
+        bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(err => {
+            logger.error('Telegram Markdown Error in /log (Retrying plain text):', err.message);
+            bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
+        });
     } catch (err) {
         logger.error('Failed to read audit log:', err.message);
         bot.sendMessage(msg.chat.id, '❌ Failed to read audit log.');
@@ -515,7 +536,17 @@ async function sendSignal(signal, imagePath = null) {
     }
     logger.info(`📨 Interactive signal sent to Telegram: ${signal.symbol}`);
   } catch (err) {
-    logger.error(`Failed to send interactive signal: ${err.message}`);
+    logger.error(`Failed to send interactive signal (${signal.symbol}): ${err.message}. Retrying as plain text...`);
+    // Fallback: Send plain text message without markdown
+    try {
+        const plainMsg = message.replace(/[*_`]/g, '');
+        await bot.sendMessage(config.telegram.chatId, `⚠️ [FORMATTING ERROR] ⚠️\n\n${plainMsg}`, {
+            disable_web_page_preview: true,
+            reply_markup: replyMarkup
+        });
+    } catch (retryErr) {
+        logger.error(`Complete signal failure for ${signal.symbol}: ${retryErr.message}`);
+    }
   }
 }
 
@@ -533,8 +564,24 @@ async function sendStatus(text) {
       disable_web_page_preview: true,
     });
   } catch (err) {
-    logger.error(`Failed to send Telegram status: ${err.message}`);
+    logger.error(`Failed to send Telegram status: ${err.message}. Retrying as plain text...`);
+    try {
+        await bot.sendMessage(config.telegram.chatId, text.replace(/[*_`]/g, ''), {
+            disable_web_page_preview: true
+        });
+    } catch (retryErr) {
+        logger.error(`Complete status failure: ${retryErr.message}`);
+    }
   }
+}
+
+/**
+ * Improved helper to escape markdown characters to prevent Telegram API errors.
+ */
+function escapeMarkdown(text) {
+  if (!text) return '';
+  // More comprehensive for V1 Markdown
+  return text.replace(/([_*`\[\]()])/g, '\\$1');
 }
 
 module.exports = { initTelegram, sendSignal, sendStatus, formatSignalMessage };
