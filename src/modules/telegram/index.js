@@ -287,30 +287,44 @@ function initTelegram() {
         // Evaluate technically
         const signal = evaluateSignal(finalSym, mtfData, { fundingRate });
         
-        // Even if technical score is low, we'll try AI if user forced check
-        // But we need a basic structure to send to AI
         if (!signal) {
-            return bot.sendMessage(msg.chat.id, `🚫 *Analysis:* \`${finalSym}\` rejected by technical strategy (Score < 30 or SL Out of Range).`, { parse_mode: 'Markdown' });
+            return bot.sendMessage(msg.chat.id, `🚫 *TECHNICAL REJECTION: ${finalSym}*\n_Setup tidak memenuhi kriteria minimal strategi teknis (Score < 30 atau SL > 4%)._`, { parse_mode: 'Markdown' });
         }
 
         // Market Regime (BTC check)
-        let btcTrend = null;
+        let btcTrend = 'NEUTRAL';
         try {
             const btcCandles = await fetchOHLCV('BTCUSDT', config.timeframes.D1, 50);
             if (btcCandles.length > 0) btcTrend = analyzeTrend(btcCandles).direction;
         } catch (e) {}
 
+        // Construct Technical Report
+        const techReport = `📊 *TECHNICAL ANALYSIS: ${finalSym}*\n` +
+                           `━━━━━━━━━━━━━━━━━━━\n` +
+                           `• *Bias:* \`${signal.bias}\`\n` +
+                           `• *Technical Score:* \`${signal.score}/100\`\n` +
+                           `• *Funding:* \`${signal.fundingRate}\`\n\n` +
+                           `✅ *Confluences Found:*\n` +
+                           signal.reasons.map(r => `_• ${r}_`).join('\n') + `\n\n` +
+                           `📐 *Proposed Levels (Technical):*\n` +
+                           `• *Entry:* \`${signal.riskReward.entry.toFixed(5)}\`\n` +
+                           `• *TP:* \`${signal.riskReward.tp.toFixed(5)}\`\n` +
+                           `• *SL:* \`${signal.riskReward.sl.toFixed(5)}\` \`(${(Math.abs(signal.riskReward.entry - signal.riskReward.sl)/signal.riskReward.entry*100).toFixed(2)}%)\`\n` +
+                           `• *R:R Ratio:* \`${signal.riskReward.rr.toFixed(2)}\`\n\n` +
+                           `⌛ *Calling AI Validator...*`;
+
+        const techMsg = await bot.sendMessage(msg.chat.id, techReport, { parse_mode: 'Markdown' });
+
         const refined = await refineSignal(signal, { btcTrend });
 
         if (!refined || refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE') {
-            const reason = refined ? `\n\n*Reason:* _${refined.reason}_` : '';
-            return bot.sendMessage(msg.chat.id, `🚫 *AI REJECTED:* Analysis complete but AI says NO TRADE.${reason}`, { parse_mode: 'Markdown' });
+            const aiReason = refined ? `\n\n🧠 *AI REASONING:*\n_“${refined.reason}”_` : '\n\n⚠️ AI Gagal memberikan respon detail.';
+            return bot.sendMessage(msg.chat.id, `🚫 *AI VERDICT: NO TRADE* ${aiReason}`, { parse_mode: 'Markdown' });
         }
 
-        // Format and send as a full signal (but don't track it automatically unless it was a real scan?)
-        // User asked for the data, let's just send the signal message.
+        // Format and send as a full signal
         const message = formatSignalMessage(refined);
-        bot.sendMessage(msg.chat.id, `✅ *MANUAL CHECK RESULT*\n\n${message}`, { parse_mode: 'Markdown' });
+        bot.sendMessage(msg.chat.id, `✅ *AI VERDICT: VALIDATED*\n\n${message}`, { parse_mode: 'Markdown' });
 
     } catch (err) {
         logger.error(`Manual check failed for ${finalSym}:`, err.message);
