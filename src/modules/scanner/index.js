@@ -238,6 +238,12 @@ async function runScanCycle() {
           );
           refined.riskReward = finalRR;
           refined.candles = candidate.candles; // for chart
+
+          if (!refined.riskReward) {
+              logger.warn(`⚠️ ${candidate.symbol}: AI provided invalid price levels (Risk calculation failed). Skipping.`);
+              logAudit(candidate.symbol, 'AI', 'REJECTED', refined.confidence, 'Invalid price levels from AI (logic error)');
+              continue;
+          }
       }
 
       // AI said NO TRADE or WATCHLIST
