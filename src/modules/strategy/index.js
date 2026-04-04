@@ -45,7 +45,6 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
   const MIN_SL_DISTANCE = 0.005;   // 0.5% Min Distance (avoid tight noise)
   const ATR_MULTIPLIER = 1.5;      // Rule 4: SL min 1.5x ATR
   
-  // Position Sizing (Rule: 2% Risk, Max 5% Notional)
   const ACCOUNT_BALANCE = options.accountBalance || config.strategy.accountBalance;
   const RISK_PCT = config.strategy.riskPercentage;
   const MAX_POS_PCT = config.strategy.maxPositionPercentage;
@@ -54,22 +53,17 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
   const atrDist = options.atr ? options.atr * ATR_MULTIPLIER : 0;
   const atrDistPercent = options.atr ? atrDist / currentPrice : 0;
 
+  let entry = currentPrice;
+  let sl, tp;
+
   if (bias === 'LONG') {
-    const entry = currentPrice;
-    // Rule 4: SL must be at least 1.5x ATR below entry, or below structure
-    const structureSl = support * 0.998;
-    const minAtrSl = entry - atrDist;
-    const sl = Math.min(structureSl, minAtrSl); // Use whichever is lower (safer)
+    sl = options.sl || Math.min(support * 0.998, entry - atrDist);
+    tp = options.tp || (resistance !== Infinity ? resistance * 0.998 : entry * (1 + (entry - sl) * MIN_RR / entry));
     
     const slDistPercent = (entry - sl) / entry;
-    
-    // Reject if too tight (<1.5x ATR or <0.5%) or too wide (>4%)
-    if (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED) return null;
+    // Skip technical rejection if manual/AI levels are provided
+    if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) return null;
 
-    const tp = resistance !== Infinity
-      ? resistance * 0.998
-      : entry * (1 + (entry - sl) * MIN_RR / entry);
-    
     const riskPerUnit = entry - sl;
     const rewardPerUnit = tp - entry;
     const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
@@ -88,44 +82,32 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
       notionalValue = quantity * entry;
     }
 
-    const marginRequired = notionalValue / LEVERAGE;
-
     return { 
       entry, sl, tp, rr, 
       positionSize: {
         risk: riskDollar,
         leverage: LEVERAGE,
-        quantity: quantity,
-        margin: marginRequired,
+        quantity,
+        margin: notionalValue / LEVERAGE,
         notional: notionalValue
       }
     };
   } else {
-    const entry = currentPrice;
-    const structureSl = resistance !== Infinity ? resistance * 1.002 : entry * 1.02;
-    const minAtrSl = entry + atrDist;
-    const sl = Math.max(structureSl, minAtrSl); // Use whichever is higher (safer)
-
+    sl = options.sl || Math.max(resistance !== Infinity ? resistance * 1.002 : entry * 1.02, entry + atrDist);
+    tp = options.tp || (support > 0 ? support * 1.002 : entry * (1 - (sl - entry) * MIN_RR / entry));
+    
     const slDistPercent = (sl - entry) / entry;
-    
-    // Reject if too tight (<1.5x ATR or <0.5%) or too wide (>4%)
-    if (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED) return null;
+    if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) return null;
 
-    const tp = support > 0
-      ? support * 1.002
-      : entry * (1 - (sl - entry) * MIN_RR / entry);
-    
     const riskPerUnit = sl - entry;
     const rewardPerUnit = entry - tp;
     const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
 
-    // Position Sizing
     const riskDollar = ACCOUNT_BALANCE * RISK_PCT;
     let quantity = riskDollar / riskPerUnit;
     if (options.stepSize) quantity = roundStep(quantity, options.stepSize);
     let notionalValue = quantity * entry;
     
-    // Cap at Max Position Size (5% of account)
     const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
     if (notionalValue > maxNotional) {
       notionalValue = maxNotional;
@@ -133,15 +115,13 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
       notionalValue = quantity * entry;
     }
 
-    const marginRequired = notionalValue / LEVERAGE;
-
     return { 
       entry, sl, tp, rr,
       positionSize: {
         risk: riskDollar,
         leverage: LEVERAGE,
-        quantity: quantity,
-        margin: marginRequired,
+        quantity,
+        margin: notionalValue / LEVERAGE,
         notional: notionalValue
       }
     };

@@ -311,7 +311,7 @@ function initTelegram() {
         const signal = evaluateSignal(finalSym, mtfData, { fundingRate });
         
         if (!signal) {
-            return bot.sendMessage(msg.chat.id, `🚫 *TECHNICAL REJECTION: ${finalSym}*\n_Setup tidak memenuhi kriteria minimal strategi teknis (Score < 30 atau SL > 4%)._`, { parse_mode: 'Markdown' });
+            return bot.sendMessage(msg.chat.id, `🚫 *TECHNICAL REJECTION: ${finalSym}*\n_Setup tidak memenuhi kriteria minimal strategi teknis (Score < 30 atau SL > 8%)._`, { parse_mode: 'Markdown' });
         }
 
         // Market Regime (BTC check)

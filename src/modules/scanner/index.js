@@ -220,6 +220,26 @@ async function runScanCycle() {
         continue;
       }
 
+      // ─── Recalculate Risk/Reward with AI Levels ───
+      // The technical candidate has RR, but AI might have changed the entry/SL.
+      // We must re-calc to get the correct position size for the message.
+      if (refined.bias === 'LONG' || refined.bias === 'SHORT') {
+          const { calculateRiskReward } = require('../strategy');
+          const finalRR = calculateRiskReward(
+              refined.bias, 
+              refined.entry, 
+              refined.bias === 'LONG' ? 0 : 999999, // dummy, levels are refined
+              refined.bias === 'LONG' ? 999999 : 0, 
+              { 
+                  accountBalance: effectiveBalance,
+                  sl: refined.stop_loss,
+                  tp: refined.take_profit
+              }
+          );
+          refined.riskReward = finalRR;
+          refined.candles = candidate.candles; // for chart
+      }
+
       // AI said NO TRADE or WATCHLIST
       if (refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE' || refined.bias === 'WATCHLIST') {
         const isWatchlist = refined.bias === 'WATCHLIST';
@@ -235,11 +255,10 @@ async function runScanCycle() {
         continue;
       }
       
-      // AI APPROVED - Proceed with standard delivery and tracker
-      logAudit(candidate.symbol, 'AI', 'APPROVED', refined.confidence, `Trading type: ${refined.trading_type}. Sent to Telegram.`);
-
       // ─── Deduplication / Update Check ───
       const active = tracker.getActive(candidate.symbol);
+      let isUpdate = false;
+
       if (active) {
         const ticker = await fetch24hTicker(candidate.symbol);
         const currentPrice = ticker ? parseFloat(ticker.lastPrice) : refined.entry;
@@ -251,21 +270,20 @@ async function runScanCycle() {
 
         if (isRunningInProfit) {
             logger.info(`🧠 [Tracker] ${candidate.symbol} is already running in profit. Skipping update message.`);
-            continue; // Don't send anything if already winning
+            logAudit(candidate.symbol, 'AI', 'SKIPPED', refined.confidence, 'Trade already active and running in profit.');
+            continue; 
         }
 
         // If same bias and prices are close enough, just send update
         const diffEntry = Math.abs(refined.entry - active.entry) / active.entry;
-        logger.info(`🧠 [Tracker] Found ${candidate.symbol} active. Price diff: ${(diffEntry*100).toFixed(2)}%`);
         
         if (refined.bias === active.bias && diffEntry < 0.01) {
           logger.info(`🔄 ${candidate.symbol}: Skipping duplicate full signal.`);
+          logAudit(candidate.symbol, 'AI', 'SKIPPED', refined.confidence, `Duplicate - Already active at ±${(diffEntry*100).toFixed(1)}%`);
           await sendStatus(`🔄 *UPDATE ${candidate.symbol}*\n_Sinyal sebelumnya masih VALID._\n• *Entry:* \`${refined.entry}\` (±${(diffEntry*100).toFixed(1)}%)\n• *Status:* Ongoing trade.`);
           continue;
         } else {
-          // If bias changed or prices shifted significantly, invalidate and update
-          logger.info(`⚠️ ${candidate.symbol}: Invalidating old setup due to new market conditions.`);
-          
+          isUpdate = true;
           let invalidateReason = refined.bias !== active.bias 
             ? `Perubahan BIAS dari ${active.bias} ke ${refined.bias}`
             : `Penyesuaian Level (Entry/SL/TP) karena volatilitas market (diff: ${(diffEntry*100).toFixed(1)}%)`;
@@ -276,6 +294,7 @@ async function runScanCycle() {
       }
 
       // ─── 1. Send Text Instan ───
+      logAudit(candidate.symbol, 'AI', 'APPROVED', refined.confidence, `${isUpdate ? 'Update signal sent' : 'Fresh signal sent'} to Telegram.`);
       refined.freshness = Math.round((Date.now() - startTime) / 1000);
       await sendSignal(refined, null); 
       tracker.track(refined);
