@@ -149,7 +149,8 @@ function initTelegram() {
     let report = `⏳ *ACTIVE SIGNALS (${actives.length})*\n\n`;
     
     actives.forEach((s, i) => {
-      const ageMin = Math.floor((Date.now() - s.timestamp) / 60000);
+      const startTime = s.entryAt || s.signalAt || Date.now();
+      const ageMin = Math.floor((Date.now() - startTime) / 60000);
       const ageStr = ageMin > 60 ? `${(ageMin/60).toFixed(1)}h` : `${ageMin}m`;
       
       const risk = Math.abs(s.entry - s.stop_loss);
@@ -422,6 +423,16 @@ function formatSignalMessage(signal) {
   // 2. Escape the cleaned reason
   let safeReason = escapeMarkdown(rawReason);
 
+  // Calculate Expiry based on Type
+  const now = new Date();
+  let expiryHours = 4; // Default Day Trading
+  if (signal.trading_type?.includes('SCALP')) expiryHours = 1;
+  if (signal.trading_type?.includes('SWING')) expiryHours = 24;
+  
+  const expiryDate = new Date(now.getTime() + expiryHours * 60 * 60 * 1000);
+  const expiryStr = expiryDate.toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const dateStr = expiryDate.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit' });
+
   const baseMessage = `
 ${fallbackHeader}${header} ${qualityEmoji}
 
@@ -439,7 +450,7 @@ ${fundingEmoji} *Funding:* \`${signal.fundingRate || '0.0000%'}\`
 🛑 *Stop Loss:* \`${signal.stop_loss}\`
 📐 *R:R Ratio:* \`${rrRatio.toFixed(2)}\`
 
-⏱️ *Valid:* \`${signal.freshness || 0}s ago\`
+⏱️ *Valid Until:* \`${expiryStr} WIB (${dateStr})\`
 🚫 *No Entry If:* \`${signal.bias === 'LONG' ? '>' : '<'} ${signal.bias === 'LONG' ? (signal.entry * 1.003).toFixed(5) : (signal.entry * 0.997).toFixed(5)}\`
 
 🧮 *Position Size (Risk $${signal.riskReward.positionSize.risk.toFixed(2)} / 20x):*
