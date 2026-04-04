@@ -292,16 +292,13 @@ async function fetch24hTicker(symbol) {
 async function fetchFundingRate(symbol) {
   try {
     const futuresSymbol = toFuturesSymbol(symbol);
-
-    const res = await axios.get(`${FUTURES_URL}/fapi/v1/premiumIndex`, {
-      params: { symbol: futuresSymbol }
-    });
-    return parseFloat(res.data.lastFundingRate);
+    const data = await getWithFallback('/fapi/v1/premiumIndex', { symbol: futuresSymbol }, false, true);
+    return parseFloat(data.lastFundingRate);
   } catch (err) {
-    // If it's 400, it probably doesn't exist on futures at all
-    if (err.response && err.response.status === 400) {
+    // If it's a 400 error (Invalid Symbol), we probably can't fetch it
+    if (err.message.includes('400') || err.message.includes('-1121')) {
         logger.debug(`No futures market found for ${symbol}, skipping funding check.`);
-        return 0; // Assume neutral if no futures market
+        return 0;
     }
     logger.error(`Failed to fetch funding rate for ${symbol}:`, err.message);
     return null;

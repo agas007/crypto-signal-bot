@@ -171,10 +171,13 @@ function evaluateSignal(symbol, data, options = {}) {
   };
 
   // Rule 5: No entry if against HTF trend (4H/1D)
+  // If D1 is bullish, w  // Rule 5: No entry if against HTF trend (4H/1D)
   // If D1 is bullish, we can only LONG. If D1 is bearish, we can only SHORT.
   // If D1 is neutral, we check H4.
   const globalTrend = d1Trend.direction !== 'neutral' ? d1Trend : h4Trend;
-  if (globalTrend.direction === 'neutral') return null; // No clear HTF trend
+  if (globalTrend.direction === 'neutral') {
+    return options.includeRejectionReason ? { signal: null, rejectionReason: 'Neutral HTF trend (D1 & H4)' } : null;
+  }
   
   const atr = h1Spike.atr; // Access ATR from the existing h1Spike analysis
 
@@ -264,22 +267,33 @@ function evaluateSignal(symbol, data, options = {}) {
   // ═══════════════════════════════════════════════════════
   // Pick Bias
   // Rule 4: Ambiguitas check (lebih besar, bukan lebih besar sama dengan)
-  if (longScore === shortScore && longScore > 0) return null; // Neutral conflict
+  if (longScore === shortScore && longScore > 0) {
+    return options.includeRejectionReason ? { signal: null, rejectionReason: 'Neutral conflict (LongScore == ShortScore)' } : null;
+  }
   
   let bias = longScore > shortScore ? 'LONG' : 'SHORT';
   let score = longScore > shortScore ? longScore : shortScore;
   let reasons = longScore > shortScore ? longReasons : shortReasons;
 
-  if (score < 30) return null; // Hard reject low scores early
+  if (score < 30) {
+    return options.includeRejectionReason ? { signal: null, rejectionReason: `Score too low (${score}/30)` } : null;
+  }
 
-  // Risk:Reward check (includes the 4% Hard SL Reject + 1.5x ATR min SL)
+  // Risk:Reward check (includes the 8% Hard SL Reject + 1.5x ATR min SL)
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance, { 
     atr,
     accountBalance: options.accountBalance || config.strategy.accountBalance,
     stepSize: options.stepSize
   });
-  if (!riskReward) return null; 
 
+  if (!riskReward) {
+      const slDist = bias === 'LONG' 
+        ? (h4SR.currentPrice - (h4SR.nearestSupport * 0.998)) / h4SR.currentPrice
+        : ((h4SR.nearestResistance * 1.002) - h4SR.currentPrice) / h4SR.currentPrice;
+      
+      const reason = slDist > 0.08 ? `SL distance too wide (${(slDist*100).toFixed(1)}% > 8%)` : 'Technical levels (SL/TP) invalid or too tight';
+      return options.includeRejectionReason ? { signal: null, rejectionReason: reason } : null;
+  }
   // Verticality & Mean Reversion Protection
   const distFromLvl = bias === 'LONG' ? h4SR.distToSupport : h4SR.distToResistance;
   if (distFromLvl > 5.0) {

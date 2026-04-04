@@ -308,11 +308,18 @@ function initTelegram() {
         }
 
         // Evaluate technically
-        const signal = evaluateSignal(finalSym, mtfData, { fundingRate });
+        const evalResult = evaluateSignal(finalSym, mtfData, { 
+            fundingRate, 
+            accountBalance: config.strategy.accountBalance,
+            includeRejectionReason: true 
+        });
         
-        if (!signal) {
-            return bot.sendMessage(msg.chat.id, `🚫 *TECHNICAL REJECTION: ${finalSym}*\n_Setup tidak memenuhi kriteria minimal strategi teknis (Score < 30 atau SL > 8%)._`, { parse_mode: 'Markdown' });
+        if (!evalResult || (evalResult && !evalResult.signal)) {
+            const reason = evalResult ? evalResult.rejectionReason : 'No clear technical bias';
+            return bot.sendMessage(msg.chat.id, `🚫 *TECHNICAL REJECTION: ${finalSym}*\n_Alasan: ${reason}_`, { parse_mode: 'Markdown' });
         }
+
+        const signal = evalResult.signal;
 
         // Market Regime (BTC check)
         let btcTrend = 'NEUTRAL';

@@ -25,6 +25,11 @@ const config = {
     maxPairs: parseInt(process.env.MAX_PAIRS, 10) || 30,
   },
 
+  binance: {
+    rateLimitMs: parseInt(process.env.BINANCE_RATE_LIMIT_MS, 10) || 200,
+    baseUrl: 'https://api.binance.com',
+  },
+
   // Timeframes mapped to Binance interval codes
   timeframes: {
     D1: '1d',
