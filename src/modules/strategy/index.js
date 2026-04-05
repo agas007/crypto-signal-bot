@@ -56,6 +56,9 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
   let entry = currentPrice;
   let sl, tp;
 
+  // Calculate Risk in Dollar (5% of balance or $0.25 minimum)
+  const riskDollar = Math.max(ACCOUNT_BALANCE * RISK_PCT, config.strategy.minRiskDollar || 0.25);
+
   if (bias === 'LONG') {
     sl = options.sl || Math.min(support * 0.998, entry - atrDist);
     tp = options.tp || (resistance !== Infinity ? resistance * 0.998 : entry * (1 + (entry - sl) * MIN_RR / entry));
@@ -69,7 +72,6 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
     const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
 
     // Position Sizing
-    const riskDollar = ACCOUNT_BALANCE * RISK_PCT;
     let quantity = riskDollar / riskPerUnit;
     if (options.stepSize) quantity = roundStep(quantity, options.stepSize);
     let notionalValue = quantity * entry;
@@ -103,7 +105,6 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
     const rewardPerUnit = entry - tp;
     const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
 
-    const riskDollar = ACCOUNT_BALANCE * RISK_PCT;
     let quantity = riskDollar / riskPerUnit;
     if (options.stepSize) quantity = roundStep(quantity, options.stepSize);
     let notionalValue = quantity * entry;
