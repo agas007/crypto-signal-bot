@@ -381,4 +381,5 @@ module.exports = {
   fetchFundingRate,
   fetchFuturesBalance,
   fetchExchangeSpecs,
+  toFuturesSymbol,
 };
