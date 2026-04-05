@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
+const { getJakartaResetTime } = require('../../utils/time');
 
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
 const STORAGE_PATH = path.join(DATA_DIR, 'active_signals.json');
@@ -25,6 +26,17 @@ class SignalTracker {
     this.lessons = this._loadLessons();
     this.history = this._loadHistory();
     this.latestWatchlist = [];
+    this.manualResetAt = 0;
+  }
+
+  getEffectiveResetTime() {
+    return Math.max(getJakartaResetTime(), this.manualResetAt);
+  }
+
+  resetCooldown() {
+    this.manualResetAt = Date.now();
+    logger.info('🧠 [Tracker] Cooldown manually reset.');
+    return true;
   }
 
   _load() {
@@ -262,28 +274,28 @@ class SignalTracker {
    * Check if we are over the daily trade limit (Global).
    */
   getDailyTradeCount() {
-    const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const resetTime = this.getEffectiveResetTime();
     const activeCount = Object.keys(this.signals).length;
-    const completedRecently = this.history.filter(t => t.closedAt > dayAgo).length;
+    const completedRecently = this.history.filter(t => t.closedAt > resetTime).length;
     return activeCount + completedRecently;
   }
   getGlobalSLCountToday() {
-    const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
-    return this.history.filter(t => t.close_reason === 'SL_HIT' && t.closedAt > dayAgo).length;
+    const resetTime = this.getEffectiveResetTime();
+    return this.history.filter(t => t.close_reason === 'SL_HIT' && t.closedAt > resetTime).length;
   }
 
   /**
    * Check stats for a specific base asset (e.g. NMR from NMRUSDT, NMRBTC).
    */
   getAssetStats(symbol) {
-    const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const resetTime = this.getEffectiveResetTime();
     // Extract base asset (Naive approach: remove USDT, BTC, etc. from end)
     const baseAsset = symbol.toUpperCase().replace(/(USDT|BTC|ETH|BNB|PERP)$/, '');
     
     // Count SL hits for this base asset in any pair
     const slHits = this.history.filter(t => {
       const tBase = t.symbol.toUpperCase().replace(/(USDT|BTC|ETH|BNB|PERP)$/, '');
-      return tBase === baseAsset && t.close_reason === 'SL_HIT' && t.closedAt > dayAgo;
+      return tBase === baseAsset && t.close_reason === 'SL_HIT' && t.closedAt > resetTime;
     }).length;
 
     return { slHits, baseAsset };
@@ -314,7 +326,7 @@ class SignalTracker {
    * Now incorporates base-asset level SL cooldown.
    */
   getPairStats(symbol, bias) {
-    const dayAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const resetTime = this.getEffectiveResetTime();
     const sym = symbol.toUpperCase();
     
     // 1. Count attempts (Active + History)
@@ -322,7 +334,7 @@ class SignalTracker {
     const historyAttempts = this.history.filter(t => 
       t.symbol === sym && 
       t.bias === bias && 
-      t.closedAt > dayAgo
+      t.closedAt > resetTime
     ).length;
 
     // 2. Count SL hits at ASSET level (e.g. any NMR pair)

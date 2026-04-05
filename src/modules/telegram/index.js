@@ -2,7 +2,7 @@ const fs = require('fs');
 const TelegramBot = require('node-telegram-bot-api');
 const config = require('../../config');
 const logger = require('../../utils/logger');
-const { formatJakartaTime } = require('../../utils/time');
+const { formatJakartaTime, getNextJakartaReset } = require('../../utils/time');
 const { analyzePerformanceSummary } = require('../ai/openrouter');
 const tracker = require('../tracker');
 const binancePerformance = require('../tracker/binance_performance');
@@ -30,8 +30,9 @@ function getHelpMessage(chatId) {
     `🛠 *Admin Commands:* \n` +
     `🗑 /reset\\_active - Clear all active signals\n` +
     `📂 /reset\\_history - Clear trade history\n` +
-    `🧠 /reset\\_lessons - Clear AI lessons\n\n` +
-    `_Connected to chatId: ${chatId}_`;
+    `🧠 /reset\\_lessons - Clear AI lessons\n` +
+    `🛡️ /reset\\_cooldown - Reset daily limits immediately\n\n` +
+    `_Daily reset occurs at 09:00 WIB (UTC+7)_`;
 }
 
 /**
@@ -62,18 +63,35 @@ function initTelegram() {
   bot.onText(/\/help/, helpHandler);
   bot.onText(/\/commands/, helpHandler);
 
-  // /status command
   bot.onText(/\/status/, (msg) => {
     const uptimeSec = Math.floor((Date.now() - startTime) / 1000);
     const hrs = Math.floor(uptimeSec / 3600);
     const mins = Math.floor((uptimeSec % 3600) / 60);
+
+    const dailyCount = tracker.getDailyTradeCount();
+    const globalSlToday = tracker.getGlobalSLCountToday();
+    const nextReset = getNextJakartaReset();
+    const timeUntilResetMs = Math.max(0, nextReset - Date.now());
+    const resetHrs = Math.floor(timeUntilResetMs / 3600000);
+    const resetMins = Math.floor((timeUntilResetMs % 3600000) / 60000);
+    
+    let cooldownStatus = '🟢 *Scanning Active*';
+    if (globalSlToday >= 3) {
+      cooldownStatus = '🚫 *Global SL Cooldown* (3/3 SL hit)';
+    } else if (dailyCount >= 5) {
+      cooldownStatus = '⏳ *Daily Trade Limit Reached* (5/5 trades)';
+    }
     
     const text = `✅ *Bot Status: ONLINE*\n\n` +
       `🕒 *Uptime:* ${hrs}h ${mins}m\n` +
       `⌛ *Interval:* ${config.scanner.intervalMs / 3600000} hour(s)\n` +
-      `🎯 *Mode:* Strict (Score ≥ 65)\n` +
+      `🔄 *Timeframes:* D1 · H4 · H1\n\n` +
+      `🛡️ *Daily Limits (Reset in ${resetHrs}h ${resetMins}m):*\n` +
+      `• *Trades Today:* ${dailyCount}/5\n` +
+      `• *SL Hits Today:* ${globalSlToday}/3\n` +
+      `• *Status:* ${cooldownStatus}\n\n` +
       `🧠 *AI Memory:* ${tracker.lessons.length} lessons learned\n` +
-      `🔄 *Timeframes:* D1 · H4 · H1`;
+      `🎯 *Mode:* Strict (Score ≥ 65)`;
 
     bot.sendMessage(msg.chat.id, text, { parse_mode: 'Markdown' }).catch(() => {
         bot.sendMessage(msg.chat.id, text.replace(/[*_`]/g, ''));
@@ -245,6 +263,11 @@ function initTelegram() {
   bot.onText(/\/reset_lessons/, (msg) => {
     tracker.clearLessons();
     bot.sendMessage(msg.chat.id, '🧠 *AI lessons cleared!*');
+  });
+
+  bot.onText(/\/reset_cooldown/, (msg) => {
+    tracker.resetCooldown();
+    bot.sendMessage(msg.chat.id, '🛡️ *Cooldown manually reset!* Daily trade and SL limits have been cleared.');
   });
 
   // /log command

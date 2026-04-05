@@ -30,14 +30,14 @@ async function runScanCycle() {
   const globalSlToday = tracker.getGlobalSLCountToday();
 
   // ─── 0. Early Exit Check (Hard Killswitch) ───
-  // Rule: Stop all trades if we hit 3 SLs globally in 24h
+  // Rule: Stop all trades if we hit 3 SLs globally in a day (Resets 00:00 WIB)
   if (globalSlToday >= 3) {
-    logger.info(`🚫 Global Killswitch Active: 3/3 Stop Loss hits in 24h. Protecting capital.`);
-    await checkActiveTrades();
+    logger.info(`🚫 Global Killswitch Active: ${globalSlToday}/3 Stop Loss hits today. Scanning suspended until 00:00 WIB reset.`);
+    await checkActiveTrades(); // Still check existing trades for accuracy
     return 0;
   }
 
-  logger.info(`📈 Status: ${dailyCount}/5 trades, ${globalSlToday}/3 global SL hits.`);
+  logger.info(`📈 Daily Status: ${dailyCount}/5 total trades, ${globalSlToday}/3 SL hits.`);
 
   // ─── 0. Fetch Real Balance ───
   // We fetch account balance from Binance to use in position sizing

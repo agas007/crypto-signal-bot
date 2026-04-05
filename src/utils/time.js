@@ -53,4 +53,40 @@ function formatJakartaTime(date = new Date(), format = 'readable') {
   }
 }
 
-module.exports = { formatJakartaTime };
+/**
+ * Returns the Unix timestamp (ms) for the most recent 09:00 WIB reset.
+ * If it's 10:00 WIB, returns today 09:00 WIB.
+ * If it's 08:00 WIB, returns yesterday 09:00 WIB.
+ */
+function getJakartaResetTime() {
+  const now = new Date();
+  const offset = 7 * 60 * 60 * 1000;
+  // Shift to Jakarta time
+  const jakartaNow = new Date(now.getTime() + offset);
+  
+  // Today's 09:00 in Jakarta relative terms
+  const todayReset = new Date(Date.UTC(
+    jakartaNow.getUTCFullYear(),
+    jakartaNow.getUTCMonth(),
+    jakartaNow.getUTCDate(),
+    9, 0, 0, 0
+  ));
+  
+  let resetTime = todayReset.getTime() - offset;
+  
+  // If we haven't reached 09:00 yet today, the reset happened yesterday at 09:00
+  if (now.getTime() < resetTime) {
+    resetTime -= (24 * 60 * 60 * 1000);
+  }
+  
+  return resetTime;
+}
+
+/**
+ * Returns the Unix timestamp (ms) for the START of the NEXT day's 09:00 WIB reset.
+ */
+function getNextJakartaReset() {
+  return getJakartaResetTime() + (24 * 60 * 60 * 1000);
+}
+
+module.exports = { formatJakartaTime, getJakartaResetTime, getNextJakartaReset };
