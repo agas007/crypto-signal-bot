@@ -55,6 +55,7 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
 
   let entry = currentPrice;
   let sl, tp;
+  let scaled = false;
 
   // Calculate Risk in Dollar (5% of balance or $0.25 minimum)
   const riskDollar = Math.max(ACCOUNT_BALANCE * RISK_PCT, config.strategy.minRiskDollar || 0.25);
@@ -78,19 +79,36 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
     
     // Cap at Max Position Size (5% of account)
     const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
+    
+    // Rule: Ensure it meets Binance MIN_NOTIONAL (often 5-100 USDT)
+    const minRequired = options.minNotional || 5.0;
+    if (notionalValue < minRequired) {
+        notionalValue = minRequired;
+        quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
+        if (quantity === 0 && options.stepSize) quantity = options.stepSize;
+        notionalValue = quantity * entry;
+        scaled = true;
+    }
+
     if (notionalValue > maxNotional) {
       notionalValue = maxNotional;
       quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
       notionalValue = quantity * entry;
+      // If after capping it's below minNotional, it's untradeable
+      if (notionalValue < minRequired) return null;
     }
+
+    const margin = notionalValue / LEVERAGE;
+    if (margin > ACCOUNT_BALANCE) return null;
 
     return { 
       entry, sl, tp, rr, 
+      isScaled: scaled,
       positionSize: {
-        risk: riskDollar,
+        risk: (Math.abs(entry - sl) * quantity),
         leverage: LEVERAGE,
         quantity,
-        margin: notionalValue / LEVERAGE,
+        margin,
         notional: notionalValue
       }
     };
@@ -110,19 +128,35 @@ function calculateRiskReward(bias, currentPrice, support, resistance, options = 
     let notionalValue = quantity * entry;
     
     const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
+
+    // Rule: Ensure it meets Binance MIN_NOTIONAL
+    const minRequired = options.minNotional || 5.0;
+    if (notionalValue < minRequired) {
+        notionalValue = minRequired;
+        quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
+        if (quantity === 0 && options.stepSize) quantity = options.stepSize;
+        notionalValue = quantity * entry;
+        scaled = true;
+    }
+
     if (notionalValue > maxNotional) {
       notionalValue = maxNotional;
       quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
       notionalValue = quantity * entry;
+      if (notionalValue < minRequired) return null;
     }
+
+    const margin = notionalValue / LEVERAGE;
+    if (margin > ACCOUNT_BALANCE) return null;
 
     return { 
       entry, sl, tp, rr,
+      isScaled: scaled,
       positionSize: {
-        risk: riskDollar,
+        risk: (Math.abs(sl - entry) * quantity),
         leverage: LEVERAGE,
         quantity,
-        margin: notionalValue / LEVERAGE,
+        margin,
         notional: notionalValue
       }
     };
@@ -284,7 +318,8 @@ function evaluateSignal(symbol, data, options = {}) {
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR.nearestSupport, h4SR.nearestResistance, { 
     atr,
     accountBalance: options.accountBalance || config.strategy.accountBalance,
-    stepSize: options.stepSize
+    stepSize: options.stepSize,
+    minNotional: options.minNotional
   });
 
   if (!riskReward) {
@@ -292,7 +327,14 @@ function evaluateSignal(symbol, data, options = {}) {
         ? (h4SR.currentPrice - (h4SR.nearestSupport * 0.998)) / h4SR.currentPrice
         : ((h4SR.nearestResistance * 1.002) - h4SR.currentPrice) / h4SR.currentPrice;
       
-      const reason = slDist > 0.08 ? `SL distance too wide (${(slDist*100).toFixed(1)}% > 8%)` : 'Technical levels (SL/TP) invalid or too tight';
+      const balance = options.accountBalance || config.strategy.accountBalance;
+      const minOrderValue = options.minNotional || 5.0;
+      const marginForMin = minOrderValue / 20;
+
+      let reason = 'Technical levels (SL/TP) invalid or too tight';
+      if (slDist > 0.08) reason = `SL distance too wide (${(slDist*100).toFixed(1)}% > 8%)`;
+      else if (marginForMin > balance) reason = `Insufficient balance to meet exchange MIN_NOTIONAL ($${minOrderValue})`;
+      
       return options.includeRejectionReason ? { signal: null, rejectionReason: reason } : null;
   }
   // Verticality & Mean Reversion Protection

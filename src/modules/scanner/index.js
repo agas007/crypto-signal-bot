@@ -1,7 +1,10 @@
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
-const { fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, fetchFundingRate, fetchFuturesBalance, fetchOHLCV } = require('../data/binance');
+const { 
+  fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, fetchFundingRate, 
+  fetchFuturesBalance, fetchOHLCV, fetchExchangeSpecs, toFuturesSymbol 
+} = require('../data/binance');
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
 const { evaluateSignal } = require('../strategy');
@@ -39,9 +42,13 @@ async function runScanCycle() {
 
   logger.info(`📈 Daily Status: ${dailyCount}/5 total trades, ${globalSlToday}/3 SL hits.`);
 
-  // ─── 0. Fetch Real Balance ───
-  // We fetch account balance from Binance to use in position sizing
-  const balance = await fetchFuturesBalance();
+  // ─── 0. Fetch Real Balance & Exchange Specs ───
+  // We fetch specs to ensure Lot Size (Step size) and Min Notional compliance
+  const [balance, exchangeSpecs] = await Promise.all([
+      fetchFuturesBalance(),
+      fetchExchangeSpecs()
+  ]);
+  
   const effectiveBalance = balance > 0 ? balance : config.strategy.accountBalance;
   if (balance > 0) {
     logger.info(`💰 Current Futures Balance: $${balance.toFixed(2)} USDT`);
@@ -144,10 +151,19 @@ async function runScanCycle() {
       }
 
       // Run strategy evaluation (includes hard kill-switches + R:R check)
-      const signal = evaluateSignal(symbol, mtfData, { 
+      const futuresSym = toFuturesSymbol(symbol);
+      const specs = exchangeSpecs[futuresSym] || { stepSize: 0.001, minNotional: 5.0 };
+
+      const result = evaluateSignal(symbol, mtfData, { 
           fundingRate,
-          accountBalance: effectiveBalance 
+          accountBalance: effectiveBalance,
+          stepSize: specs.stepSize,
+          minNotional: specs.minNotional,
+          includeRejectionReason: true
       });
+      
+      const signal = result.signal;
+
       if (signal) {
         signal.candles = mtfData.H1; // Save candles for the chart later
         candidates.push(signal);
@@ -155,7 +171,7 @@ async function runScanCycle() {
         logAudit(symbol, 'STRATEGY', 'PASSED', signal.score, signal.reasons.join(', '));
       } else {
         rejected++;
-        logAudit(symbol, 'STRATEGY', 'REJECTED', 0, 'Technical requirements not met');
+        logAudit(symbol, 'STRATEGY', 'REJECTED', 0, result.rejectionReason || 'Technical requirements not met');
       }
 
       await sleep(config.binance.rateLimitMs);

@@ -135,10 +135,9 @@ function initTelegram() {
       const aiTruncated = aiReview.length > maxAiLen ? aiReview.substring(0, maxAiLen) + '...' : aiReview;
       
       const sanitizedAiReview = aiTruncated
-        .replace(/([_*`\[\]()])/g, '\\$1') // Escape ALL possible markdown chars
-        .replace(/\\`\\`\\`(\w+)?/g, '\n```$1\n') // But restore code blocks
-        .replace(/\\*\\*/g, '*') // And bold
-        .replace(/\\`/g, '`'); // And inline code
+        .replace(/\\/g, '') // Remove backslashes first
+        .replace(/[*_]/g, '') // Strip existing AI-sent asterisk/underscores for cleanliness
+        .replace(/\n\n+/g, '\n\n'); // Normalize double newlines
 
       const report = `📈 *BINANCE PERFORMANCE REPORT*\n` +
                      `⏱ *Period:* \`${stats.period.toUpperCase()}\`\n` +
@@ -154,9 +153,7 @@ function initTelegram() {
 
       bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(err => {
           logger.error('Telegram Markdown Error (Retrying plain text):', err.message);
-          const plainReport = report
-             .replace(/[*_`]/g, '')
-             .replace(/━━━━━━━━━━━━━━━━━━━/g, '-------------------');
+          const plainReport = report.replace(/[*_`]/g, '');
           bot.sendMessage(msg.chat.id, plainReport);
       });
     } catch (err) {
@@ -477,6 +474,8 @@ function formatSignalMessage(signal) {
   const expiryStr = expiryDate.toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
   const dateStr = expiryDate.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit' });
 
+  const scalingTag = signal.riskReward?.isScaled ? ' (⚠️ AUTO SCALED)' : '';
+
   const baseMessage = `
 ${fallbackHeader}${header} ${qualityEmoji}
 
@@ -497,7 +496,7 @@ ${fundingEmoji} *Funding:* \`${signal.fundingRate || '0.0000%'}\`
 ⏱️ *Valid Until:* \`${expiryStr} WIB (${dateStr})\`
 🚫 *No Entry If:* \`${signal.bias === 'LONG' ? '>' : '<'} ${signal.bias === 'LONG' ? (signal.entry * 1.003).toFixed(5) : (signal.entry * 0.997).toFixed(5)}\`
 
-🧮 *Position Size (Risk $${signal.riskReward.positionSize.risk.toFixed(2)} / 20x):*
+🧮 *Position Size (Risk $${signal.riskReward.positionSize.risk.toFixed(2)} / 20x)${scalingTag}:*
 • *Margin (Cost):* \`${signal.riskReward.positionSize.margin.toFixed(2)} USDT\`
 • *Quantity:* \`${signal.riskReward.positionSize.quantity.toFixed(3)}\`
 • *Notional:* \`$${signal.riskReward.positionSize.notional.toFixed(2)}\`

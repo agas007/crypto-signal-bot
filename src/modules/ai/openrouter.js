@@ -394,12 +394,13 @@ Action: Update scanner filter sekarang."
 
 RESPOND WITH ONLY THIS JSON FORMAT:
 {
-  "math_check": "Analisis win rate vs R:R (Singkat)",
-  "pattern_detected": "Pola kesalahan yang terdeteksi (Singkat)",
-  "hypothesis": "Satu hal yang paling mungkin salah (Analitis)",
-  "one_experiment": "Satu kalimat instruksi spesifik untuk strategy baru (Actionable)",
-  "action_items": ["Langkah 1", "Langkah 2"]
+  "math_check": "Analysis win rate vs R:R (Plain text only, no character-level formatting)",
+  "pattern_detected": "Error pattern (Plain text only, no char italics)",
+  "hypothesis": "Possible root cause (Plain text only)",
+  "one_experiment": "SPECIFIC trade test (STRICTLY PLAIN TEXT, NO ASTERISKS, NO ITALICS)",
+  "action_items": ["Step 1 (Plain text)", "Step 2 (Plain text)"]
 }
+CRITICAL: ALL JSON VALUES MUST BE PLAIN TEXT WITHOUT ANY BOLD, ITALIC, OR CHARACTER-LEVEL FORMATTING.
 
 OVERALL STATS:
 - Total PnL: $${stats.totalPnl}
@@ -429,10 +430,8 @@ ${JSON.stringify(tradeLog, null, 2)}
       logger.info(`[Experiment] New global experiment applied: ${parsed.one_experiment}`);
     }
 
-    // Format to Markdown manually
+    // Format to Markdown manually for Telegram
     const report = `
-📊 *AI PERFORMANCE AUDIT*
--------------------
 🔢 *Math Check:*
 ${parsed.math_check}
 
@@ -443,7 +442,7 @@ ${parsed.pattern_detected}
 ${parsed.hypothesis}
 
 🧪 *One Experiment:*
-\`${parsed.one_experiment}\`
+${parsed.one_experiment}
 
 ✅ *Action Items:*
 ${parsed.action_items?.map(item => `• ${item}`).join('\n')}

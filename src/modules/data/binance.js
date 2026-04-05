@@ -356,9 +356,12 @@ async function fetchExchangeSpecs() {
         if (data && data.symbols) {
             data.symbols.forEach(s => {
                 const lotFilter = s.filters.find(f => f.filterType === 'LOT_SIZE');
+                const notionalFilter = s.filters.find(f => f.filterType === 'MIN_NOTIONAL');
                 specs[s.symbol] = {
+                    symbol: s.symbol,
                     stepSize: lotFilter ? parseFloat(lotFilter.stepSize) : 0.001,
-                    precision: s.quantityPrecision
+                    precision: s.quantityPrecision,
+                    minNotional: notionalFilter ? parseFloat(notionalFilter.notional || notionalFilter.minNotional) : 5.0
                 };
             });
         }
