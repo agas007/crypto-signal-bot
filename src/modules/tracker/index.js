@@ -74,9 +74,9 @@ class SignalTracker {
 
   _saveLessons() {
     try {
-      // Keep only last 20 lessons to avoid bloating prompt
-      const trimmed = this.lessons.slice(-20);
-      fs.writeFileSync(LESSONS_PATH, JSON.stringify(trimmed, null, 2));
+      // Keep only last 15 lessons to keep AI prompts focused
+      this.lessons = this.lessons.slice(-15);
+      fs.writeFileSync(LESSONS_PATH, JSON.stringify(this.lessons, null, 2));
     } catch (err) { logger.error('Failed to save lessons:', err.message); }
   }
 
@@ -90,20 +90,26 @@ class SignalTracker {
 
   /**
    * Keep a lesson learned from a failed trade.
+   * Deduplicates: skips if the same symbol+bias already has a lesson within 24h.
    */
   saveLesson(symbol, bias, analysis) {
-    this.lessons.push({
-      symbol,
-      bias,
-      analysis,
-      timestamp: Date.now()
-    });
+    const now = Date.now();
+    const dayAgo = now - (24 * 60 * 60 * 1000);
+    const duplicate = this.lessons.find(l => 
+      l.symbol === symbol && l.bias === bias && l.timestamp > dayAgo
+    );
+    if (duplicate) {
+      logger.debug(`🧠 [Tracker] Skipping duplicate lesson for ${symbol} (${bias}) - already learned today.`);
+      return;
+    }
+
+    this.lessons.push({ symbol, bias, analysis, timestamp: now });
     this._saveLessons();
     logger.info(`🧠 [Tracker] Lesson saved for ${symbol}. Total memory: ${this.lessons.length}`);
   }
 
   getRecentLessons() {
-    return this.lessons.slice(-10); // Return last 10 lessons
+    return this.lessons.slice(-10); // Return last 10 lessons for AI prompt
   }
 
   /**

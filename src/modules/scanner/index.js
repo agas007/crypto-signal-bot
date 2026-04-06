@@ -162,7 +162,11 @@ async function runScanCycle() {
           includeRejectionReason: true
       });
       
-      const signal = result.signal;
+      // evaluateSignal returns:
+      //   Success: raw signal object { symbol, bias, score, ... }
+      //   Rejection: { signal: null, rejectionReason: '...' }
+      const isRejection = result && result.signal === null && result.rejectionReason;
+      const signal = isRejection ? null : result;
 
       if (signal) {
         signal.candles = mtfData.H1; // Save candles for the chart later
@@ -171,7 +175,8 @@ async function runScanCycle() {
         logAudit(symbol, 'STRATEGY', 'PASSED', signal.score, signal.reasons.join(', '));
       } else {
         rejected++;
-        logAudit(symbol, 'STRATEGY', 'REJECTED', 0, result.rejectionReason || 'Technical requirements not met');
+        const reason = isRejection ? result.rejectionReason : 'Technical requirements not met';
+        logAudit(symbol, 'STRATEGY', 'REJECTED', 0, reason);
       }
 
       await sleep(config.binance.rateLimitMs);

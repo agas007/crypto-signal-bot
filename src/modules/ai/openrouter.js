@@ -424,10 +424,9 @@ ${JSON.stringify(tradeLog, null, 2)}
 
     const parsed = JSON.parse(response.data.choices[0].message.content);
     
-    // Auto-save the experiment as a global lesson if provided
+    // Log the experiment for visibility (but don't auto-save as lesson — it pollutes post-mortem context)
     if (parsed.one_experiment) {
-      tracker.saveLesson('GLOBAL_EXPERIMENT', 'ADAPTIVE', parsed.one_experiment);
-      logger.info(`[Experiment] New global experiment applied: ${parsed.one_experiment}`);
+      logger.info(`[Experiment] AI Coach suggests: ${parsed.one_experiment}`);
     }
 
     // Format to Markdown manually for Telegram

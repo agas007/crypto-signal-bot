@@ -41,7 +41,15 @@ function getHelpMessage(chatId) {
 function initTelegram() {
   if (bot) return; // Prevent multiple initializations
 
-  bot = new TelegramBot(config.telegram.botToken, { polling: true });
+  bot = new TelegramBot(config.telegram.botToken, { 
+    polling: true,
+    request: {
+        agentOptions: {
+            keepAlive: true,
+            family: 4 // Force IPv4 to prevent AggregateError (common Node 17+ issue)
+        }
+    }
+  });
   logger.info('Telegram bot initialized with interactive POLLING mode');
 
   // Handle unhandled rejections to prevent crashes
