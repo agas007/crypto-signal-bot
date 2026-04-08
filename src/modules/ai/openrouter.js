@@ -358,7 +358,8 @@ Kamu adalah Performance Analyst untuk sistem trading otomatis.
 Analisis data trade dengan framework:
 
 ## 1. STATISTICAL REALITY CHECK
-- Win rate vs Required win rate (berdasarkan avg R:R)
+- Win rate vs Required win rate (berdasarkan data R:R yang disediakan di ledger) 
+- Analisis R:R: Apakah target R:R tercapai atau trade sering exit sebelum TP (slippage/emotion)?
 - Consecutive loss pattern (clustering?)
 - Time-to-SL distribution (immediate = execution/sl issue, delayed = direction issue)
 
@@ -368,7 +369,7 @@ Analisis data trade dengan framework:
 - Cek: Apakah loss clustered di market condition tertentu (trending up/down/ranging)?
 
 ## 3. SYSTEM HEALTH CHECK
-- Compare: Signal generated vs Signal executed (manual gap?)
+- Compare: Signal generated vs Signal executed (cek ledger fields: entry, sl, tp, rr)
 - Compare: Planned R:R vs Actual R:R (slippage?)
 - Filter effectiveness: AI score 60-70 vs 70+ win rate difference
 
@@ -394,13 +395,13 @@ Action: Update scanner filter sekarang."
 
 RESPOND WITH ONLY THIS JSON FORMAT:
 {
-  "math_check": "Analysis win rate vs R:R (Plain text only, no character-level formatting)",
-  "pattern_detected": "Error pattern (Plain text only, no char italics)",
-  "hypothesis": "Possible root cause (Plain text only)",
-  "one_experiment": "SPECIFIC trade test (STRICTLY PLAIN TEXT, NO ASTERISKS, NO ITALICS)",
-  "action_items": ["Step 1 (Plain text)", "Step 2 (Plain text)"]
+  "math_check": "Analisis win rate vs R:R (HANYA DALAM BAHASA INDONESIA, Polos tanpa format karakter)",
+  "pattern_detected": "Pola kesalahan (HANYA DALAM BAHASA INDONESIA)",
+  "hypothesis": "Akar masalah yang mungkin (HANYA DALAM BAHASA INDONESIA)",
+  "one_experiment": "Eksperimen spesifik selanjutnya (HANYA DALAM BAHASA INDONESIA, TANPA ASTERISK/ITALIC)",
+  "action_items": ["Langkah 1 (Bahasa Indonesia)", "Langkah 2 (Bahasa Indonesia)"]
 }
-CRITICAL: ALL JSON VALUES MUST BE PLAIN TEXT WITHOUT ANY BOLD, ITALIC, OR CHARACTER-LEVEL FORMATTING.
+CRITICAL: ALL JSON VALUES MUST BE IN INDONESIAN (BAHASA INDONESIA) AND PLAIN TEXT WITHOUT ANY BOLD, ITALIC, OR CHARACTER-LEVEL FORMATTING.
 
 OVERALL STATS:
 - Total PnL: $${stats.totalPnl}

@@ -131,7 +131,8 @@ function initTelegram() {
                    const emoji = parseFloat(t.pnl) > 0 ? '✅' : '🚨';
                    const pnlSafe = (parseFloat(t.pnl) > 0 ? '+' : '') + t.pnl;
                    const symbolSafe = (t.symbol || 'PAIR').replace(/_/g, '\\_');
-                   return `${emoji} \`${symbolSafe}\` (${t.market}): \`${pnlSafe} USDT\``;
+                   const rrText = t.rr ? ` | *RR: ${t.rr}*` : '';
+                   return `${emoji} \`${symbolSafe}\` (${t.market}): \`${pnlSafe} USDT\`${rrText}`;
                  }).join('\n') + `\n\n`;
       }
 

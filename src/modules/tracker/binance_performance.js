@@ -100,11 +100,22 @@ class BinancePerformance {
                 count++;
                 if (t.realizedPnl > 0) wins++; else losses++;
                 
+                // Lookup technical details from our own tracker history
+                const signalRecord = tracker.history.find(h => 
+                    h.symbol === t.symbol && 
+                    Math.abs(h.closedAt - t.time) < 24 * 60 * 60 * 1000 // Match within 24h
+                );
+
                 details.push({
                     symbol: t.symbol,
                     market: 'FUT',
                     pnl: t.realizedPnl.toFixed(2),
-                    time: t.time
+                    time: t.time,
+                    // Technical fields if matched
+                    entry: signalRecord ? signalRecord.entry : null,
+                    sl: signalRecord ? signalRecord.stop_loss : null,
+                    tp: signalRecord ? signalRecord.take_profit : null,
+                    rr: signalRecord && signalRecord.riskReward ? signalRecord.riskReward.rr : null
                 });
 
                 if (t.realizedPnl < -0.1) {
@@ -133,11 +144,20 @@ class BinancePerformance {
           count++;
           if (realizedPnl > 0) wins++; else losses++;
 
+          const signalRecord = tracker.history.find(h => 
+              h.symbol === symbol && 
+              Math.abs(h.closedAt - t.time) < 24 * 60 * 60 * 1000
+          );
+
           details.push({
             symbol,
             market: 'SPOT',
             pnl: realizedPnl.toFixed(2),
-            time: t.time
+            time: t.time,
+            entry: signalRecord ? signalRecord.entry : avgCost,
+            sl: signalRecord ? signalRecord.stop_loss : null,
+            tp: signalRecord ? signalRecord.take_profit : null,
+            rr: signalRecord && signalRecord.riskReward ? signalRecord.riskReward.rr : null
           });
 
           if (realizedPnl < -0.1) {
