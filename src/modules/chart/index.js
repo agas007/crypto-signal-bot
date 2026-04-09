@@ -62,26 +62,50 @@ async function generateChartImage(symbol, candles, signal) {
   <meta charset="utf-8" />
   <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
   <style>
-    body { background: #0c0c0c; margin: 0; padding: 0; width: 1024px; height: 512px; font-family: sans-serif; }
-    #chart { width: 1000px; height: 500px; margin: 6px; }
+    body { background: #0c0c0c; margin: 0; padding: 0; width: 1024px; height: 512px; font-family: 'Inter', system-ui, -apple-system, sans-serif; overflow: hidden; }
+    #chart { width: 1022px; height: 510px; }
+    .overlay {
+        position: absolute;
+        top: 20px;
+        left: 20px;
+        z-index: 10;
+        pointer-events: none;
+        color: #d1d4dc;
+    }
+    .symbol { font-size: 28px; font-weight: 700; color: #ffffff; margin-bottom: 4px; }
+    .details { font-size: 14px; opacity: 0.8; letter-spacing: 1px; }
+    .watermark { position: absolute; bottom: 40px; right: 80px; font-size: 14px; color: #363a45; z-index: 5; }
   </style>
 </head>
 <body>
+  <div class="overlay">
+    <div class="symbol">${symbol}</div>
+    <div class="details">BINANCE FUTURES • 1H • CRYPTO SIGNAL BOT V4.4</div>
+  </div>
+  <div class="watermark">DYOR • NOT FINANCIAL ADVICE</div>
   <div id="chart"></div>
   <script>
     const container = document.getElementById('chart');
     const chart = LightweightCharts.createChart(container, {
-      width: 1000,
-      height: 500,
-      layout: { background: { type: 'solid', color: '#0c0c0c' }, textColor: '#d1d4dc' },
-      grid: { vertLines: { color: '#1f222d' }, horzLines: { color: '#1f222d' } },
-      timeScale: { borderColor: '#485c7b', timeVisible: true },
+      width: 1022,
+      height: 510,
+      layout: { 
+        background: { type: 'solid', color: '#0c0c0c' }, 
+        textColor: '#d1d4dc',
+        fontSize: 12
+      },
+      grid: { 
+        vertLines: { color: 'rgba(42, 46, 57, 0.5)' }, 
+        horzLines: { color: 'rgba(42, 46, 57, 0.5)' } 
+      },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      timeScale: { borderColor: '#485c7b', timeVisible: true, secondsVisible: false },
     });
 
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: '#26a69a', downColor: '#ef5350', borderVisible: false,
       wickUpColor: '#26a69a', wickDownColor: '#ef5350',
-      priceFormat: { type: 'price', precision: 8, minMove: 0.00000001 },
+      priceFormat: { type: 'price', precision: 6, minMove: 0.000001 },
     });
 
     chart.priceScale().applyOptions({ autoScale: true, borderColor: '#485c7b' });
@@ -91,13 +115,13 @@ async function generateChartImage(symbol, candles, signal) {
 
     const addLine = (price, color, title) => {
       candlestickSeries.createPriceLine({
-        price: price, color: color, lineWidth: 2, lineStyle: 1, axisLabelVisible: true, title: title,
+        price: price, color: color, lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: title,
       });
     };
 
     addLine(${entry}, '#bbbbbb', ' ENTRY');
-    addLine(${tp}, '#26a69a', ' TP');
-    addLine(${sl}, '#ef5350', ' SL');
+    addLine(${tp}, '#26a69a', ' TAKE PROFIT');
+    addLine(${sl}, '#ef5350', ' STOP LOSS');
 
     chart.timeScale().fitContent();
   </script>
@@ -136,7 +160,5 @@ async function generateChartImage(symbol, candles, signal) {
     if (page) await page.close();
   }
 }
-
-module.exports = { generateChartImage };
 
 module.exports = { generateChartImage };
