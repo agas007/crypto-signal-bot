@@ -323,6 +323,27 @@ async function runScanCycle() {
         }
       }
 
+      // ─── Live Confirmation Engine ───
+      // Cek ulang kondisi harga beberapa saat sebelum dikirim (Anti-Fakeout)
+      logger.info(`⏳ [Live Confirmation] Memantau pergerakan harga ${candidate.symbol} selama 3 menit...`);
+      await sendStatus(`⏳ *LIVE CONFIRMATION: ${candidate.symbol}*\n_AI menyetujui setup. Bot sedang memantau pergerakan harga secara live (3 menit) untuk menghindari fakeout..._`);
+      
+      const { sleep } = require('../../utils/sleep');
+      const { fetch24hTicker } = require('../data/binance');
+      await sleep(3 * 60 * 1000); // Wait 3 minutes
+
+      const latestTicker = await fetch24hTicker(candidate.symbol);
+      const currentPriceLive = latestTicker ? parseFloat(latestTicker.lastPrice) : refined.entry;
+      
+      // Hitung slippage/pergeseran dari entry AI
+      const slippage = Math.abs(currentPriceLive - refined.entry) / refined.entry;
+      if (slippage > 0.015) {
+          logger.warn(`🚫 [Live Confirmation Failed] ${candidate.symbol} price slipped ${(slippage*100).toFixed(2)}% during confirmation window.`);
+          await sendStatus(`🚫 *SIGNAL DROPPED: ${candidate.symbol}*\n_Terdeteksi pergerakan harga terlalu volatile / fakeout (${(slippage*100).toFixed(1)}%) saat fase konfirmasi. Setup dibatalkan demi keamanan._`);
+          logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED', refined.confidence, `Price moved too violently during 3m window (Slippage: ${(slippage*100).toFixed(1)}%)`);
+          continue;
+      }
+
       // ─── 1. Send Text Instan ───
       logAudit(candidate.symbol, 'AI', 'APPROVED', refined.confidence, `${isUpdate ? 'Update signal sent' : 'Fresh signal sent'} to Telegram.`);
       refined.freshness = Math.round((Date.now() - startTime) / 1000);

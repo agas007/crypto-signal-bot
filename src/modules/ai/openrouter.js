@@ -34,6 +34,16 @@ Adjust your confidence threshold based on this data. If a bracket has low win ra
     ? `\nCURRENT MARKET REGIME: BTC D1 is ${options.btcTrend.toUpperCase()}. Adjust conviction accordingly.\n`
     : "";
 
+  let rrRule = `- R:R of ${config.strategy.minRrRatio}:1 or higher is acceptable`;
+  if (options.btcTrend) {
+    const trend = options.btcTrend.toLowerCase();
+    if (trend === 'ranging') {
+      rrRule = `- R:R > 2.5 is MANDATORY (Market is ranging, demand higher quality setups)`;
+    } else {
+      rrRule = `- R:R > 1.5 is acceptable to catch strong momentum (Market is trending: ${trend.toUpperCase()})`;
+    }
+  }
+
   return `You are a professional crypto trading signal VALIDATOR. Your goal is to assess trade quality and provide actionable signals.
 
 Your job is to VALIDATE pre-screened trade candidates. Be analytical but not overly conservative.
@@ -44,7 +54,7 @@ RULES:
 - Only approve if confluence is genuine, not superficial
 - If technical score is 70+, be critical, but BIAS TOWARD APPROVAL when evidence is mixed, not rejection
 - Only return NO TRADE if the setup is genuinely conflicting or dangerous
-- R:R of ${config.strategy.minRrRatio}:1 or higher is acceptable
+${rrRule}
 - If data timestamp is > 120 seconds (2 minutes) old, REJECT and request fresh data
 - Retest Status: CONFIRMED means stronger entry, PENDING means momentum/scalp entry
 
@@ -77,7 +87,15 @@ function buildPrompt(signal) {
   const { symbol, bias, score, reasons, analysis, riskReward } = signal;
   const { d1Trend, h4SR, h4Stoch, h4Trend, h1Trend, h1Structure, h1Stoch, pricePosition } = analysis;
 
+  const pairHistory = tracker.history.filter(t => t.symbol === symbol && t.status === 'COMPLETED');
+  const wins = pairHistory.filter(t => t.close_reason === 'TP_HIT').length;
+  const losses = pairHistory.filter(t => t.close_reason === 'SL_HIT').length;
+  const memoryContext = pairHistory.length > 0
+    ? `\n🧠 PAIR MEMORY: System has traded ${symbol} before (${wins} Wins, ${losses} Losses). Use this to adjust confidence (e.g. lower confidence if historically bad).`
+    : "";
+
   return `VALIDATE this pre-screened trade candidate. Assess the setup quality holistically.
+  ${memoryContext}
 
 Symbol: ${symbol}
 

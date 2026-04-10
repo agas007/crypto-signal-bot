@@ -106,6 +106,97 @@ function initTelegram() {
     });
   });
 
+  // /dashboard command (Auto Visualizer via QuickChart)
+  bot.onText(/\/dashboard/, async (msg) => {
+    bot.sendMessage(msg.chat.id, '⏳ _Generating multi-layer visual dashboard..._', { parse_mode: 'Markdown' });
+    
+    try {
+      const history = tracker.history;
+      
+      // ─── 1. Overall Performance (Doughnut) ───
+      const wins = history.filter(t => t.close_reason === 'TP_HIT').length;
+      const losses = history.filter(t => t.close_reason === 'SL_HIT').length;
+      const winRateOverall = (wins + losses > 0) ? ((wins / (wins + losses)) * 100).toFixed(1) : 0;
+      
+      const doughnutConfig = {
+        type: 'doughnut',
+        data: {
+          labels: ['Wins', 'Losses'],
+          datasets: [{ data: [wins, losses], backgroundColor: ['#26a69a', '#ef5350'], borderWidth: 0 }]
+        },
+        options: {
+          plugins: {
+            doughnutlabel: { labels: [{ text: `${winRateOverall}%`, font: { size: 40, weight: 'bold' } }, { text: 'Win Rate' }] }
+          }
+        }
+      };
+      const overallUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(doughnutConfig))}`;
+
+      // ─── 2. Pair Performance (Radar Chart) ───
+      const pairStats = {};
+      history.forEach(t => {
+        if (!pairStats[t.symbol]) pairStats[t.symbol] = { wins: 0, total: 0 };
+        pairStats[t.symbol].total++;
+        if (t.close_reason === 'TP_HIT') pairStats[t.symbol].wins++;
+      });
+      
+      const topPairs = Object.keys(pairStats)
+        .sort((a, b) => pairStats[b].total - pairStats[a].total)
+        .slice(0, 5);
+      
+      const radarLabels = topPairs.length > 0 ? topPairs : ['N/A'];
+      const radarData = topPairs.length > 0 ? topPairs.map(p => ((pairStats[p].wins / pairStats[p].total) * 100).toFixed(0)) : [0];
+
+      const radarConfig = {
+        type: 'radar',
+        data: {
+          labels: radarLabels,
+          datasets: [{
+            label: 'Win Rate %',
+            data: radarData,
+            backgroundColor: 'rgba(38, 166, 154, 0.2)',
+            borderColor: '#26a69a',
+            pointBackgroundColor: '#26a69a'
+          }]
+        },
+        options: {
+          scale: { ticks: { beginAtZero: true, max: 100, stepSize: 20 } }
+        }
+      };
+      const radarUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(radarConfig))}`;
+
+      // ─── 3. System Workflow (Mermaid Flow) ───
+      const mermaidCode = `graph LR
+      A[Market Scan] --> B{Strategy Filter}
+      B -- Fail --> F[Audit Log]
+      B -- Pass --> C[AI Coach Validation]
+      C -- Reject --> F
+      C -- Approve --> D[Live Confirmation]
+      D -- Fakeout --> F
+      D -- Confirmed --> E[Telegram Signal]`;
+      
+      const mermaidUrl = `https://mermaid.ink/img/${Buffer.from(mermaidCode).toString('base64')}`;
+
+      // ─── Send Results ───
+      const active = tracker.getAllActive().length;
+      const caption = `📊 *CRYPTO BOT VISUAL DASHBOARD*\n\n` +
+                      `📈 *Total Trades:* ${wins + losses}\n` +
+                      `✅ *Wins:* ${wins} | 🚨 *Losses:* ${losses}\n` +
+                      `⚡ *Active Trades:* ${active}\n\n` +
+                      `_Powered by Auto Visualizer Engine_`;
+
+      await bot.sendMediaGroup(msg.chat.id, [
+        { type: 'photo', media: overallUrl, caption: caption, parse_mode: 'Markdown' },
+        { type: 'photo', media: radarUrl, caption: '🎯 *PAIR PERFORMANCE RADAR*\n_Top 5 most traded pairs win-rate analysis._', parse_mode: 'Markdown' },
+        { type: 'photo', media: mermaidUrl, caption: '🕹️ *SYSTEM WORKFLOW FLOWCHART*\n_Real-time signal processing pipeline._', parse_mode: 'Markdown' }
+      ]);
+
+    } catch (err) {
+      logger.error('Failed to generate full dashboard:', err.message);
+      bot.sendMessage(msg.chat.id, '❌ Gagal memuat full visual dashboard.');
+    }
+  });
+
   // /performance command
   bot.onText(/\/performance(?:\s+(\w+))?(?:\s+(\w+))?/, async (msg, match) => {
     let period = (match[1] || 'all').toLowerCase();
@@ -140,7 +231,7 @@ function initTelegram() {
       let aiReview = await analyzePerformanceSummary(stats, stats.tradeLog);
       
       // Sanitize Markdown from AI (Truncate BEFORE sanitization to avoid breaking entities)
-      const maxAiLen = 3000;
+      const maxAiLen = 2000;
       const aiTruncated = aiReview.length > maxAiLen ? aiReview.substring(0, maxAiLen) + '...' : aiReview;
       
       const sanitizedAiReview = aiTruncated
