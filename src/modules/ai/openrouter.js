@@ -88,10 +88,10 @@ D1:
 
 H4:
 - Trend: ${h4Trend.direction} (${h4Trend.strengthLabel})
-- Support: ${h4SR.nearestSupport.toFixed(4)}
-- Resistance: ${h4SR.nearestResistance !== Infinity ? h4SR.nearestResistance.toFixed(4) : 'N/A'}
-- Current Price: ${h4SR.currentPrice.toFixed(4)}
-- Price Position: ${pricePosition} (S: ${h4SR.distToSupport.toFixed(2)}%, R: ${h4SR.distToResistance !== Infinity ? h4SR.distToResistance.toFixed(2) : 'N/A'}%)
+- Support (Wick): ${h4SR.wick && h4SR.wick.support ? h4SR.wick.support.toFixed(4) : 'N/A'}
+- Resistance (Wick): ${h4SR.wick && h4SR.wick.resistance !== Infinity ? h4SR.wick.resistance.toFixed(4) : 'N/A'}
+- Current Price: ${(h4SR.currentPrice || 0).toFixed(4)}
+- Price Position: ${pricePosition}
 - Stochastic: K=${h4Stoch.k.toFixed(1)}, D=${h4Stoch.d.toFixed(1)} (${h4Stoch.signal})
 
 H1:

@@ -249,12 +249,13 @@ async function runScanCycle() {
           const finalRR = calculateRiskReward(
               refined.bias, 
               refined.entry, 
-              refined.bias === 'LONG' ? 0 : 999999, // dummy, levels are refined
-              refined.bias === 'LONG' ? 999999 : 0, 
+              candidate.analysis ? candidate.analysis.h4SR : null, 
               { 
                   accountBalance: effectiveBalance,
                   sl: refined.stop_loss,
-                  tp: refined.take_profit
+                  tp: refined.take_profit,
+                  stepSize: specs.stepSize,
+                  minNotional: specs.minNotional
               }
           );
           refined.riskReward = finalRR;
@@ -301,22 +302,24 @@ async function runScanCycle() {
             continue; 
         }
 
-        // If same bias and prices are close enough, just send update
         const diffEntry = Math.abs(refined.entry - active.entry) / active.entry;
         
-        if (refined.bias === active.bias && diffEntry < 0.01) {
-          logger.info(`🔄 ${candidate.symbol}: Skipping duplicate full signal.`);
-          logAudit(candidate.symbol, 'AI', 'SKIPPED', refined.confidence, `Duplicate - Already active at ±${(diffEntry*100).toFixed(1)}%`);
-          await sendStatus(`🔄 *UPDATE ${candidate.symbol}*\n_Sinyal sebelumnya masih VALID._\n• *Entry:* \`${refined.entry}\` (±${(diffEntry*100).toFixed(1)}%)\n• *Status:* Ongoing trade.`);
-          continue;
+        if (refined.bias === active.bias) {
+          // SAME BIAS: Never invalidate an active trade. Just send an advisory update if entry shifted.
+          if (diffEntry > 0.02) {
+            logger.info(`🔄 ${candidate.symbol}: Entry shifted significantly (${(diffEntry*100).toFixed(1)}%), sending advisory update.`);
+            await sendStatus(`🔄 *ADVISORY UPDATE: ${candidate.symbol}*\n_Setup teknikal sedikit geser, tapi trade awal lo masih VALID._\n• *New Entry Area:* \`${refined.entry}\`\n• *Status:* Ongoing trade (Keep your original SL/TP).`);
+          } else {
+             logger.info(`🔄 ${candidate.symbol}: Skipping duplicate signal for active trade.`);
+          }
+          logAudit(candidate.symbol, 'AI', 'SKIPPED', refined.confidence, `Already active (Bias Match) - Keeping original trade.`);
+          continue; 
         } else {
-          isUpdate = true;
-          let invalidateReason = refined.bias !== active.bias 
-            ? `Perubahan BIAS dari ${active.bias} ke ${refined.bias}`
-            : `Penyesuaian Level (Entry/SL/TP) karena volatilitas market (diff: ${(diffEntry*100).toFixed(1)}%)`;
-
-          await sendStatus(`🚫 *SIGNAL INVALID: ${candidate.symbol}*\n_Sinyal sebelumnya sudah tidak valid._\n• *Alasan:* ${invalidateReason}\n\n_Stay tuned, setup baru sedang dikirim..._`);
-          tracker.remove(candidate.symbol, 'INVALIDATED_BY_NEW_SETUP');
+          // BIAS CHANGED: Warn the user, but still don't force invalidate. They decide.
+          logger.info(`⚠️ ${candidate.symbol}: Bias conflict detected (${active.bias} vs ${refined.bias})`);
+          await sendStatus(`⚠️ *WARNING: BIAS CONFLICT ${candidate.symbol}*\n_Bot nemu setup baru dengan bias berlawanan (${active.bias} ke ${refined.bias})._\n• *Action:* Trade lama lo masih aktif di memori. Consider untuk manual close jika trend sudah patah.`);
+          logAudit(candidate.symbol, 'AI', 'WARNING', refined.confidence, `Bias Conflict: ${active.bias} -> ${refined.bias}`);
+          continue;
         }
       }
 

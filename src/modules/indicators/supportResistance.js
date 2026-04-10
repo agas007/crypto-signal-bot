@@ -21,32 +21,43 @@
  * }}
  */
 function findSupportResistance(candles, lookback = 20) {
-  const swingWidth = 3; // candles on each side to confirm a swing point
-  const resistanceLevels = [];
-  const supportLevels = [];
+  const swingWidth = 3; 
+  const wickHighs = [];
+  const wickLows = [];
+  const bodyHighs = [];
+  const bodyLows = [];
 
-  // Scan for swing points (skip edges that can't have full window)
   for (let i = swingWidth; i < candles.length - swingWidth; i++) {
-    let isSwingHigh = true;
-    let isSwingLow = true;
+    let isWickHigh = true;
+    let isWickLow = true;
+    let isBodyHigh = true;
+    let isBodyLow = true;
+
+    const currentBodyMax = Math.max(candles[i].open, candles[i].close);
+    const currentBodyMin = Math.min(candles[i].open, candles[i].close);
 
     for (let j = 1; j <= swingWidth; j++) {
-      if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) {
-        isSwingHigh = false;
-      }
-      if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) {
-        isSwingLow = false;
-      }
+      const prevBodyMax = Math.max(candles[i-j].open, candles[i-j].close);
+      const prevBodyMin = Math.min(candles[i-j].open, candles[i-j].close);
+      const nextBodyMax = Math.max(candles[i+j].open, candles[i+j].close);
+      const nextBodyMin = Math.min(candles[i+j].open, candles[i+j].close);
+
+      if (candles[i].high <= candles[i - j].high || candles[i].high <= candles[i + j].high) isWickHigh = false;
+      if (candles[i].low >= candles[i - j].low || candles[i].low >= candles[i + j].low) isWickLow = false;
+      
+      if (currentBodyMax <= prevBodyMax || currentBodyMax <= nextBodyMax) isBodyHigh = false;
+      if (currentBodyMin >= prevBodyMin || currentBodyMin >= nextBodyMin) isBodyLow = false;
     }
 
-    if (isSwingHigh) resistanceLevels.push(candles[i].high);
-    if (isSwingLow) supportLevels.push(candles[i].low);
+    if (isWickHigh) wickHighs.push(candles[i].high);
+    if (isWickLow) wickLows.push(candles[i].low);
+    if (isBodyHigh) bodyHighs.push(currentBodyMax);
+    if (isBodyLow) bodyLows.push(currentBodyMin);
   }
 
   const currentPrice = candles[candles.length - 1].close;
 
-  // Cluster nearby levels (within 0.5% of each other)
-  const clusterLevels = (levels) => {
+  const clusterLevels = (levels, mode) => {
     if (!levels.length) return [];
     const sorted = [...levels].sort((a, b) => a - b);
     const clusters = [[sorted[0]]];
@@ -54,7 +65,6 @@ function findSupportResistance(candles, lookback = 20) {
     for (let i = 1; i < sorted.length; i++) {
       const lastCluster = clusters[clusters.length - 1];
       const clusterMean = lastCluster.reduce((s, v) => s + v, 0) / lastCluster.length;
-
       if (Math.abs(sorted[i] - clusterMean) / clusterMean < 0.005) {
         lastCluster.push(sorted[i]);
       } else {
@@ -62,34 +72,35 @@ function findSupportResistance(candles, lookback = 20) {
       }
     }
 
-    return clusters.map((c) => c.reduce((s, v) => s + v, 0) / c.length);
+    return clusters.map((c) => {
+        if (mode === 'MIN') return Math.min(...c);
+        if (mode === 'MAX') return Math.max(...c);
+        return c.reduce((s, v) => s + v, 0) / c.length; // Default to mean
+    });
   };
 
-  const clusteredSupport = clusterLevels(supportLevels);
-  const clusteredResistance = clusterLevels(resistanceLevels);
+  const supportWick = clusterLevels(wickLows, 'MIN');
+  const resistanceWick = clusterLevels(wickHighs, 'MAX');
+  const supportBody = clusterLevels(bodyLows, 'MAX'); // Conservative Support for Short TP
+  const resistanceBody = clusterLevels(bodyHighs, 'MIN'); // Conservative Resistance for Long TP
 
-  // Find nearest levels to current price
-  const nearestSupport = clusteredSupport
-    .filter((s) => s < currentPrice)
-    .sort((a, b) => b - a)[0] || 0;
-
-  const nearestResistance = clusteredResistance
-    .filter((r) => r > currentPrice)
-    .sort((a, b) => a - b)[0] || Infinity;
-
-  const distToSupport = nearestSupport ? ((currentPrice - nearestSupport) / currentPrice) * 100 : Infinity;
-  const distToResistance = nearestResistance !== Infinity
-    ? ((nearestResistance - currentPrice) / currentPrice) * 100
-    : Infinity;
+  const findNearest = (levels, type) => {
+      if (type === 'SUPPORT') {
+          return levels.filter(l => l < currentPrice).sort((a,b) => b - a)[0] || 0;
+      }
+      return levels.filter(l => l > currentPrice).sort((a,b) => a - b)[0] || Infinity;
+  };
 
   return {
-    support: clusteredSupport,
-    resistance: clusteredResistance,
-    nearestSupport,
-    nearestResistance,
     currentPrice,
-    distToSupport,
-    distToResistance,
+    wick: {
+        support: findNearest(supportWick, 'SUPPORT'),
+        resistance: findNearest(resistanceWick, 'RESISTANCE')
+    },
+    body: {
+        support: findNearest(supportBody, 'SUPPORT'),
+        resistance: findNearest(resistanceBody, 'RESISTANCE')
+    }
   };
 }
 
