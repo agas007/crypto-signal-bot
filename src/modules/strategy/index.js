@@ -41,7 +41,7 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = 4.0)
  */
 function calculateRiskReward(bias, currentPrice, levels, options = {}) {
   const MIN_RR = config.strategy.minRrRatio;
-  const MAX_SL_ALLOWED = 0.08;      // 8% Max Risk (increased from 4% to allow structural SL)
+  const MAX_SL_ALLOWED = config.strategy.maxSlAllowed; 
   const MIN_SL_DISTANCE = 0.005;   // 0.5% Min Distance (avoid tight noise)
   const ATR_MULTIPLIER = 1.5;      // Rule 4: SL min 1.5x ATR
   
@@ -321,7 +321,7 @@ function evaluateSignal(symbol, data, options = {}) {
       const marginForMin = minOrderValue / 20;
 
       let reason = 'Technical levels (SL/TP) invalid or too tight';
-      if (slDist > 0.08) reason = `SL distance too wide (${(slDist*100).toFixed(1)}% > 8%)`;
+      if (slDist > config.strategy.maxSlAllowed) reason = `SL distance too wide (${(slDist*100).toFixed(1)}% > ${(config.strategy.maxSlAllowed*100).toFixed(0)}%)`;
       else if (marginForMin > balance) reason = `Insufficient balance to meet exchange MIN_NOTIONAL ($${minOrderValue})`;
       
       return options.includeRejectionReason ? { signal: null, rejectionReason: reason } : null;

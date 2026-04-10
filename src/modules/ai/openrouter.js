@@ -225,8 +225,8 @@ async function refineSignal(signal, options = {}) {
       ? (parsed.entry - parsed.stop_loss) / parsed.entry
       : (parsed.stop_loss - parsed.entry) / parsed.entry;
 
-    if (slDistance > 0.04) {
-      logger.warn(`${signal.symbol} X AI returned SL > 4%: ${(slDistance * 100).toFixed(2)}%`);
+    if (slDistance > config.strategy.maxSlAllowed) {
+      logger.warn(`${signal.symbol} X AI returned SL > ${(config.strategy.maxSlAllowed*100).toFixed(0)}%: ${(slDistance * 100).toFixed(2)}%`);
       return null;
     }
 
