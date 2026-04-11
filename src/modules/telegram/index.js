@@ -354,13 +354,23 @@ function initTelegram() {
       const type = s.quality === 'WATCHLIST' ? '📋' : '🚫';
       const rrRatio = s.riskReward?.rr ? s.riskReward.rr.toFixed(2) : 'N/A';
       
-      report += `${i + 1}. ${type} *${s.symbol}* (${s.bias})\n` +
+      // Limit reason length to avoid Telegram character limit issues
+      let reason = (s.reason || 'No specific reason').replace(/[*_`]/g, '');
+      if (reason.length > 180) {
+        reason = reason.substring(0, 180) + '...';
+      }
+      
+      report += `${i + 1}. ${type} *${s.symbol}* (${s.bias || 'N/A'})\n` +
                 `• Score: \`${s.score}/100\` | R:R: \`${rrRatio}\`\n` +
-                `• Entry: \`${s.entry || 'N/A'}\`\n` +
-                `• Reason: _${s.reason || 'No specific reason'}_\n\n`;
+                `• Reason: _${reason}_\n\n`;
     });
     
     report += `🛡️ *Status:* Standby. Waiting for criteria to improve.`;
+
+    // Final safety check for total length
+    if (report.length > 3800) {
+      report = report.substring(0, 3800) + '\n\n...[Truncated]';
+    }
 
     bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(() => {
         bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
