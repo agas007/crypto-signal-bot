@@ -108,92 +108,14 @@ function initTelegram() {
 
   // /dashboard command (Auto Visualizer via QuickChart)
   bot.onText(/\/dashboard/, async (msg) => {
-    bot.sendMessage(msg.chat.id, '⏳ _Generating multi-layer visual dashboard..._', { parse_mode: 'Markdown' });
+    bot.sendMessage(msg.chat.id, '⏳ _Generating premium visual dashboard via Puppeteer..._', { parse_mode: 'Markdown' });
     
     try {
-      const history = tracker.history;
-      
-      // ─── 1. Overall Performance (Doughnut) ───
-      const wins = history.filter(t => t.close_reason === 'TP_HIT').length;
-      const losses = history.filter(t => t.close_reason === 'SL_HIT').length;
-      const winRateOverall = (wins + losses > 0) ? ((wins / (wins + losses)) * 100).toFixed(1) : 0;
-      
-      const doughnutConfig = {
-        type: 'doughnut',
-        data: {
-          labels: ['Wins', 'Losses'],
-          datasets: [{ data: [wins, losses], backgroundColor: ['#26a69a', '#ef5350'], borderWidth: 0 }]
-        },
-        options: {
-          plugins: {
-            doughnutlabel: { labels: [{ text: `${winRateOverall}%`, font: { size: 40, weight: 'bold' } }, { text: 'Win Rate' }] }
-          }
-        }
-      };
-      const overallUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(doughnutConfig))}`;
-
-      // ─── 2. Pair Performance (Radar Chart) ───
-      const pairStats = {};
-      history.forEach(t => {
-        if (!pairStats[t.symbol]) pairStats[t.symbol] = { wins: 0, total: 0 };
-        pairStats[t.symbol].total++;
-        if (t.close_reason === 'TP_HIT') pairStats[t.symbol].wins++;
-      });
-      
-      const topPairs = Object.keys(pairStats)
-        .sort((a, b) => pairStats[b].total - pairStats[a].total)
-        .slice(0, 5);
-      
-      const radarLabels = topPairs.length > 0 ? topPairs : ['N/A'];
-      const radarData = topPairs.length > 0 ? topPairs.map(p => ((pairStats[p].wins / pairStats[p].total) * 100).toFixed(0)) : [0];
-
-      const radarConfig = {
-        type: 'radar',
-        data: {
-          labels: radarLabels,
-          datasets: [{
-            label: 'Win Rate %',
-            data: radarData,
-            backgroundColor: 'rgba(38, 166, 154, 0.2)',
-            borderColor: '#26a69a',
-            pointBackgroundColor: '#26a69a'
-          }]
-        },
-        options: {
-          scale: { ticks: { beginAtZero: true, max: 100, stepSize: 20 } }
-        }
-      };
-      const radarUrl = `https://quickchart.io/chart?c=${encodeURIComponent(JSON.stringify(radarConfig))}`;
-
-      // ─── 3. System Workflow (Mermaid Flow) ───
-      const mermaidCode = `graph LR
-      A[Market Scan] --> B{Strategy Filter}
-      B -- Fail --> F[Audit Log]
-      B -- Pass --> C[AI Coach Validation]
-      C -- Reject --> F
-      C -- Approve --> D[Live Confirmation]
-      D -- Fakeout --> F
-      D -- Confirmed --> E[Telegram Signal]`;
-      
-      const mermaidUrl = `https://mermaid.ink/img/${Buffer.from(mermaidCode).toString('base64')}`;
-
-      // ─── Send Results ───
-      const active = tracker.getAllActive().length;
-      const caption = `📊 *CRYPTO BOT VISUAL DASHBOARD*\n\n` +
-                      `📈 *Total Trades:* ${wins + losses}\n` +
-                      `✅ *Wins:* ${wins} | 🚨 *Losses:* ${losses}\n` +
-                      `⚡ *Active Trades:* ${active}\n\n` +
-                      `_Powered by Auto Visualizer Engine_`;
-
-      await bot.sendMediaGroup(msg.chat.id, [
-        { type: 'photo', media: overallUrl, caption: caption, parse_mode: 'Markdown' },
-        { type: 'photo', media: radarUrl, caption: '🎯 *PAIR PERFORMANCE RADAR*\n_Top 5 most traded pairs win-rate analysis._', parse_mode: 'Markdown' },
-        { type: 'photo', media: mermaidUrl, caption: '🕹️ *SYSTEM WORKFLOW FLOWCHART*\n_Real-time signal processing pipeline._', parse_mode: 'Markdown' }
-      ]);
-
+      const { generateAndSendDashboard } = require('../chart/dashboard');
+      await generateAndSendDashboard(msg.chat.id);
     } catch (err) {
-      logger.error('Failed to generate full dashboard:', err.message);
-      bot.sendMessage(msg.chat.id, '❌ Gagal memuat full visual dashboard.');
+      logger.error('Manual dashboard generation failed:', err.message);
+      bot.sendMessage(msg.chat.id, '❌ Gagal membuat visual dashboard harian.');
     }
   });
 
@@ -377,16 +299,25 @@ function initTelegram() {
     try {
         const content = fs.readFileSync(logPath, 'utf8');
         const lines = content.trim().split('\n');
-        // Take header (lines 0 and 1) + last 15 lines
-        const header = lines.slice(0, 2).join('\n');
-        const lastEntries = lines.slice(-15).join('\n');
         
-        const report = `📋 *SCAN AUDIT LOG (Last 15 entries)*\n\n` +
+        // Take header (lines 0 and 1) + last 10 lines to reduce size
+        const header = lines.slice(0, 2).join('\n');
+        let lastEntries = lines.slice(-10).join('\n');
+        
+        // Telegram max is 4096. We need to leave room for formatting.
+        const maxLen = 3800;
+        if (lastEntries.length > maxLen) {
+            lastEntries = '...[TRUNCATED]\n' + lastEntries.substring(lastEntries.length - maxLen);
+        }
+        
+        const report = `📋 *SCAN AUDIT LOG (Last 10 entries)*\n\n` +
                        `\`\`\`\n${header}\n${lastEntries}\n\`\`\``;
         
         bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(err => {
             logger.error('Telegram Markdown Error in /log (Retrying plain text):', err.message);
-            bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
+            let plainText = report.replace(/[*_`]/g, '');
+            if (plainText.length > 4000) plainText = plainText.substring(0, 4000) + '...';
+            bot.sendMessage(msg.chat.id, plainText);
         });
     } catch (err) {
         logger.error('Failed to read audit log:', err.message);

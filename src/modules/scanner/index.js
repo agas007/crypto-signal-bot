@@ -377,6 +377,14 @@ async function runScanCycle() {
     await sendStatus('🛡️ *Scan Cycle:* Candidates were found but rejected by AI validation (Detailed audit logged).');
   }
 
+  // ─── Auto Dashboard Update ───
+  try {
+    const { generateAndSendDashboard } = require('../chart/dashboard');
+    await generateAndSendDashboard();
+  } catch (err) {
+    logger.error('Dashboard auto-update failed:', err.message);
+  }
+
   return sentCount;
 }
 
