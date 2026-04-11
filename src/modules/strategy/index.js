@@ -1,6 +1,128 @@
 const config = require('../../config');
 const logger = require('../../utils/logger');
-const { analyzeTrend, calculateStochastic, findSupportResistance, analyzeStructure, detectAtSpike, detectRetest } = require('../indicators');
+const { 
+  analyzeTrend, calculateStochastic, findSupportResistance,
+  analyzeStructure, detectAtSpike, detectRetest,
+  detectEma1321, detectStochCross, detectDivergence, detectOrderBlocks
+} = require('../indicators');
+
+// ═══════════════════════════════════════════════════════════════════
+// MARKET MICROSTRUCTURE ANALYZER
+// Interprets all off-chart Binance data into scored signals
+// ═══════════════════════════════════════════════════════════════════
+
+/**
+ * Analyze all market microstructure data fetched from Binance.
+ * Returns scored observations (longBonus, shortBonus) + labels.
+ *
+ * @param {object} micro
+ * @param {object|null} micro.oi         fetchOpenInterest result
+ * @param {Array}       micro.oiHistory  fetchOpenInterestHistory result
+ * @param {Array}       micro.crowdRatio fetchGlobalLongShortRatio result
+ * @param {Array}       micro.topRatio   fetchTopTraderLongShortRatio result
+ * @param {object|null} micro.orderBook  fetchOrderBookDepth result
+ * @param {Array}       micro.liquidations fetchLiquidationOrders result
+ * @param {number}      currentPrice
+ * @returns {{ longBonus: number, shortBonus: number, tags: string[], reasons: { long: string[], short: string[] }, raw: object }}
+ */
+function analyzeMicrostructure(micro = {}, currentPrice = 0) {
+  const {
+    oi = null,
+    oiHistory = [],
+    crowdRatio = [],
+    topRatio = [],
+    orderBook = null,
+    liquidations = [],
+  } = micro;
+
+  let longBonus = 0;
+  let shortBonus = 0;
+  const tags = [];
+  const reasons = { long: [], short: [] };
+  const raw = {};
+
+  // ─── 1. Open Interest Trend (Rising OI = conviction, Falling OI = exhaustion) ───
+  if (oiHistory.length >= 3) {
+    const oldest = oiHistory[0].sumOpenInterest;
+    const latest = oiHistory[oiHistory.length - 1].sumOpenInterest;
+    const oiChangePct = ((latest - oldest) / oldest) * 100;
+    raw.oiChangePct = oiChangePct;
+
+    if (oiChangePct > 5) {
+      // Rising OI: market is adding positions — follow the trend
+      longBonus += 8;
+      shortBonus += 8;
+      tags.push(`OI ↑ +${oiChangePct.toFixed(1)}%`);
+      reasons.long.push(`Open Interest naik ${oiChangePct.toFixed(1)}% — posisi baru terbuka, konfirmasi trend`);
+      reasons.short.push(`Open Interest naik ${oiChangePct.toFixed(1)}% — konfirmasi dorongan sell`);
+    } else if (oiChangePct < -5) {
+      // Falling OI: positions closing — potential exhaustion/reversal
+      longBonus -= 5;
+      shortBonus -= 5;
+      tags.push(`OI ↓ ${oiChangePct.toFixed(1)}%`);
+      reasons.long.push(`⚠️ Open Interest turun ${Math.abs(oiChangePct).toFixed(1)}% — posisi ditutup, trend bisa melemah`);
+      reasons.short.push(`⚠️ Open Interest turun ${Math.abs(oiChangePct).toFixed(1)}% — trend bisa melemah`);
+    }
+  }
+
+  // ─── 2. Retail Crowd Ratio (Contrarian Indicator) ───
+  // When retail is 70%+ Long → bearish signal (trapped longs)
+  // When retail is 70%+ Short → bullish signal (trapped shorts / short squeeze)
+  if (crowdRatio.length > 0) {
+    const latest = crowdRatio[crowdRatio.length - 1];
+    const longPct = latest.longAccount * 100;
+    const shortPct = latest.shortAccount * 100;
+    raw.crowdLongPct = longPct;
+    raw.crowdShortPct = shortPct;
+
+    if (longPct >= 70) {
+      // Crowd heavily long → bearish contrarian
+      shortBonus += 12;
+      longBonus -= 8;
+      tags.push(`CROWD ${longPct.toFixed(0)}% LONG`);
+      reasons.short.push(`Retail crowd ${longPct.toFixed(0)}% Long — contrarian SHORT signal (trapped longs)`);
+    } else if (longPct >= 60) {
+      shortBonus += 6;
+      tags.push(`CROWD ${longPct.toFixed(0)}% LONG`);
+      reasons.short.push(`Retail crowd condong Long (${longPct.toFixed(0)}%) — mild bearish sentiment`);
+    } else if (shortPct >= 70) {
+      // Crowd heavily short → bullish contrarian
+      longBonus += 12;
+      shortBonus -= 8;
+      tags.push(`CROWD ${shortPct.toFixed(0)}% SHORT`);
+      reasons.long.push(`Retail crowd ${shortPct.toFixed(0)}% Short — contrarian LONG signal (short squeeze risk)`);
+    } else if (shortPct >= 60) {
+      longBonus += 6;
+      tags.push(`CROWD ${shortPct.toFixed(0)}% SHORT`);
+      reasons.long.push(`Retail crowd condong Short (${shortPct.toFixed(0)}%) — mild bullish sentiment`);
+    }
+  }
+
+  // ─── 3. Order Book Depth Imbalance (L2 Data) ───
+  if (orderBook) {
+    const { imbalance, bias: obBias, bidVolume, askVolume } = orderBook;
+    raw.obImbalance = imbalance;
+    raw.obBias = obBias;
+
+    if (obBias === 'BUY' && imbalance > 0.2) {
+      longBonus += 10;
+      tags.push(`ORDER BOOK BID WALL`);
+      reasons.long.push(`Order book imbalance ${(imbalance*100).toFixed(0)}% favor Bids — bullish pressure`);
+    } else if (obBias === 'BUY') {
+      longBonus += 5;
+      reasons.long.push(`Order book sedikit favor bids (${(imbalance*100).toFixed(0)}%)`);
+    } else if (obBias === 'SELL' && Math.abs(imbalance) > 0.2) {
+      shortBonus += 10;
+      tags.push(`ORDER BOOK ASK WALL`);
+      reasons.short.push(`Order book imbalance ${(Math.abs(imbalance)*100).toFixed(0)}% favor Asks — bearish pressure`);
+    } else if (obBias === 'SELL') {
+      shortBonus += 5;
+      reasons.short.push(`Order book sedikit favor asks (${(Math.abs(imbalance)*100).toFixed(0)}%)`);
+    }
+  }
+
+  return { longBonus, shortBonus, tags, reasons, raw };
+}
 
 /**
  * Round quantity to the nearest step size to fulfill LOT_SIZE requirement.
@@ -159,6 +281,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
 function evaluateSignal(symbol, data, options = {}) {
   const { D1, H4, H1 } = data;
   const fundingRate = options.fundingRate || 0;
+  const micro = options.micro || {};
   const emaParams = config.indicators.ema;
   const stochParams = config.indicators.stochastic;
 
@@ -285,6 +408,124 @@ function evaluateSignal(symbol, data, options = {}) {
   if (h4Stoch.signal === 'overbought') shortScore += 10;
   if (h1Stoch.signal === 'overbought') shortScore += 5;
 
+  // ══════════════════════════════════════
+  // H1 MENTOR SIGNALS: EMA 13/21, Stoch Cross, Divergence, Order Block
+  // ══════════════════════════════════════
+  const ema1321 = detectEma1321(H1);
+  const h1StochCross = detectStochCross(h1Stoch.kSeries, h1Stoch.dSeries);
+  const h1Divergence = detectDivergence(H1, h1Stoch.kSeries, 14);
+  const h4OB = detectOrderBlocks(H4, { impulseMultiplier: 1.8, proximityPct: 0.03 });
+  const h1OB = detectOrderBlocks(H1, { impulseMultiplier: 1.8, proximityPct: 0.025 });
+
+  // ─── A. EMA 13/21 (price above both + golden cross) ───
+  // Mentor: "Above 13 & 21 EMA" + "13 & 21 EMA Cross" = BUY
+  if (ema1321.priceAboveBoth) {
+    longScore += 12;
+    longReasons.push(`H1 price above EMA13(${ema1321.ema13.toFixed(4)}) & EMA21(${ema1321.ema21.toFixed(4)})`);
+  } else if (ema1321.priceBelowBoth) {
+    shortScore += 12;
+    shortReasons.push(`H1 price below EMA13(${ema1321.ema13.toFixed(4)}) & EMA21(${ema1321.ema21.toFixed(4)})`);
+  }
+
+  if (ema1321.goldenCross) {
+    longScore += 18;  // Strong signal: fresh golden cross
+    longReasons.push(`✨ H1 EMA13/21 Golden Cross (13 crossed above 21)`);
+  } else if (ema1321.ema13AboveEma21) {
+    longScore += 6;   // Ongoing bullish EMA alignment
+    longReasons.push(`H1 EMA13 above EMA21 (bullish alignment)`);
+  }
+
+  if (ema1321.deathCross) {
+    shortScore += 18;
+    shortReasons.push(`✨ H1 EMA13/21 Death Cross (13 crossed below 21)`);
+  } else if (!ema1321.ema13AboveEma21) {
+    shortScore += 6;
+    shortReasons.push(`H1 EMA13 below EMA21 (bearish alignment)`);
+  }
+
+  // ─── B. Stochastic Cross ───
+  // Mentor: "Stochastic Cross" = BUY
+  if (h1StochCross.crossBullish) {
+    const zoneBonus = h1StochCross.crossInZone ? 10 : 5; // Cross in oversold = stronger
+    longScore += zoneBonus;
+    longReasons.push(`H1 Stoch %K crossed above %D${h1StochCross.crossInZone ? ' (in oversold zone — HIGH CONF)' : ''}`);
+  }
+  if (h1StochCross.crossBearish) {
+    const zoneBonus = h1StochCross.crossInZone ? 10 : 5;
+    shortScore += zoneBonus;
+    shortReasons.push(`H1 Stoch %K crossed below %D${h1StochCross.crossInZone ? ' (in overbought zone — HIGH CONF)' : ''}`);
+  }
+
+  // ─── C. Divergence ───
+  // Mentor: "Bullish Divergence" = BUY
+  if (h1Divergence.bullishDiv) {
+    longScore += 15;
+    longReasons.push(`🔍 H1 Bullish Divergence: ${h1Divergence.detail}`);
+  }
+  if (h1Divergence.hiddenBullishDiv) {
+    longScore += 8;
+    longReasons.push(`🔍 H1 Hidden Bullish Divergence (trend continuation)`);
+  }
+  if (h1Divergence.bearishDiv) {
+    shortScore += 15;
+    shortReasons.push(`🔍 H1 Bearish Divergence: ${h1Divergence.detail}`);
+  }
+  if (h1Divergence.hiddenBearishDiv) {
+    shortScore += 8;
+    shortReasons.push(`🔍 H1 Hidden Bearish Divergence (trend continuation)`);
+  }
+
+  // ─── D. Order Block ───
+  // Mentor: "Approaching Order Block" = buy consideration
+  // H4 OB (bigger, more significant)
+  if (h4OB.inBullishOB || h4OB.approachingBullishOB) {
+    const strength = h4OB.approachingBullishOB?.strength || 1;
+    const pts = h4OB.inBullishOB ? 20 : 14;
+    longScore += Math.min(pts, pts * Math.min(strength / 2, 1.5));
+    const zone = h4OB.approachingBullishOB;
+    longReasons.push(
+      `🟦 H4 ${h4OB.inBullishOB ? 'IN' : 'Approaching'} Bullish OB [${zone?.bottom?.toFixed(4)}–${zone?.top?.toFixed(4)}] (strength: ${zone?.strength?.toFixed(1)}x ATR)`
+    );
+    tags.push(h4OB.inBullishOB ? 'H4 OB ENTRY ZONE' : 'H4 OB APPROACHING');
+  }
+  if (h4OB.inBearishOB || h4OB.approachingBearishOB) {
+    const strength = h4OB.approachingBearishOB?.strength || 1;
+    const pts = h4OB.inBearishOB ? 20 : 14;
+    shortScore += Math.min(pts, pts * Math.min(strength / 2, 1.5));
+    const zone = h4OB.approachingBearishOB;
+    shortReasons.push(
+      `🟥 H4 ${h4OB.inBearishOB ? 'IN' : 'Approaching'} Bearish OB [${zone?.top?.toFixed(4)}–${zone?.bottom?.toFixed(4)}] (strength: ${zone?.strength?.toFixed(1)}x ATR)`
+    );
+    tags.push(h4OB.inBearishOB ? 'H4 OB SELL ZONE' : 'H4 OB SELL APPROACHING');
+  }
+
+  // H1 OB (more entry-specific)
+  if (h1OB.inBullishOB || h1OB.approachingBullishOB) {
+    longScore += h1OB.inBullishOB ? 12 : 8;
+    const zone = h1OB.approachingBullishOB;
+    longReasons.push(
+      `🟦 H1 ${h1OB.inBullishOB ? 'IN' : 'Approaching'} Bullish OB [${zone?.bottom?.toFixed(4)}–${zone?.top?.toFixed(4)}]`
+    );
+  }
+  if (h1OB.inBearishOB || h1OB.approachingBearishOB) {
+    shortScore += h1OB.inBearishOB ? 12 : 8;
+    const zone = h1OB.approachingBearishOB;
+    shortReasons.push(
+      `🟥 H1 ${h1OB.inBearishOB ? 'IN' : 'Approaching'} Bearish OB [${zone?.bottom?.toFixed(4)}–${zone?.top?.toFixed(4)}]`
+    );
+  }
+
+  // ══════════════════════════════════════
+  // MARKET MICROSTRUCTURE SCORING (up to +/-50 pts)
+  // ══════════════════════════════════════
+  const microResult = analyzeMicrostructure(micro, h4SR.currentPrice);
+
+  longScore += microResult.longBonus;
+  shortScore += microResult.shortBonus;
+  longReasons.push(...microResult.reasons.long);
+  shortReasons.push(...microResult.reasons.short);
+  tags.push(...microResult.tags);
+
   // ═══════════════════════════════════════════════════════
   // PICK BIAS + FINAL REFINEMENT
   // ═══════════════════════════════════════════════════════
@@ -357,13 +598,21 @@ function evaluateSignal(symbol, data, options = {}) {
     reasons,
     warnings,
     tags,
-    analysis,
+    analysis: {
+      ...analysis,
+      ema1321,
+      h1StochCross,
+      h1Divergence,
+      h4OB: { approachingBullishOB: h4OB.approachingBullishOB, approachingBearishOB: h4OB.approachingBearishOB, inBullishOB: h4OB.inBullishOB, inBearishOB: h4OB.inBearishOB },
+      h1OB: { approachingBullishOB: h1OB.approachingBullishOB, approachingBearishOB: h1OB.approachingBearishOB, inBullishOB: h1OB.inBullishOB, inBearishOB: h1OB.inBearishOB },
+    },
     riskReward,
     isStrict,
     lowConfidence: !isStrict,
     fundingRate: (fundingRate * 100).toFixed(4) + '%',
     trading_type: tradingType,
+    microstructure: microResult.raw,
   };
 }
 
-module.exports = { evaluateSignal, classifyPricePosition, calculateRiskReward };
+module.exports = { evaluateSignal, classifyPricePosition, calculateRiskReward, analyzeMicrostructure };

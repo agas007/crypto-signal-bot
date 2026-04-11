@@ -60,8 +60,10 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
     if (!config.binance.apiKey || !config.binance.apiSecret) {
         throw new Error('BINANCE_API_KEY and BINANCE_API_SECRET are required for private requests');
     }
+    const signatureHeaders = { 'X-MBX-APIKEY': config.binance.apiKey };
+    headers = { ...signatureHeaders }; // start fresh
     queryParams.timestamp = Date.now();
-    queryParams.recvWindow = 60000; // Increased tolerance for server time skew (60s)
+    queryParams.recvWindow = 60000;
     
     const queryString = Object.entries(queryParams)
       .map(([key, val]) => `${key}=${encodeURIComponent(val)}`)
@@ -97,7 +99,15 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
         } else {
             const code = bErr?.code ?? 'N/A';
             const msg = bErr?.msg ?? err.message ?? 'Unknown';
-            logger.error(`❌ Binance API Error (${path}): Code: ${code}, Msg: ${msg}`);
+            
+            // SILENCE OPTIONAL DATA ERRORS
+            // If it's a 404 or -2014 on optional data paths, log as WARN instead of scary ERROR
+            const isOptionalData = path.includes('/futures/data/') || path.includes('/forceOrders');
+            if (isOptionalData || status === 404) {
+                logger.warn(`ℹ️ Binance Info (${path}): ${status === 404 ? 'Data not available for this symbol' : msg}`);
+            } else {
+                logger.error(`❌ Binance API Error (${path}): Code: ${code}, Msg: ${msg}`);
+            }
         }
     } else {
         logger.error(`❌ Binance Network Error (${path}): ${err.message}`);
@@ -310,6 +320,178 @@ async function fetch24hTicker(symbol) {
 }
 
 /**
+ * Fetch real-time Open Interest for a futures symbol.
+ * @param {string} symbol
+ * @returns {Promise<{openInterest: number, symbol: string}|null>}
+ */
+async function fetchOpenInterest(symbol) {
+  try {
+    const futuresSymbol = toFuturesSymbol(symbol);
+    const data = await getWithFallback('/fapi/v1/openInterest', { symbol: futuresSymbol }, false, true);
+    return {
+      symbol: data.symbol,
+      openInterest: parseFloat(data.openInterest),
+    };
+  } catch (err) {
+    logger.debug(`fetchOpenInterest(${symbol}): ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Fetch historical Open Interest (trend) for a futures symbol.
+ * Returns an array ordered oldest-first so you can detect rising/falling OI.
+ * @param {string} symbol
+ * @param {'5m'|'15m'|'30m'|'1h'|'2h'|'4h'|'6h'|'12h'|'1d'} period
+ * @param {number} limit  Max 500
+ * @returns {Promise<Array<{timestamp: number, sumOpenInterest: number}>>}
+ */
+async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
+  try {
+    const futuresSymbol = toFuturesSymbol(symbol);
+    const data = await getWithFallback(
+      '/futures/data/openInterestHist',
+      { symbol: futuresSymbol, period, limit },
+      false,
+      true
+    );
+    if (!Array.isArray(data)) return [];
+    return data.map(d => ({
+      timestamp: d.timestamp,
+      sumOpenInterest: parseFloat(d.sumOpenInterest),
+      sumOpenInterestValue: parseFloat(d.sumOpenInterestValue),
+    }));
+  } catch (err) {
+    logger.debug(`fetchOpenInterestHistory(${symbol}): ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Fetch Global Long/Short Account Ratio.
+ * Measures overall retail crowd sentiment (Long accounts vs Short accounts).
+ * @param {string} symbol
+ * @param {'5m'|'15m'|'30m'|'1h'|'2h'|'4h'|'6h'|'12h'|'1d'} period
+ * @param {number} limit
+ * @returns {Promise<Array<{longShortRatio: number, longAccount: number, shortAccount: number}>>}
+ */
+async function fetchGlobalLongShortRatio(symbol, period = '1h', limit = 6) {
+  try {
+    const futuresSymbol = toFuturesSymbol(symbol);
+    const data = await getWithFallback(
+      '/futures/data/globalLongShortAccountRatio',
+      { symbol: futuresSymbol, period, limit },
+      false,
+      true
+    );
+    if (!Array.isArray(data)) return [];
+    return data.map(d => ({
+      timestamp: d.timestamp,
+      longShortRatio: parseFloat(d.longShortRatio),
+      longAccount: parseFloat(d.longAccount),
+      shortAccount: parseFloat(d.shortAccount),
+    }));
+  } catch (err) {
+    logger.debug(`fetchGlobalLongShortRatio(${symbol}): ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Fetch Top Trader Long/Short Account Ratio (smart money).
+ * These are institutional traders, more predictive than retail crowd.
+ * @param {string} symbol
+ * @param {'5m'|'15m'|'30m'|'1h'|'2h'|'4h'|'6h'|'12h'|'1d'} period
+ * @param {number} limit
+ * @returns {Promise<Array<{longShortRatio: number, longAccount: number, shortAccount: number}>>}
+ */
+async function fetchTopTraderLongShortRatio(symbol, period = '1h', limit = 6) {
+  try {
+    const futuresSymbol = toFuturesSymbol(symbol);
+    const data = await getWithFallback(
+      '/futures/data/topTraderLongShortAccountRatio',
+      { symbol: futuresSymbol, period, limit },
+      false,
+      true
+    );
+    if (!Array.isArray(data)) return [];
+    return data.map(d => ({
+      timestamp: d.timestamp,
+      longShortRatio: parseFloat(d.longShortRatio),
+      longAccount: parseFloat(d.longAccount),
+      shortAccount: parseFloat(d.shortAccount),
+    }));
+  } catch (err) {
+    logger.debug(`fetchTopTraderLongShortRatio(${symbol}): ${err.message}`);
+    return [];
+  }
+}
+
+/**
+ * Fetch L2 Order Book depth and compute bid/ask imbalance.
+ * High bid wall → bullish pressure. High ask wall → bearish pressure.
+ * @param {string} symbol
+ * @param {number} limit  5, 10, 20, 50, 100, 500, 1000
+ * @returns {Promise<{bidVolume: number, askVolume: number, imbalance: number, bias: 'BUY'|'SELL'|'NEUTRAL'}|null>}
+ */
+async function fetchOrderBookDepth(symbol, limit = 20) {
+  try {
+    const futuresSymbol = toFuturesSymbol(symbol);
+    const data = await getWithFallback(
+      '/fapi/v1/depth',
+      { symbol: futuresSymbol, limit },
+      false,
+      true
+    );
+    if (!data || !data.bids || !data.asks) return null;
+
+    const bidVolume = data.bids.reduce((sum, [, qty]) => sum + parseFloat(qty), 0);
+    const askVolume = data.asks.reduce((sum, [, qty]) => sum + parseFloat(qty), 0);
+    const total = bidVolume + askVolume;
+    // imbalance = +1 (all bids), -1 (all asks), 0 (neutral)
+    const imbalance = total > 0 ? (bidVolume - askVolume) / total : 0;
+    const bias = imbalance > 0.1 ? 'BUY' : imbalance < -0.1 ? 'SELL' : 'NEUTRAL';
+
+    return { bidVolume, askVolume, imbalance, bias };
+  } catch (err) {
+    logger.debug(`fetchOrderBookDepth(${symbol}): ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Fetch recent forced liquidation orders.
+ * Clusters of liqidations near price = potential reversal zone.
+ * @param {string} symbol
+ * @param {'LONG'|'SHORT'} [side]  Filter by side (optional)
+ * @param {number} limit  Max 100
+ * @returns {Promise<Array<{side: string, price: number, origQty: number, executedQty: number, time: number}>>}
+ */
+async function fetchLiquidationOrders(symbol, limit = 50) {
+  try {
+    const futuresSymbol = toFuturesSymbol(symbol);
+    const data = await getWithFallback(
+      '/fapi/v1/forceOrders',
+      { symbol: futuresSymbol, limit, autoCloseType: 'LIQUIDATION' },
+      false,
+      true
+    );
+    if (!Array.isArray(data)) return [];
+    return data.map(o => ({
+      side: o.side, // BUY=SHORT liquidated, SELL=LONG liquidated
+      price: parseFloat(o.price),
+      origQty: parseFloat(o.origQty),
+      executedQty: parseFloat(o.executedQty),
+      avgPrice: parseFloat(o.avgPrice || o.price),
+      time: o.time,
+    }));
+  } catch (err) {
+    logger.debug(`fetchLiquidationOrders(${symbol}): ${err.message}`);
+    return [];
+  }
+}
+
+/**
  * Fetch current funding rate for a futures symbol.
  *
  * @param {string} symbol
@@ -382,4 +564,11 @@ module.exports = {
   fetchFuturesBalance,
   fetchExchangeSpecs,
   toFuturesSymbol,
+  // Market Microstructure
+  fetchOpenInterest,
+  fetchOpenInterestHistory,
+  fetchGlobalLongShortRatio,
+  fetchTopTraderLongShortRatio,
+  fetchOrderBookDepth,
+  fetchLiquidationOrders,
 };

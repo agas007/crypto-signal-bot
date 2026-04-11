@@ -339,23 +339,32 @@ function initTelegram() {
   });
 
   // /watchlist command
+  // /watchlist command
   bot.onText(/\/watchlist/, (msg) => {
-    const watchlistData = tracker.getWatchlist();
+    const list = tracker.getWatchlist();
     
-    if (!watchlistData || watchlistData.length === 0) {
+    if (!list || list.length === 0) {
       return bot.sendMessage(msg.chat.id, '😴 *The High Alert Watchlist is empty.* \n_Wait for the next scan cycle..._');
     }
+    
+    const topList = list.slice(0, 10);
+    let report = `📡 *HIGH ALERT WATCHLIST (${topList.length})*\n_These setups were close but didn't meet 'Strict' criteria._\n\n`;
+    
+    topList.forEach((s, i) => {
+      const type = s.quality === 'WATCHLIST' ? '📋' : '🚫';
+      const rrRatio = s.riskReward?.rr ? s.riskReward.rr.toFixed(2) : 'N/A';
+      
+      report += `${i + 1}. ${type} *${s.symbol}* (${s.bias})\n` +
+                `• Score: \`${s.score}/100\` | R:R: \`${rrRatio}\`\n` +
+                `• Entry: \`${s.entry || 'N/A'}\`\n` +
+                `• Reason: _${s.reason || 'No specific reason'}_\n\n`;
+    });
+    
+    report += `🛡️ *Status:* Standby. Waiting for criteria to improve.`;
 
-    const report = watchlistData.map(r => {
-        const label = r.quality === 'WATCHLIST' ? '📋 *WATCHLIST*' : '🚫 *REJECTED*';
-        return `• *${r.symbol}* (Score ${r.score}) ${label}: _${r.reason}_`;
-    }).join('\n');
-
-    const fullMsg = `📡 *𝐑𝐞𝐬𝐮𝐥𝐭: 𝐇𝐢𝐠𝐡 𝐀𝐥𝐞𝐠𝐭 𝐖𝐚𝐭𝐜𝐡𝐥𝐢𝐬𝐭*\n\n` +
-                    `${report}\n\n` +
-                    `🛡️ *Status:* Standing by. Waiting for Market Regime shift or better RR Ratio.`;
-
-    bot.sendMessage(msg.chat.id, fullMsg, { parse_mode: 'Markdown' });
+    bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(() => {
+        bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
+    });
   });
 
   // /check [SYMBOL] command

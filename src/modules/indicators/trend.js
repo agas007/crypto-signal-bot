@@ -115,4 +115,74 @@ function analyzeTrend(candles, params = { fast: 9, slow: 21 }) {
   };
 }
 
-module.exports = { ema, analyzeTrend, classifyStrength };
+/**
+ * Detect EMA 13 & 21 signals as per mentor's strategy.
+ *
+ * Signals:
+ *  1. Price ABOVE both EMA13 & EMA21           → bullish bias
+ *  2. EMA13 crosses ABOVE EMA21 (Golden Cross)  → bullish entry trigger
+ *  3. Price BELOW both EMA13 & EMA21           → bearish bias
+ *  4. EMA13 crosses BELOW EMA21 (Death Cross)   → bearish entry trigger
+ *
+ * @param {Array<{close: number}>} candles
+ * @returns {{
+ *   ema13: number,
+ *   ema21: number,
+ *   priceAboveBoth: boolean,
+ *   priceBelowBoth: boolean,
+ *   priceBetween: boolean,
+ *   goldenCross: boolean,   EMA13 just crossed above EMA21
+ *   deathCross: boolean,    EMA13 just crossed below EMA21
+ *   ema13AboveEma21: boolean,  ongoing bullish ema alignment
+ *   bias: 'bullish'|'bearish'|'neutral'
+ * }}
+ */
+function detectEma1321(candles) {
+  const closes = candles.map(c => c.close);
+
+  if (closes.length < 21) {
+    return {
+      ema13: NaN, ema21: NaN,
+      priceAboveBoth: false, priceBelowBoth: false, priceBetween: false,
+      goldenCross: false, deathCross: false, ema13AboveEma21: false,
+      bias: 'neutral',
+    };
+  }
+
+  const ema13Series = ema(closes, 13);
+  const ema21Series = ema(closes, 21);
+
+  const lastIdx = closes.length - 1;
+  const currEma13 = ema13Series[lastIdx];
+  const currEma21 = ema21Series[lastIdx];
+  const prevEma13 = ema13Series[lastIdx - 1];
+  const prevEma21 = ema21Series[lastIdx - 1];
+  const currentPrice = closes[lastIdx];
+
+  const priceAboveBoth = currentPrice > currEma13 && currentPrice > currEma21;
+  const priceBelowBoth = currentPrice < currEma13 && currentPrice < currEma21;
+  const priceBetween = !priceAboveBoth && !priceBelowBoth;
+  const ema13AboveEma21 = currEma13 > currEma21;
+
+  // Cross detection: previous bar had opposite relationship
+  const goldenCross = prevEma13 <= prevEma21 && currEma13 > currEma21; // 13 crossed above 21
+  const deathCross = prevEma13 >= prevEma21 && currEma13 < currEma21;  // 13 crossed below 21
+
+  let bias = 'neutral';
+  if (priceAboveBoth && ema13AboveEma21) bias = 'bullish';
+  else if (priceBelowBoth && !ema13AboveEma21) bias = 'bearish';
+
+  return {
+    ema13: currEma13,
+    ema21: currEma21,
+    priceAboveBoth,
+    priceBelowBoth,
+    priceBetween,
+    goldenCross,
+    deathCross,
+    ema13AboveEma21,
+    bias,
+  };
+}
+
+module.exports = { ema, analyzeTrend, classifyStrength, detectEma1321 };

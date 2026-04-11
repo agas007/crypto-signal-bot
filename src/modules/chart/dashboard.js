@@ -20,6 +20,7 @@ async function generateAndSendDashboard(targetChatId = null) {
   let symbolCount = {};
   let bias = { long: 0, short: 0 };
   let solData = { volatility: 65, confluence: 50, rr: 50, confidence: 50 };
+  const uniqueScanned = new Set();
 
   lines.forEach(line => {
     const tsMatch = line.match(/\[(\d{2})-(\d{2})-(\d{4}) (\d{2}):(\d{2}):(\d{2})\]/);
@@ -31,7 +32,9 @@ async function generateAndSendDashboard(targetChatId = null) {
       const [_, symbol, phase, status, scoreStr, details] = parts;
       const score = parseInt(scoreStr);
 
-      if (phase === 'PRE-FILTER') { stats.scanned++; if (status === 'PASSED') stats.prePassed++; }
+      uniqueScanned.add(symbol);
+
+      if (phase === 'PRE-FILTER') { if (status === 'PASSED') stats.prePassed++; }
       else if (phase === 'STRATEGY') { if (status === 'PASSED') stats.stratPassed++; }
       else if (phase === 'AI') {
         if (status === 'APPROVED') stats.approved++;
@@ -50,6 +53,8 @@ async function generateAndSendDashboard(targetChatId = null) {
       }
     }
   });
+
+  stats.scanned = uniqueScanned.size;
 
   const top3 = Object.entries(symbolCount).sort((a,b) => b[1]-a[1]).slice(0,3).map(s => s[0]);
   const domBias = bias.long > bias.short ? 'LONG' : (bias.short > bias.long ? 'SHORT' : 'NEUTRAL');
