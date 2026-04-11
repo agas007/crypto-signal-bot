@@ -313,6 +313,9 @@ async function runScanCycle() {
             symbol: candidate.symbol, 
             score: candidate.score, 
             reason: refined.reason, 
+            bias: refined.bias && refined.bias !== 'NO TRADE' ? refined.bias : candidate.bias,
+            entry: refined.entry || candidate.entry,
+            riskReward: refined.riskReward || candidate.riskReward,
             quality: refined.quality || (isWatchlist ? 'WATCHLIST' : 'LOW') 
         });
         continue;
