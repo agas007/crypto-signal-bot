@@ -403,15 +403,21 @@ function initTelegram() {
         const evalResult = evaluateSignal(finalSym, mtfData, { 
             fundingRate, 
             accountBalance: config.strategy.accountBalance,
-            includeRejectionReason: true 
+            includeRejectionReason: true,
+            micro: {} // provide empty micro for check
         });
+
+        // evaluateSignal returns:
+        //   Success: full object { symbol, bias, score, ... }
+        //   Rejection: { signal: null, rejectionReason: '...' }
+        const isRejection = evalResult && evalResult.signal === null;
         
-        if (!evalResult || (evalResult && !evalResult.signal)) {
-            const reason = evalResult ? evalResult.rejectionReason : 'No clear technical bias';
+        if (!evalResult || isRejection) {
+            const reason = isRejection ? evalResult.rejectionReason : 'No clear technical bias';
             return bot.sendMessage(msg.chat.id, `🚫 *TECHNICAL REJECTION: ${finalSym}*\n_Alasan: ${reason}_`, { parse_mode: 'Markdown' });
         }
 
-        const signal = evalResult.signal;
+        const signal = evalResult;
 
         // Market Regime (BTC check)
         let btcTrend = 'NEUTRAL';
@@ -438,10 +444,38 @@ function initTelegram() {
         const techMsg = await bot.sendMessage(msg.chat.id, techReport, { parse_mode: 'Markdown' });
 
         const refined = await refineSignal(signal, { btcTrend });
+        
+        if (!refined || refined.bias === 'NO_TRADE' || refined.bias === 'NO TRADE' || refined.bias === 'WATCHLIST') {
+            const isWatchlist = refined && refined.bias === 'WATCHLIST';
+            const verdict = isWatchlist ? '📋 AI VERDICT: WATCHLIST' : '🚫 AI VERDICT: NO TRADE';
+            
+            // Clean AI reason from any markdown characters it might have sent automatically
+            const rawReason = (refined ? refined.reason : 'AI Gagal memberikan respon detail.').replace(/[*_`]/g, '');
+            const safeReason = escapeMarkdown(rawReason);
+            
+            let levelInfo = '';
+            if (refined && refined.entry) {
+                const rr = Math.abs(refined.take_profit - refined.entry) / Math.abs(refined.entry - refined.stop_loss);
+                levelInfo = `\n\n📐 *AI Potential Levels:*` +
+                            `\n• Entry: \`${refined.entry}\`` +
+                            `\n• TP: \`${refined.take_profit}\` | SL: \`${refined.stop_loss}\`` +
+                            `\n• AI R:R: \`${rr.toFixed(2)}\``;
+            }
 
-        if (!refined || refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE') {
-            const aiReason = refined ? `\n\n🧠 *AI REASONING:*\n_“${refined.reason}”_` : '\n\n⚠️ AI Gagal memberikan respon detail.';
-            return bot.sendMessage(msg.chat.id, `🚫 *AI VERDICT: NO TRADE* ${aiReason}`, { parse_mode: 'Markdown' });
+            const fullMsg = `*${verdict}* ${levelInfo}\n\n🧠 *AI REASONING:*\n_${safeReason}_`;
+            return bot.sendMessage(msg.chat.id, fullMsg, { parse_mode: 'Markdown' });
+        }
+
+        // Recalculate RR / Position Size for the refined levels
+        const { calculateRiskReward } = require('../strategy');
+        refined.riskReward = calculateRiskReward(refined.bias, refined.entry, signal.analysis.h4SR, {
+            accountBalance: config.strategy.accountBalance,
+            sl: refined.stop_loss,
+            tp: refined.take_profit
+        });
+
+        if (!refined.riskReward) {
+            return bot.sendMessage(msg.chat.id, `❌ *AI ERROR:* AI suggested invalid price levels that failed risk calculation.`, { parse_mode: 'Markdown' });
         }
 
         // Format and send as a full signal
