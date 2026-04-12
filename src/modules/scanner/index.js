@@ -422,11 +422,13 @@ async function runScanCycle() {
       logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${bestAlt.riskReward.rr.toFixed(2)})`);
       const entryPrice = bestAlt.riskReward ? bestAlt.riskReward.entry : (bestAlt.entry || 'N/A');
       const slPrice = bestAlt.riskReward ? bestAlt.riskReward.sl.toFixed(5) : 'N/A';
+      const tpPrice = bestAlt.riskReward ? bestAlt.riskReward.tp.toFixed(5) : 'N/A';
       
       await sendStatus(`💡 *BEST ALTERNATIVE: ${bestAlt.symbol}* (${bestAlt.bias})\n` +
                      `_No high-quality signals found. This setup is the best among secondary options._\n\n` +
                      `• *Score:* \`${bestAlt.score}/100\` | *R:R:* \`${bestAlt.riskReward.rr.toFixed(2)}\`\n` +
-                     `• *Entry:* \`${entryPrice}\` | *SL:* \`${slPrice}\` \n\n` +
+                     `• *Entry:* \`${entryPrice}\`\n` +
+                     `• *TP:* \`${tpPrice}\` | *SL:* \`${slPrice}\` \n\n` +
                      `🧠 *Reasoning:* ${bestAlt.reason}\n\n` +
                      `⚠️ _Note: Sinyal ini tidak masuk ke Active Trades (Pantau Manual)._`);
     } else {
