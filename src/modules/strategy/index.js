@@ -180,15 +180,25 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
   let sl, tp;
   let scaled = false;
 
-  // Calculate Risk in Dollar (5% of balance or $0.25 minimum)
-  const riskDollar = Math.max(ACCOUNT_BALANCE * RISK_PCT, config.strategy.minRiskDollar || 0.25);
+  // Rule 5: Volatility-based Position Sizing
+  // If ATR % is very high (> 3%), reduce risk by half to survive volatility
+  let riskFactor = 1.0;
+  if (atrDistPercent > 0.03) {
+      riskFactor = 0.5;
+      logger.info(`🛡️ High Volatility Detected (${(atrDistPercent*100).toFixed(1)}%). Reducing risk by 50%.`);
+  }
+
+  // Calculate Risk in Dollar (5% of balance * riskFactor or $0.25 minimum)
+  const riskDollar = Math.max(ACCOUNT_BALANCE * RISK_PCT * riskFactor, config.strategy.minRiskDollar || 0.25);
 
   if (bias === 'LONG') {
     // [CONSERVATIVE] SL at Wick Support, TP at Body Resistance
     const wickSupport = (levels && levels.wick) ? levels.wick.support : (typeof levels === 'number' ? levels : 0);
     const bodyResistance = (levels && levels.body) ? levels.body.resistance : (typeof options.resistance === 'number' ? options.resistance : Infinity);
 
-    sl = options.sl || Math.min(wickSupport * 0.998, entry - atrDist);
+    // Rule 4: SL Buffer (min 1.5x ATR)
+    const technicalSl = wickSupport * 0.998;
+    sl = options.sl || Math.min(technicalSl, entry - atrDist);
     tp = options.tp || (bodyResistance !== Infinity ? bodyResistance * 0.998 : entry * (1 + (entry - sl) * MIN_RR / entry));
     
     const slDistPercent = (entry - sl) / entry;
@@ -235,7 +245,9 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     const wickResistance = (levels && levels.wick) ? levels.wick.resistance : (typeof options.resistance === 'number' ? options.resistance : Infinity);
     const bodySupport = (levels && levels.body) ? levels.body.support : (typeof levels === 'number' ? levels : 0);
 
-    sl = options.sl || Math.max(wickResistance !== Infinity ? wickResistance * 1.002 : entry * 1.02, entry + atrDist);
+    // Rule 4: SL Buffer (min 1.5x ATR)
+    const technicalSl = wickResistance !== Infinity ? wickResistance * 1.002 : entry * 1.02;
+    sl = options.sl || Math.max(technicalSl, entry + atrDist);
     tp = options.tp || (bodySupport > 0 ? bodySupport * 1.002 : entry * (1 - (sl - entry) * MIN_RR / entry));
     
     const slDistPercent = (sl - entry) / entry;
@@ -276,24 +288,35 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
 }
 
 /**
- * Evaluate a symbol across multiple timeframes.
+ * Evaluate a symbol across multiple timeframes with Weighted Scoring v4.5.1.
+ * Total Pts: 100 (Trend 30, Structure 20, Indicators 15, Micro 10, Retest 15, RR 10)
+ * Includes MTA (M15 timing) and Candlestick Patterns.
  */
 function evaluateSignal(symbol, data, options = {}) {
-  const { D1, H4, H1 } = data;
+  const { D1, H4, H1, M15 } = data;
   const fundingRate = options.fundingRate || 0;
   const micro = options.micro || {};
   const emaParams = config.indicators.ema;
   const stochParams = config.indicators.stochastic;
 
-  // ─── Analysis ──────────────────────────────────────────
+  // ─── 1. Technical Analysis ──────────────────────────────
   const d1Trend = analyzeTrend(D1, emaParams);
   const h4SR = findSupportResistance(H4, config.indicators.swingLookback);
-  const h4Stoch = calculateStochastic(H4, stochParams);
   const h4Trend = analyzeTrend(H4, emaParams);
   const h1Trend = analyzeTrend(H1, emaParams);
+  const m15Trend = M15 ? analyzeTrend(M15, emaParams) : null;
+  
   const h1Structure = analyzeStructure(H1);
   const h1Stoch = calculateStochastic(H1, stochParams);
   const h1Spike = detectAtSpike(H1, 14);
+  const ema1321 = detectEma1321(H1);
+  const h1OB = detectOrderBlocks(H1, { impulseMultiplier: 1.8, proximityPct: 0.025 });
+  const h4OB = detectOrderBlocks(H4, { impulseMultiplier: 1.8, proximityPct: 0.03 });
+
+  // Candlestick Analysis
+  const { detectEngulfing, detectPinBar } = require('../indicators');
+  const h1Engulfing = detectEngulfing(H1);
+  const h1Pin = detectPinBar(H1);
 
   const breakoutLevel = d1Trend.direction === 'bullish' ? h4SR.wick.support : h4SR.wick.resistance;
   const retestStatus = detectRetest(H1, breakoutLevel, d1Trend.direction === 'bullish' ? 'LONG' : 'SHORT');
@@ -302,247 +325,116 @@ function evaluateSignal(symbol, data, options = {}) {
   const distToWickResistance = h4SR.wick.resistance !== Infinity ? ((h4SR.wick.resistance - h4SR.currentPrice) / h4SR.currentPrice) * 100 : Infinity;
   const pricePosition = classifyPricePosition(distToWickSupport, distToWickResistance);
 
-  const analysis = { d1Trend, h4SR, h4Stoch, h4Trend, h1Trend, h1Structure, h1Stoch, pricePosition, retestStatus };
+  const atr = h1Spike.atr;
+  const atrPercent = (atr / h4SR.currentPrice) * 100;
 
-  const globalTrend = d1Trend.direction !== 'neutral' ? d1Trend : h4Trend;
-  if (globalTrend.direction === 'neutral') {
-    return options.includeRejectionReason ? { signal: null, rejectionReason: 'Neutral HTF trend (D1 & H4)' } : null;
-  }
-  
-  const atr = h1Spike.atr; // Access ATR from the existing h1Spike analysis
-
+  // ─── 2. Initialize Scores ──────────────────────────────
+  let longScore = 0;
+  let shortScore = 0;
   const longReasons = [];
   const shortReasons = [];
   const warnings = [];
   const tags = [];
-  let longScore = 0;
-  let shortScore = 0;
 
-  // 1. D1 Trend alignment (Rule 5: Hard Filter)
+  // ─── CATEGORY 1: Macro Trend (D1/H4) & Timing (M15) (Max: 30 pts) ───
   if (d1Trend.direction === 'bullish') {
-    longScore += d1Trend.strengthLabel === 'strong' ? 25 : d1Trend.strengthLabel === 'moderate' ? 20 : 10;
-    longReasons.push(`D1 trend bullish (${d1Trend.strengthLabel})`);
+    longScore += d1Trend.strengthLabel === 'strong' ? 15 : 10;
+    longReasons.push(`D1 trend bullish (${d1Trend.strengthLabel}) (+15)`);
   } else if (d1Trend.direction === 'bearish') {
-    longScore -= 100; // Rule 5: Hard reject LONG against D1 Bearish
+    shortScore += d1Trend.strengthLabel === 'strong' ? 15 : 10;
+    shortReasons.push(`D1 trend bearish (${d1Trend.strengthLabel}) (+15)`);
   }
 
-  // 2. H4 Trend alignment (0-15 pts)
   if (h4Trend.direction === 'bullish') {
-    longReasons.push(`H4 bullish (${h4Trend.strengthLabel})`);
-    longScore += 15;
-  }
-
-  // 3. H4 Price position (0-20 pts)
-  if (pricePosition === 'near_support') {
-    const supportVal = (h4SR.wick && typeof h4SR.wick.support === 'number') ? h4SR.wick.support.toFixed(4) : 'N/A';
-    const distVal = typeof distToWickSupport === 'number' ? distToWickSupport.toFixed(2) : 'N/A';
-    longReasons.push(`H4 near wick support @ ${supportVal} (${distVal}%)`);
-    longScore += 20;
-  } else if (distToWickSupport < 6) {
-    longScore += 8;
-  }
-
-  // 4. H1 Structure (0-30 pts)
-  if (h1Structure.structure === 'bullish') {
-    longScore += 15;
-    longReasons.push(`H1 bullish structure`);
-  }
-  if (h1Structure.bos && h1Structure.bosType === 'bullish_bos') {
-    longScore += 15;
-    longReasons.push(`H1 bullish Break of Structure (BoS)`);
-  }
-
-  // 5. Stochastic (0-15 pts)
-  if (h4Stoch.signal === 'oversold') longScore += 10;
-  if (h1Stoch.signal === 'oversold') longScore += 5;
-
-  // 6. Retest Confirmation (0-10 pts)
-  if (retestStatus === 'CONFIRMED') {
     longScore += 10;
-    longReasons.push('H1 retest confirmed at support');
+    longReasons.push(`H4 trend bullish (+10)`);
+  } else if (h4Trend.direction === 'bearish') {
+    shortScore += 10;
+    shortReasons.push(`H4 trend bearish (+10)`);
   }
 
-  // 6. Funding Rate Penalty (Crowded Trade Protection)
-  if (fundingRate > 0.03) {
-    longScore -= 15;
-    tags.push('HIGH FUNDING: LONG TRAP RISK');
-    warnings.push(`⚠️ Funding Rate tinggi (${(fundingRate*100).toFixed(3)}%) - Risiko long squeeze.`);
+  // MTA Timing (M15)
+  if (m15Trend) {
+    if (m15Trend.direction === 'bullish') {
+      longScore += 5;
+      longReasons.push(`M15 timing confirmation (bullish) (+5)`);
+    } else if (m15Trend.direction === 'bearish') {
+      shortScore += 5;
+      shortReasons.push(`M15 timing confirmation (bearish) (+5)`);
+    }
   }
 
-  // ═══════════════════════════════════════════════════════
-  // SHORT SCORING
-  // ═══════════════════════════════════════════════════════
-  if (d1Trend.direction === 'bearish') {
-    shortScore += 25;
-    shortReasons.push(`D1 trend bearish`);
-  } else if (d1Trend.direction === 'bullish') {
-    shortScore -= 100; // Rule 5: Hard reject SHORT against D1 Bullish
+  // Trend Conflict Kill-switch
+  const trendConflict = d1Trend.direction !== 'neutral' && h4Trend.direction !== 'neutral' && d1Trend.direction !== h4Trend.direction;
+  if (trendConflict) {
+    longScore -= 20;
+    shortScore -= 20;
+    warnings.push(`⚠️ Trend Conflict (D1 ${d1Trend.direction} vs H4 ${h4Trend.direction}). Low conviction.`);
+    tags.push('CONFLICT');
   }
 
-  if (h4Trend.direction === 'bearish') {
-    shortScore += 15;
-    shortReasons.push(`H4 trend bearish (${h4Trend.strengthLabel})`);
-  }
-  if (pricePosition === 'near_resistance') {
-    const resVal = (h4SR.wick && typeof h4SR.wick.resistance === 'number') ? h4SR.wick.resistance.toFixed(4) : 'N/A';
-    const distVal = typeof distToWickResistance === 'number' ? distToWickResistance.toFixed(2) : 'N/A';
-    shortReasons.push(`H4 near wick resistance @ ${resVal} (${distVal}%)`);
-    shortScore += 20;
-  }
-  if (h1Structure.structure === 'bearish') {
-    shortScore += 15;
-    shortReasons.push(`H1 bearish structure`);
-  }
-  if (h1Structure.bos && h1Structure.bosType === 'bearish_bos') {
-    shortScore += 15;
-    shortReasons.push(`H1 bearish Break of Structure (BoS)`);
-  }
-  
-  if (fundingRate < -0.03) {
-    shortScore -= 15;
-    tags.push('LOW FUNDING: SHORT SQUEEZE RISK');
-    warnings.push(`⚠️ Funding Rate sangat negatif (${(fundingRate*100).toFixed(3)}%) - Risiko short squeeze.`);
+  // ─── CATEGORY 2: H1 Structure & Candles (Max: 20 pts) ───
+  if (h1Structure.structure === 'bullish') {
+    longScore += 10;
+    longReasons.push(`H1 bullish structure (Higher Lows) (+10)`);
+  } else if (h1Structure.structure === 'bearish') {
+    shortScore += 10;
+    shortReasons.push(`H1 bearish structure (Lower Highs) (+10)`);
   }
 
-  // 5. Stochastic (0-15 pts)
-  if (h4Stoch.signal === 'overbought') shortScore += 10;
-  if (h1Stoch.signal === 'overbought') shortScore += 5;
-
-  // ══════════════════════════════════════
-  // H1 MENTOR SIGNALS: EMA 13/21, Stoch Cross, Divergence, Order Block
-  // ══════════════════════════════════════
-  const ema1321 = detectEma1321(H1);
-  const h1StochCross = detectStochCross(h1Stoch.kSeries, h1Stoch.dSeries);
-  const h1Divergence = detectDivergence(H1, h1Stoch.kSeries, 14);
-  const h4OB = detectOrderBlocks(H4, { impulseMultiplier: 1.8, proximityPct: 0.03 });
-  const h1OB = detectOrderBlocks(H1, { impulseMultiplier: 1.8, proximityPct: 0.025 });
-
-  // ─── A. EMA 13/21 (price above both + golden cross) ───
-  // Mentor: "Above 13 & 21 EMA" + "13 & 21 EMA Cross" = BUY
-  if (ema1321.priceAboveBoth) {
-    longScore += 12;
-    longReasons.push(`H1 price above EMA13(${ema1321.ema13.toFixed(4)}) & EMA21(${ema1321.ema21.toFixed(4)})`);
-  } else if (ema1321.priceBelowBoth) {
-    shortScore += 12;
-    shortReasons.push(`H1 price below EMA13(${ema1321.ema13.toFixed(4)}) & EMA21(${ema1321.ema21.toFixed(4)})`);
+  // Candlestick Bonus at Key Levels
+  if (pricePosition !== 'middle') {
+    if (longScore > shortScore && (h1Engulfing.bull || h1Pin.bullPin)) {
+      longScore += 10;
+      longReasons.push(`🕯️ Bullish candle pattern at key level (+10)`);
+      tags.push('PA CONFIRMED');
+    } else if (shortScore > longScore && (h1Engulfing.bear || h1Pin.bearPin)) {
+      shortScore += 10;
+      shortReasons.push(`🕯️ Bearish candle pattern at key level (+10)`);
+      tags.push('PA CONFIRMED');
+    }
   }
 
-  if (ema1321.goldenCross) {
-    longScore += 18;  // Strong signal: fresh golden cross
-    longReasons.push(`✨ H1 EMA13/21 Golden Cross (13 crossed above 21)`);
-  } else if (ema1321.ema13AboveEma21) {
-    longScore += 6;   // Ongoing bullish EMA alignment
-    longReasons.push(`H1 EMA13 above EMA21 (bullish alignment)`);
+  // ─── CATEGORY 3: Indicators (Max: 15 pts) ───
+  if (ema1321.ema13AboveEma21) {
+    longScore += 10;
+    longReasons.push(`H1 EMA13 > EMA21 alignment (+10)`);
+  } else {
+    shortScore += 10;
+    shortReasons.push(`H1 EMA13 < EMA21 alignment (+10)`);
   }
 
-  if (ema1321.deathCross) {
-    shortScore += 18;
-    shortReasons.push(`✨ H1 EMA13/21 Death Cross (13 crossed below 21)`);
-  } else if (!ema1321.ema13AboveEma21) {
-    shortScore += 6;
-    shortReasons.push(`H1 EMA13 below EMA21 (bearish alignment)`);
+  // Low Volatility Filter
+  const minVol = config.filters.minAtrPercent || 0.5;
+  if (atrPercent < minVol) {
+    longScore -= 10;
+    shortScore -= 10;
+    warnings.push(`✋ Market flat/sideways (ATR: ${atrPercent.toFixed(2)}%). Avoid entries.`);
+  } else {
+    longScore += 5;
+    shortScore += 5;
   }
 
-  // ─── B. Stochastic Cross ───
-  // Mentor: "Stochastic Cross" = BUY
-  if (h1StochCross.crossBullish) {
-    const zoneBonus = h1StochCross.crossInZone ? 10 : 5; // Cross in oversold = stronger
-    longScore += zoneBonus;
-    longReasons.push(`H1 Stoch %K crossed above %D${h1StochCross.crossInZone ? ' (in oversold zone — HIGH CONF)' : ''}`);
-  }
-  if (h1StochCross.crossBearish) {
-    const zoneBonus = h1StochCross.crossInZone ? 10 : 5;
-    shortScore += zoneBonus;
-    shortReasons.push(`H1 Stoch %K crossed below %D${h1StochCross.crossInZone ? ' (in overbought zone — HIGH CONF)' : ''}`);
-  }
-
-  // ─── C. Divergence ───
-  // Mentor: "Bullish Divergence" = BUY
-  if (h1Divergence.bullishDiv) {
-    longScore += 15;
-    longReasons.push(`🔍 H1 Bullish Divergence: ${h1Divergence.detail}`);
-  }
-  if (h1Divergence.hiddenBullishDiv) {
-    longScore += 8;
-    longReasons.push(`🔍 H1 Hidden Bullish Divergence (trend continuation)`);
-  }
-  if (h1Divergence.bearishDiv) {
-    shortScore += 15;
-    shortReasons.push(`🔍 H1 Bearish Divergence: ${h1Divergence.detail}`);
-  }
-  if (h1Divergence.hiddenBearishDiv) {
-    shortScore += 8;
-    shortReasons.push(`🔍 H1 Hidden Bearish Divergence (trend continuation)`);
-  }
-
-  // ─── D. Order Block ───
-  // Mentor: "Approaching Order Block" = buy consideration
-  // H4 OB (bigger, more significant)
-  if (h4OB.inBullishOB || h4OB.approachingBullishOB) {
-    const strength = h4OB.approachingBullishOB?.strength || 1;
-    const pts = h4OB.inBullishOB ? 20 : 14;
-    longScore += Math.min(pts, pts * Math.min(strength / 2, 1.5));
-    const zone = h4OB.approachingBullishOB;
-    longReasons.push(
-      `🟦 H4 ${h4OB.inBullishOB ? 'IN' : 'Approaching'} Bullish OB [${zone?.bottom?.toFixed(4)}–${zone?.top?.toFixed(4)}] (strength: ${zone?.strength?.toFixed(1)}x ATR)`
-    );
-    tags.push(h4OB.inBullishOB ? 'H4 OB ENTRY ZONE' : 'H4 OB APPROACHING');
-  }
-  if (h4OB.inBearishOB || h4OB.approachingBearishOB) {
-    const strength = h4OB.approachingBearishOB?.strength || 1;
-    const pts = h4OB.inBearishOB ? 20 : 14;
-    shortScore += Math.min(pts, pts * Math.min(strength / 2, 1.5));
-    const zone = h4OB.approachingBearishOB;
-    shortReasons.push(
-      `🟥 H4 ${h4OB.inBearishOB ? 'IN' : 'Approaching'} Bearish OB [${zone?.top?.toFixed(4)}–${zone?.bottom?.toFixed(4)}] (strength: ${zone?.strength?.toFixed(1)}x ATR)`
-    );
-    tags.push(h4OB.inBearishOB ? 'H4 OB SELL ZONE' : 'H4 OB SELL APPROACHING');
-  }
-
-  // H1 OB (more entry-specific)
-  if (h1OB.inBullishOB || h1OB.approachingBullishOB) {
-    longScore += h1OB.inBullishOB ? 12 : 8;
-    const zone = h1OB.approachingBullishOB;
-    longReasons.push(
-      `🟦 H1 ${h1OB.inBullishOB ? 'IN' : 'Approaching'} Bullish OB [${zone?.bottom?.toFixed(4)}–${zone?.top?.toFixed(4)}]`
-    );
-  }
-  if (h1OB.inBearishOB || h1OB.approachingBearishOB) {
-    shortScore += h1OB.inBearishOB ? 12 : 8;
-    const zone = h1OB.approachingBearishOB;
-    shortReasons.push(
-      `🟥 H1 ${h1OB.inBearishOB ? 'IN' : 'Approaching'} Bearish OB [${zone?.bottom?.toFixed(4)}–${zone?.top?.toFixed(4)}]`
-    );
-  }
-
-  // ══════════════════════════════════════
-  // MARKET MICROSTRUCTURE SCORING (up to +/-50 pts)
-  // ══════════════════════════════════════
+  // ─── CATEGORY 4: Micro Structure (Max: 10 pts) ───
   const microResult = analyzeMicrostructure(micro, h4SR.currentPrice);
-
-  longScore += microResult.longBonus;
-  shortScore += microResult.shortBonus;
-  longReasons.push(...microResult.reasons.long);
-  shortReasons.push(...microResult.reasons.short);
+  longScore += Math.min(10, microResult.longBonus);
+  shortScore += Math.min(10, microResult.shortBonus);
+  longReasons.push(...microResult.reasons.long.map(r => `${r} (Micro)`));
+  shortReasons.push(...microResult.reasons.short.map(r => `${r} (Micro)`));
   tags.push(...microResult.tags);
 
-  // ═══════════════════════════════════════════════════════
-  // PICK BIAS + FINAL REFINEMENT
-  // ═══════════════════════════════════════════════════════
-  // Pick Bias
-  // Rule 4: Ambiguitas check (lebih besar, bukan lebih besar sama dengan)
-  if (longScore === shortScore && longScore > 0) {
-    return options.includeRejectionReason ? { signal: null, rejectionReason: 'Neutral conflict (LongScore == ShortScore)' } : null;
-  }
-  
-  let bias = longScore > shortScore ? 'LONG' : 'SHORT';
-  let score = longScore > shortScore ? longScore : shortScore;
-  let reasons = longScore > shortScore ? longReasons : shortReasons;
-
-  if (score < 30) {
-    return options.includeRejectionReason ? { signal: null, rejectionReason: `Score too low (${score}/30)` } : null;
+  // ─── CATEGORY 5: Breakout & Retest (Max: 15 pts) ───
+  if (retestStatus === 'CONFIRMED') {
+    longScore += 15;
+    longReasons.push(`H1 breakout retest confirmed (+15)`);
+  } else if (h1OB.inBullishOB || h1OB.inBearishOB || h4OB.inBullishOB || h4OB.inBearishOB) {
+    longScore += 10;
+    shortScore += 10;
+    longReasons.push(`Inside Order Block zone (internal retest) (+10)`);
   }
 
+  // ─── CATEGORY 6: R:R & Risk (Max: 10 pts) ───
+  const bias = longScore > shortScore ? 'LONG' : 'SHORT';
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR, { 
     atr,
     accountBalance: options.accountBalance || config.strategy.accountBalance,
@@ -550,61 +442,65 @@ function evaluateSignal(symbol, data, options = {}) {
     minNotional: options.minNotional
   });
 
-  if (!riskReward) {
-      const wickSup = (h4SR.wick && typeof h4SR.wick.support === 'number') ? h4SR.wick.support : 0;
-      const wickRes = (h4SR.wick && typeof h4SR.wick.resistance === 'number') ? h4SR.wick.resistance : Infinity;
-
-      const slDist = bias === 'LONG' 
-        ? (h4SR.currentPrice - (wickSup * 0.998)) / h4SR.currentPrice
-        : (wickRes !== Infinity ? ((wickRes * 1.002) - h4SR.currentPrice) / h4SR.currentPrice : 0.02);
-      
-      const balance = options.accountBalance || config.strategy.accountBalance;
-      const minOrderValue = options.minNotional || 5.0;
-      const marginForMin = minOrderValue / 20;
-
-      let reason = 'Technical levels (SL/TP) invalid or too tight';
-      if (slDist > config.strategy.maxSlAllowed) reason = `SL distance too wide (${(slDist*100).toFixed(1)}% > ${(config.strategy.maxSlAllowed*100).toFixed(0)}%)`;
-      else if (marginForMin > balance) reason = `Insufficient balance to meet exchange MIN_NOTIONAL ($${minOrderValue})`;
-      
-      return options.includeRejectionReason ? { signal: null, rejectionReason: reason } : null;
+  if (riskReward) {
+    if (riskReward.rr >= 3.0) {
+      longScore += 10;
+      shortScore += 10;
+      longReasons.push(`Elite R:R Ratio (${riskReward.rr.toFixed(1)}) (+10)`);
+    } else if (riskReward.rr >= 2.0) {
+      longScore += 5;
+      shortScore += 5;
+      longReasons.push(`Good R:R Ratio (${riskReward.rr.toFixed(1)}) (+5)`);
+    } else {
+        // Rule: R:R must be 2.0+ or it's a weak setup
+        longScore -= 15;
+        shortScore -= 15;
+    }
   }
-  // Verticality & Mean Reversion Protection
+
+  // ─── FINAL SELECTION ──────────────────────────────────
+  let finalScore = longScore > shortScore ? longScore : shortScore;
+  let reasons = longScore > shortScore ? longReasons : shortReasons;
+  
+  if (finalScore < 30) {
+    return options.includeRejectionReason ? { signal: null, rejectionReason: `Weighted score too low (${finalScore}/100)` } : null;
+  }
+
+  if (!riskReward || riskReward.rr < 1.8) {
+      return options.includeRejectionReason ? { signal: null, rejectionReason: `Poor R:R Ratio (${riskReward ? riskReward.rr.toFixed(1) : 'N/A'}). Need min 2.0.` } : null;
+  }
+
   const distFromLvl = bias === 'LONG' ? distToWickSupport : distToWickResistance;
   if (distFromLvl > 5.0) {
-    score -= 10;
-    tags.push('WAIT FOR RETEST');
-    warnings.push(`✋ Price is floating ${distFromLvl.toFixed(1)}% away from key level. Entry is currently 'vertical'.`);
+    finalScore -= 10;
+    tags.push('VERTICAL ENTRY');
+    warnings.push(`✋ Price is ${distFromLvl.toFixed(1)}% away from key level (FOMO).`);
   }
 
   // God-Candle Penalty (ATR Spike)
   if (h1Spike.spike) {
-    score -= 20;
+    finalScore -= 20;
     tags.push('GOD-CANDLE ALERT');
     warnings.push(`☄️ Abnormal H1 ATR Spike (${h1Spike.ratio.toFixed(1)}x average). Avoid FOMO at price peaks.`);
   }
 
-  // Trading Type Classification logic for AI
-  const isRetested = distFromLvl < 4.0;
-  const tradingType = isRetested ? 'SWING / DAY TRADING' : 'MOMENTUM SCALP';
 
   // Rule 6: Technical score >= 70% first. AI is final sanity check.
   // Rule 3: Hanya hitung POSITIVE reasons untuk isStrict (menghindari false positive dari warnings)
-  const isStrict = score >= 70 && reasons.length >= 3;
+  const isStrict = finalScore >= 65 && reasons.length >= 3;
+  const tradingType = distFromLvl < 4.0 ? 'SWING / DAY TRADING' : 'MOMENTUM SCALP';
+
+  const h4Stoch = calculateStochastic(H4, stochParams);
 
   return {
     symbol,
     bias,
-    score,
+    score: finalScore,
     reasons,
     warnings,
     tags,
     analysis: {
-      ...analysis,
-      ema1321,
-      h1StochCross,
-      h1Divergence,
-      h4OB: { approachingBullishOB: h4OB.approachingBullishOB, approachingBearishOB: h4OB.approachingBearishOB, inBullishOB: h4OB.inBullishOB, inBearishOB: h4OB.inBearishOB },
-      h1OB: { approachingBullishOB: h1OB.approachingBullishOB, approachingBearishOB: h1OB.approachingBearishOB, inBullishOB: h1OB.inBullishOB, inBearishOB: h1OB.inBearishOB },
+      d1Trend, h4SR, h4Trend, h1Trend, m15Trend, h1Structure, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
     },
     riskReward,
     isStrict,

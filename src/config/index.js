@@ -33,6 +33,8 @@ const config = {
     D1: '1d',
     H4: '4h',
     H1: '1h',
+    M30: '30m',
+    M15: '15m',
   },
 
   // Indicator parameters

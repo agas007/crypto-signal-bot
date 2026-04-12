@@ -411,8 +411,27 @@ async function runScanCycle() {
   logger.info(`🏁 Cycle: ${sentCount} signals sent, ${finalPool.length - sentCount} rejected by AI, ${elapsed}s`);
   logger.info('═══════════════════════════════════════════════');
 
-  if (sentCount === 0 && finalPool.length > 0) {
-    await sendStatus('🛡️ *Scan Cycle:* Candidates were found but rejected by AI validation (Detailed audit logged).');
+  if (sentCount === 0 && rejections.length > 0) {
+    // Pick BEST ALTERNATIVE (Highest score with RR > 1.5)
+    // We filter out any rejected ones that have invalid riskReward object
+    const bestAlt = rejections
+      .filter(r => r.riskReward && r.riskReward.rr >= 1.5)
+      .sort((a, b) => b.score - a.score)[0];
+
+    if (bestAlt) {
+      logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${bestAlt.riskReward.rr.toFixed(2)})`);
+      const entryPrice = bestAlt.riskReward ? bestAlt.riskReward.entry : (bestAlt.entry || 'N/A');
+      const slPrice = bestAlt.riskReward ? bestAlt.riskReward.sl.toFixed(5) : 'N/A';
+      
+      await sendStatus(`💡 *BEST ALTERNATIVE: ${bestAlt.symbol}* (${bestAlt.bias})\n` +
+                     `_No high-quality signals found. This setup is the best among secondary options._\n\n` +
+                     `• *Score:* \`${bestAlt.score}/100\` | *R:R:* \`${bestAlt.riskReward.rr.toFixed(2)}\`\n` +
+                     `• *Entry:* \`${entryPrice}\` | *SL:* \`${slPrice}\` \n\n` +
+                     `🧠 *Reasoning:* ${bestAlt.reason}\n\n` +
+                     `⚠️ _Note: Sinyal ini tidak masuk ke Active Trades (Pantau Manual)._`);
+    } else {
+      await sendStatus('🛡️ *Scan Cycle:* Candidates were found but rejected by AI and failed R:R floor (1.5). No trade recommended.');
+    }
   }
 
   // ─── Auto Dashboard Update ───
@@ -488,21 +507,31 @@ async function checkActiveTrades() {
           tracker._save();
       }
 
-      // 2. Break-Even Check (Move SL to Entry if 50% of TP distance is reached)
-      const totalTpDist = Math.abs(trade.take_profit - trade.entry);
-      const currentProgress = Math.abs(currentPrice - trade.entry);
-      const progressPercent = (currentProgress / totalTpDist) * 100;
+      // 2. Dynamic SL Management (BE & Trailing)
       const isInProfit = trade.bias === 'LONG' ? currentPrice > trade.entry : currentPrice < trade.entry;
-
-      if (progressPercent >= 50.0 && isInProfit && !trade.slMovedToEntry) {
-          trade.stop_loss = trade.entry; // Move SL to Entry
-          trade.slMovedToEntry = true;
+      
+      if (isInProfit) {
+          // A. Move SL to Entry (Breakeven) at 1.5% Profit
+          if (movePercent >= 1.5 && !trade.slMovedToEntry) {
+              trade.stop_loss = trade.entry;
+              trade.slMovedToEntry = true;
+              await sendStatus(`🛡️ *PROTECT PROFIT: MOVE SL TO ENTRY* \n\n` +
+                             `• *Symbol:* \`${trade.symbol}\`\n` +
+                             `• *Profit:* \`+${movePercent.toFixed(2)}%\`\n` +
+                             `• *Keterangan:* Harga sudah bergerak 1.5%. SL otomatis digeser ke Entry [\`${trade.entry}\`] untuk mengunci modal.`);
+              tracker._save();
+          }
           
-          await sendStatus(`🛡️ *PROTECT PROFIT: MOVE SL TO ENTRY* \n\n` +
-                         `• *Symbol:* \`${trade.symbol}\`\n` +
-                         `• *Progress:* \`${progressPercent.toFixed(1)}%\` nuju TP\n` +
-                         `• *Keterangan:* Harga sudah jalan setengah jalan. SL otomatis digeser ke Entry [\`${trade.entry}\`] untuk menjaga modal.`);
-          tracker._save();
+          // B. Trailing Stop Alert at 3% Profit
+          if (movePercent >= 3.0 && !trade.trailingAlertSent) {
+              const newSl = trade.bias === 'LONG' ? trade.entry * 1.01 : trade.entry * 0.99;
+              trade.trailingAlertSent = true;
+              await sendStatus(`📈 *PROFIT SECURED: TRAILING STOP* \n\n` +
+                             `• *Symbol:* \`${trade.symbol}\`\n` +
+                             `• *Current Profit:* \`+${movePercent.toFixed(2)}%\`\n` +
+                             `• *Rekomendasi:* Geser SL ke profit zone (Entry + 1%) di [\`${newSl.toFixed(5)}\`] untuk mengamankan cuan.`);
+              tracker._save();
+          }
       }
 
       // 3. SL/TP Check (including Wick Detection)

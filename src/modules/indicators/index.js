@@ -25,4 +25,6 @@ module.exports = {
   detectRetest,
   // Order Block
   detectOrderBlocks,
+  // Candlestick
+  ...require('./candlestick'),
 };
