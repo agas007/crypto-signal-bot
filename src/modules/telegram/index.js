@@ -71,6 +71,52 @@ function initTelegram() {
   bot.onText(/\/help/, helpHandler);
   bot.onText(/\/commands/, helpHandler);
 
+  // /ping - Diagnostic command
+  bot.onText(/\/ping/, async (msg) => {
+    const chatId = msg.chat.id;
+    const start = Date.now();
+    const { fetchFuturesBalance, fetchTopPairs } = require('../data/binance');
+    const axios = require('axios');
+
+    try {
+        await bot.sendMessage(chatId, '🛰️ *Testing connectivity to Binance...* ⏳', { parse_mode: 'Markdown' });
+        
+        let ipInfo = 'Unknown';
+        try {
+            const ipRes = await axios.get('https://api.ipify.org?format=json', { timeout: 3000 });
+            ipInfo = ipRes.data.ip;
+        } catch (e) { /* ignore */ }
+
+        const [balance, pairs] = await Promise.all([
+            fetchFuturesBalance(),
+            fetchTopPairs(1)
+        ]);
+
+        const latency = Date.now() - start;
+        const msgText = `📡 *NETWORK DIAGNOSTIC*\n\n` +
+            `✅ *Connectivity:* Stable\n` +
+            `⚡ *Latency:* \`${latency}ms\`\n` +
+            `📍 *Outbound IP:* \`${ipInfo}\` (Singapore Cluster)\n\n` +
+            `💰 *Binance Balance:* \`${balance > 0 ? '$' + balance.toFixed(2) : 'No Permission / 0.00'}\`\n` +
+            `📊 *Market Access:* \`${pairs.length > 0 ? 'OK' : 'FAIL'}\`\n\n` +
+            `_Bot is successfully communicating with Binance API._`;
+
+        await bot.sendMessage(chatId, msgText, { parse_mode: 'Markdown' });
+    } catch (err) {
+        let errType = 'UNKNOWN';
+        if (err.message.includes('451')) errType = 'RESTRICTED COUNTRY (451)';
+        else if (err.message.includes('401')) errType = 'INVALID API KEY (401)';
+        else if (err.code === 'ENOTFOUND' || err.code === 'ETIMEDOUT') errType = 'NETWORK DOWN / DNS FAIL';
+
+        await bot.sendMessage(chatId, `❌ *DIAGNOSTIC FAILED*\n\n` +
+            `🔴 *Error Type:* \`${errType}\`\n` +
+            `📝 *Detail:* \`${err.message}\`\n\n` +
+            `• _Cek koneksi internet server lo_\n` +
+            `• _Cek apakah Env Variables sudah diisi di Railway_\n` +
+            `• _Pastiin server TIDAK di Amerika Serikat (US)_`);
+    }
+  });
+
   bot.onText(/\/status/, (msg) => {
     const uptimeSec = Math.floor((Date.now() - startTime) / 1000);
     const hrs = Math.floor(uptimeSec / 3600);
