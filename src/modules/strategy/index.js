@@ -487,7 +487,7 @@ function evaluateSignal(symbol, data, options = {}) {
 
   // Rule 6: Technical score >= 70% first. AI is final sanity check.
   // Rule 3: Hanya hitung POSITIVE reasons untuk isStrict (menghindari false positive dari warnings)
-  const isStrict = finalScore >= 65 && reasons.length >= 3;
+  const isStrict = finalScore >= 55 && reasons.length >= 3;
   const tradingType = distFromLvl < 4.0 ? 'SWING / DAY TRADING' : 'MOMENTUM SCALP';
 
   const h4Stoch = calculateStochastic(H4, stochParams);

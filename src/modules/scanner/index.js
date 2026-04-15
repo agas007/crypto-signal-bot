@@ -222,30 +222,26 @@ async function runScanCycle() {
   }
 
   // 3. Selection & Batching
-  // Priority: 1. Technical Score 2. Quality/Reliability
   const qualityCandidates = candidates.filter((c) => c.isStrict);
   const okCandidates = candidates.filter((c) => !c.isStrict);
-
-  // Logic: 
-  // If we have room (total < 5), take all quality ones.
-  // If we are FULL (total >= 5), ONLY allow "Awesome" pairs (Score > 80 AND isStrict)
   const isDailyLimitReached = dailyCount >= 5;
   
   const finalPool = isDailyLimitReached
-    ? qualityCandidates.filter(c => c.score >= 82) // The "Awesome" Exception
+    ? qualityCandidates.filter(c => c.score >= 82)
     : [...qualityCandidates, ...okCandidates].slice(0, 5 - dailyCount);
 
   if (isDailyLimitReached && finalPool.length > 0) {
     logger.info(`🌟 [Awesome Exception] Found ${finalPool.length} elite signals despite daily limit!`);
   }
 
+  // NOTE: We no longer early-return here. Even if finalPool is empty, we still
+  // want to run the Best Alternative logic at the end using `candidates` pool.
   if (!finalPool.length) {
     if (isDailyLimitReached) {
         logger.info('🚫 Daily trade limit reached (5/5). No elite signals found.');
     } else {
-        logger.info('⛔ No high-quality candidates found after technical scoring.');
+        logger.info('⛔ No strict signals. Will attempt Best Alternative from all candidates.');
     }
-    return 0;
   }
 
   // 4. Validation & Delivery
@@ -411,28 +407,53 @@ async function runScanCycle() {
   logger.info(`🏁 Cycle: ${sentCount} signals sent, ${finalPool.length - sentCount} rejected by AI, ${elapsed}s`);
   logger.info('═══════════════════════════════════════════════');
 
-  if (sentCount === 0 && rejections.length > 0) {
-    // Pick BEST ALTERNATIVE (Highest score with RR > 1.5)
-    // We filter out any rejected ones that have invalid riskReward object
-    const bestAlt = rejections
-      .filter(r => r.riskReward && r.riskReward.rr >= 1.5)
+  // ─── Best Alternative (Fallback) ────────────────────────
+  // Runs when no signals were sent in this cycle.
+  // Searches ALL technical candidates (not just AI-reviewed ones) for the best setup.
+  if (sentCount === 0) {
+    // Source: use AI-rejected pool first; fall back to all technical candidates
+    const altPool = rejections.length > 0 ? rejections : candidates.map(c => ({
+        ...c,
+        reason: c.reasons ? c.reasons.join('; ') : 'Technical candidate (not AI-reviewed)',
+    }));
+
+    const bestAlt = altPool
+      .filter(r => {
+          const rr = r.riskReward;
+          if (!rr || rr.rr < 1.5) return false; // Must have min R:R 1.5
+          // Exclude setups where price is already too far into the target (> 60% of TP dist)
+          // This prevents 'forced' signals like XPLUSDT where TP is historical and far away
+          const entry = rr.entry || r.entry;
+          const distToTp = entry && rr.tp ? Math.abs(rr.tp - entry) : Infinity;
+          const distToSl = entry && rr.sl ? Math.abs(rr.sl - entry) : Infinity;
+          // Reject if SL distance is less than 0.3% (too tight, will get hit by noise)
+          const slPct = distToSl / entry;
+          if (slPct < 0.003) return false;
+          // Reject if RR > 10 (unrealistically high, likely a stale historical TP)
+          if (rr.rr > 10) return false;
+          return true;
+      })
       .sort((a, b) => b.score - a.score)[0];
 
     if (bestAlt) {
-      logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${bestAlt.riskReward.rr.toFixed(2)})`);
-      const entryPrice = bestAlt.riskReward ? bestAlt.riskReward.entry : (bestAlt.entry || 'N/A');
-      const slPrice = bestAlt.riskReward ? bestAlt.riskReward.sl.toFixed(5) : 'N/A';
-      const tpPrice = bestAlt.riskReward ? bestAlt.riskReward.tp.toFixed(5) : 'N/A';
-      
-      await sendStatus(`💡 *BEST ALTERNATIVE: ${bestAlt.symbol}* (${bestAlt.bias})\n` +
-                     `_No high-quality signals found. This setup is the best among secondary options._\n\n` +
-                     `• *Score:* \`${bestAlt.score}/100\` | *R:R:* \`${bestAlt.riskReward.rr.toFixed(2)}\`\n` +
+      const rr = bestAlt.riskReward;
+      const entryPrice = rr ? (rr.entry || bestAlt.entry || 'N/A') : 'N/A';
+      const slPrice = rr ? rr.sl.toFixed(5) : 'N/A';
+      const tpPrice = rr ? rr.tp.toFixed(5) : 'N/A';
+      const rrRatio = rr ? rr.rr.toFixed(2) : 'N/A';
+      const label = bestAlt.quality === 'WATCHLIST' ? '(WATCHLIST)' : '(OBSERVATION)';
+
+      logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${rrRatio})`);
+      await sendStatus(`💡 *BEST ALTERNATIVE: ${bestAlt.symbol}* ${label} | ${bestAlt.bias}\n` +
+                     `_No high-quality signals this cycle. Best available setup below._\n\n` +
+                     `• *Score:* \`${bestAlt.score}/100\` | *R:R:* \`${rrRatio}\`\n` +
                      `• *Entry:* \`${entryPrice}\`\n` +
-                     `• *TP:* \`${tpPrice}\` | *SL:* \`${slPrice}\` \n\n` +
-                     `🧠 *Reasoning:* ${bestAlt.reason}\n\n` +
-                     `⚠️ _Note: Sinyal ini tidak masuk ke Active Trades (Pantau Manual)._`);
+                     `• *TP:* \`${tpPrice}\` | *SL:* \`${slPrice}\`\n\n` +
+                     `🧠 *Analysis:* ${bestAlt.reason}\n\n` +
+                     `⚠️ _Pantau manual saja — tidak masuk Active Trades._`);
     } else {
-      await sendStatus('🛡️ *Scan Cycle:* Candidates were found but rejected by AI and failed R:R floor (1.5). No trade recommended.');
+      logger.info('⛔ No Best Alternative found (all candidates failed R:R or quality checks).');
+      await sendStatus('🛡️ *Scan Complete:* Market conditions do not favor any trade this cycle. Waiting for next scan.');
     }
   }
 
