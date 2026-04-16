@@ -79,7 +79,7 @@ class BinancePerformance {
       winRate: winRate.toFixed(2) + '%',
       wins,
       losses,
-      tradeLog: tradeLog.slice(-15).reverse() // Show last 15 trade events
+      tradeLog: tradeLog.reverse() // Return all trades, bot will slice for chat display
     };
   }
 
@@ -100,22 +100,25 @@ class BinancePerformance {
                 count++;
                 if (t.realizedPnl > 0) wins++; else losses++;
                 
-                // Lookup technical details from our own tracker history
-                const signalRecord = tracker.history.find(h => 
-                    h.symbol === t.symbol && 
-                    Math.abs(h.closedAt - t.time) < 24 * 60 * 60 * 1000 // Match within 24h
-                );
+                const exitPrice = t.price;
+                const pnlValue = t.realizedPnl;
+                const qty = t.qty;
+                // If it's a manual trade (signalRecord is null), estimate entry price
+                // For Futures: isBuyer=true (Buy to Close Short), isBuyer=false (Sell to Close Long)
+                const estimatedEntry = t.isBuyer ? (exitPrice + (pnlValue / qty)) : (exitPrice - (pnlValue / qty));
 
                 details.push({
                     symbol: t.symbol,
                     market: 'FUT',
-                    pnl: t.realizedPnl.toFixed(2),
-                    time: t.time,
-                    // Technical fields if matched
-                    entry: signalRecord ? signalRecord.entry : null,
+                    pnl: pnlValue.toFixed(2),
+                    exitTime: t.time,
+                    exitPrice: exitPrice,
+                    entryPrice: signalRecord ? signalRecord.entry : estimatedEntry,
+                    entryTime: signalRecord ? (signalRecord.entryAt || signalRecord.signalAt) : null,
                     sl: signalRecord ? signalRecord.stop_loss : null,
                     tp: signalRecord ? signalRecord.take_profit : null,
-                    rr: signalRecord && signalRecord.riskReward ? signalRecord.riskReward.rr : null
+                    rr: signalRecord && signalRecord.riskReward ? signalRecord.riskReward.rr : null,
+                    quoteQty: t.quoteQty
                 });
 
                 if (t.realizedPnl < -0.1) {
@@ -129,9 +132,11 @@ class BinancePerformance {
     const sorted = [...trades].sort((a, b) => a.time - b.time);
     let inventoryQty = 0;
     let avgCost = 0;
+    let inventoryStartTime = null;
 
     for (const t of sorted) {
       if (t.isBuyer) {
+        if (inventoryQty === 0) inventoryStartTime = t.time;
         const newTotalCost = (inventoryQty * avgCost) + t.quoteQty;
         inventoryQty += t.qty;
         avgCost = inventoryQty > 0 ? newTotalCost / inventoryQty : 0;
@@ -153,11 +158,14 @@ class BinancePerformance {
             symbol,
             market: 'SPOT',
             pnl: realizedPnl.toFixed(2),
-            time: t.time,
-            entry: signalRecord ? signalRecord.entry : avgCost,
+            exitTime: t.time,
+            exitPrice: t.price,
+            entryPrice: signalRecord ? signalRecord.entry : avgCost,
+            entryTime: signalRecord ? (signalRecord.entryAt || signalRecord.signalAt) : inventoryStartTime,
             sl: signalRecord ? signalRecord.stop_loss : null,
             tp: signalRecord ? signalRecord.take_profit : null,
-            rr: signalRecord && signalRecord.riskReward ? signalRecord.riskReward.rr : null
+            rr: signalRecord && signalRecord.riskReward ? signalRecord.riskReward.rr : null,
+            quoteQty: t.quoteQty
           });
 
           if (realizedPnl < -0.1) {

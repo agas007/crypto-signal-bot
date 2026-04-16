@@ -190,13 +190,22 @@ function initTelegram() {
                    const emoji = parseFloat(t.pnl) > 0 ? '✅' : '🚨';
                    const pnlSafe = (parseFloat(t.pnl) > 0 ? '+' : '') + t.pnl;
                    const symbolSafe = (t.symbol || 'PAIR').replace(/_/g, '\\_');
-                   const rrText = t.rr ? ` | *RR: ${t.rr}*` : '';
-                   return `${emoji} \`${symbolSafe}\` (${t.market}): \`${pnlSafe} USDT\`${rrText}`;
+                   
+                   let extraInfo = '';
+                   if (t.rr) {
+                     extraInfo = ` | *RR: ${parseFloat(t.rr).toFixed(2)}*\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`\n   _TP:_ \`${t.tp || '?'}\` | _SL:_ \`${t.sl || '?'}\``;
+                   } else {
+                     let marginEst = (t.quoteQty || 0) / 20; 
+                     let pnlPct = marginEst > 0 ? (parseFloat(t.pnl) / marginEst * 100) : 0;
+                     extraInfo = `\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`\n   _Manual_ | _ROE:_ \`${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%\` (est 20x)`;
+                   }
+                   
+                   return `${emoji} \`${symbolSafe}\` (${t.market}): \`${pnlSafe} USDT\`${extraInfo}`;
                  }).join('\n') + `\n\n`;
       }
 
       // 🧠 Call AI Performance Coach
-      let aiReview = await analyzePerformanceSummary(stats, stats.tradeLog);
+      let aiReview = await analyzePerformanceSummary(stats, stats.tradeLog.slice(0, 50));
       
       // Sanitize Markdown from AI (Truncate BEFORE sanitization to avoid breaking entities)
       const maxAiLen = 2000;
