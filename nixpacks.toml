@@ -3,7 +3,7 @@
 nixPkgs = ["nodejs", "google-chrome", "chromium"]
 
 [phases.build]
-cmds = ["npm ci"]
+cmds = ["npm ci", "npm run build"]
 
 # Ensure chromium is available for puppeteer
 [env]

@@ -123,14 +123,12 @@ ${reasons.map((r, i) => `${i + 1}. ${r}`).join('\n')}
 
 INSTRUCTIONS:
 1. Evaluate whether the overall confluence supports the ${bias} bias.
-2. If valid or developing: refine entry, SL, TP levels based on structural invalidation.
-3. 🛑 DYNAMIC SL RULE: Stop Loss MUST be placed beyond the nearest logical Support/Resistance. Do not use a fixed percentage. However, if the required SL is wider than 8% due to extreme volatility, you MUST reject the trade (NO TRADE).
-4. VERIFIKASI RETEST: Cek apakah sudah terjadi retest pada breakout level?
+2. DO NOT calculate exact prices. Evaluate the setup rationally. If the volatility or market context is dangerous, REJECT the trade (NO TRADE).
+3. VERIFIKASI RETEST: Cek apakah sudah terjadi retest pada breakout level?
    - Jika BELUM (kenaikan vertikal/ngawang), set trading_type menjadi 'MOMENTUM SCALP' atau kembalikan sebagai 'WATCHLIST'.
    - Jika SUDAH ada retest jelas, set trading_type ke 'SWING' atau 'DAY TRADING'.
-5. Only reject (NO TRADE) if conditions clearly conflict, or if the R:R drops below 1.5 due to wide SL.
-6. Confidence scale: 0-100. (60+ is tradeable, 40-59 is Watchlist).
-7. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia). Provide explicit reasoning for your decision.
+4. Confidence scale: 0-100. (60+ is tradeable, 40-59 is Watchlist).
+5. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia). Provide explicit reasoning for your decision.
 
 Respond with ONLY this JSON format:
 {
@@ -139,10 +137,8 @@ Respond with ONLY this JSON format:
   "confidence": 0-100,
   "quality": "LOW" | "MEDIUM" | "WATCHLIST" | "HIGH",
   "trading_type": "SCALPING" | "DAY TRADING" | "SWING" | "MOMENTUM SCALP" | "MONITORING",
-  "entry": price_number_or_null,
-  "stop_loss": price_number_or_null,
-  "take_profit": price_number_or_null,
-  "reason": "Penjelasan terperinci dalam Bahasa Indonesia. Wajib sebutkan status retest dan alasan penempatan SL."
+  "risk_warning": "Catatan bahaya atau anomali market microstructure (ex: volume tipis, divergensi M15).",
+  "reason": "Penjelasan terperinci dalam Bahasa Indonesia. Wajib sebutkan status retest dan validasi confluence."
 }`;
 }
 
@@ -213,40 +209,14 @@ async function refineSignal(signal, options = {}) {
       return parsed; 
     }
 
-    parsed.entry = parseFloat(parsed.entry);
-    parsed.stop_loss = parseFloat(parsed.stop_loss);
-    parsed.take_profit = parseFloat(parsed.take_profit);
-
-    if (isNaN(parsed.entry) || isNaN(parsed.stop_loss) || isNaN(parsed.take_profit)) {
-      logger.warn(`${signal.symbol} ✘ AI returned invalid prices. Rejected.`);
-      return null;
-    }
+    // Prices are now taken directly from the deterministic logic
+    parsed.entry = signal.entry || (signal.riskReward ? signal.riskReward.entry : null);
+    parsed.stop_loss = signal.riskReward ? signal.riskReward.sl : null;
+    parsed.take_profit = signal.riskReward ? signal.riskReward.tp : null;
     
     if (!parsed.trading_type) parsed.trading_type = 'DAY TRADING';
 
-    const risk = parsed.bias === 'LONG'
-      ? parsed.entry - parsed.stop_loss
-      : parsed.stop_loss - parsed.entry;
-    const reward = parsed.bias === 'LONG'
-      ? parsed.take_profit - parsed.entry
-      : parsed.entry - parsed.take_profit;
-    const rrRatio = risk > 0 ? reward / risk : 0;
-
-    if (parsed.bias !== 'WATCHLIST' && rrRatio < config.strategy.minRrRatio) {
-      logger.info(`${signal.symbol} ✘ Post-AI R:R too low: ${rrRatio.toFixed(2)} (need ${config.strategy.minRrRatio}+)`);
-      parsed.bias = 'NO TRADE';
-      parsed.reason = `R:R ratio ${rrRatio.toFixed(2)} bawah minimum ${config.strategy.minRrRatio}. Alasan asli: ${parsed.reason}`;
-      return parsed;
-    }
-
-    const slDistance = parsed.bias === 'LONG'
-      ? (parsed.entry - parsed.stop_loss) / parsed.entry
-      : (parsed.stop_loss - parsed.entry) / parsed.entry;
-
-    if (slDistance > config.strategy.maxSlAllowed) {
-      logger.warn(`${signal.symbol} X AI returned SL > ${(config.strategy.maxSlAllowed*100).toFixed(0)}%: ${(slDistance * 100).toFixed(2)}%`);
-      return null;
-    }
+    const rrRatio = signal.riskReward ? signal.riskReward.rr : 0;
 
     logger.info(`${signal.symbol} OK AI validated: ${parsed.bias} @ ${parsed.entry} (conf: ${parsed.confidence}, quality: ${parsed.quality || 'N/A'}, R:R: ${rrRatio.toFixed(2)})`);
     return parsed;

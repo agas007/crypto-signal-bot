@@ -272,29 +272,12 @@ async function runScanCycle() {
         continue;
       }
 
-      // ─── Recalculate Risk/Reward with AI Levels ───
-      // The technical candidate has RR, but AI might have changed the entry/SL.
-      // We must re-calc to get the correct position size for the message.
+      // ─── Inherit Deterministic Risk/Reward ───
       if (refined.bias === 'LONG' || refined.bias === 'SHORT') {
-          const { calculateRiskReward } = require('../strategy');
-          const finalRR = calculateRiskReward(
-              refined.bias, 
-              refined.entry, 
-              candidate.analysis ? candidate.analysis.h4SR : null, 
-              { 
-                  accountBalance: effectiveBalance,
-                  sl: refined.stop_loss,
-                  tp: refined.take_profit,
-                  stepSize: specs.stepSize,
-                  minNotional: specs.minNotional
-              }
-          );
-          refined.riskReward = finalRR;
+          refined.riskReward = candidate.riskReward;
           refined.candles = candidate.candles; // for chart
-
           if (!refined.riskReward) {
-              logger.warn(`⚠️ ${candidate.symbol}: AI provided invalid price levels (Risk calculation failed). Skipping.`);
-              logAudit(candidate.symbol, 'AI', 'REJECTED', refined.confidence, 'Invalid price levels from AI (logic error)');
+              logger.warn(`⚠️ ${candidate.symbol}: Risk calculation missing from deterministic candidate.`);
               continue;
           }
       }
@@ -362,7 +345,7 @@ async function runScanCycle() {
       logger.info(`⏳ [Live Confirmation] Memantau pergerakan harga ${candidate.symbol} selama 3 menit...`);
       await sendStatus(`⏳ *LIVE CONFIRMATION: ${candidate.symbol}*\n_AI menyetujui setup. Bot sedang memantau pergerakan harga secara live (3 menit) untuk menghindari fakeout..._`);
       
-      const { sleep } = require('../../utils/sleep');
+      const sleep = require('../../utils/sleep');
       const { fetch24hTicker } = require('../data/binance');
       await sleep(3 * 60 * 1000); // Wait 3 minutes
 

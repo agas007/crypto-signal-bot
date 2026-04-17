@@ -1,46 +1,15 @@
 const logger = require('./utils/logger');
 const { startScanner } = require('./modules/scanner');
 const { initTelegram } = require('./modules/telegram');
+const { startDashboard } = require('./web/server');
 
-// ─── Banner ─────────────────────────────────────────────
-console.log(`
-╔═══════════════════════════════════════════╗
-║      🤖 CRYPTO SIGNAL BOT v4.4.1         ║
-║                                           ║
-║  Binance → TA → AI → Telegram             ║
-║  Adaptive Intelligence & OOM Fix          ║
-╚═══════════════════════════════════════════╝
-`);
+console.log('🤖 CRYPTO SIGNAL BOT v4.4.1 STARTED');
 
-// ─── Graceful shutdown ──────────────────────────────────
-process.on('SIGINT', () => {
-  logger.info('Received SIGINT, shutting down...');
-  process.exit(0);
-});
-
-process.on('SIGTERM', () => {
-  logger.info('Received SIGTERM, shutting down...');
-  process.exit(0);
-});
-
-process.on('unhandledRejection', (err) => {
-  logger.error('Unhandled rejection:', err);
-});
-
-// ─── Start ──────────────────────────────────────────────
 async function main() {
   try {
-    initTelegram();
-
-    if (process.env.MODE === 'oneshot') {
-      logger.info('Running in ONESHOT mode...');
-      const { runScanCycle } = require('./modules/scanner');
-      await runScanCycle();
-      logger.info('Oneshot cycle complete. Exiting.');
-      process.exit(0);
-    } else {
-      await startScanner();
-    }
+    startDashboard(); // Jalankan Dashboard
+    initTelegram();   // Jalankan Telegram Bot
+    await startScanner(); // Jalankan Market Scanner
   } catch (err) {
     logger.error('Fatal error:', err);
     process.exit(1);
