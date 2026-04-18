@@ -421,7 +421,7 @@ async function runScanCycle() {
   // Runs when no signals were sent in this cycle.
   // Searches ALL technical candidates (not just AI-reviewed ones) for the best setup.
   if (sentCount === 0) {
-    const activeSymbols = tracker.getPositions().map(p => p.symbol);
+    const activeSymbols = tracker.getAllActive().map(p => p.symbol);
 
     // Source: use AI-rejected pool first; fall back to all technical candidates
     const altPool = rejections.length > 0 ? rejections : candidates.map(c => ({
