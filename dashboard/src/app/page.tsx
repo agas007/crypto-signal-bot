@@ -43,7 +43,7 @@ export default function Dashboard() {
   const [activeTab, setActiveTab] = useState<'signals' | 'history' | 'lessons' | 'logs'>('signals');
 
   useEffect(() => {
-    fetch('/api/bot-data')
+    fetch(`/api/bot-data?t=${Date.now()}`)
       .then((res) => res.json())
       .then((res) => {
         if (res.success) {
