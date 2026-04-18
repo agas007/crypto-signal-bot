@@ -165,7 +165,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
   const MIN_RR = config.strategy.minRrRatio;
   const baseMaxSl = config.strategy.maxSlAllowed || 0.08;
   const MAX_SL_ALLOWED = options.atr ? Math.min(baseMaxSl, (options.atr * 2) / currentPrice) : baseMaxSl;
-  const MIN_SL_DISTANCE = 0.005;   // 0.5% Min Distance (avoid tight noise)
+  const MIN_SL_DISTANCE = 0.015;   // WIDENED: 1.5% Min Distance (avoid tight crypto noise)
   const ATR_MULTIPLIER = 1.5;      // Rule 4: SL min 1.5x ATR
   
   const ACCOUNT_BALANCE = options.accountBalance || config.strategy.accountBalance;
@@ -199,7 +199,9 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // Rule 4: SL Buffer (min 1.5x ATR)
     const technicalSl = wickSupport * 0.998;
     sl = options.sl || Math.min(technicalSl, entry - atrDist);
-    tp = options.tp || (bodyResistance !== Infinity ? bodyResistance * 0.998 : entry * (1 + (entry - sl) * MIN_RR / entry));
+    
+    // Realistic TP: Use Body Resistance, if none (ATH/Discovery), project 4x ATR instead of forced RR
+    tp = options.tp || (bodyResistance !== Infinity ? bodyResistance * 0.998 : entry + (options.atr * 4));
     
     const slDistPercent = (entry - sl) / entry;
     // Skip technical rejection if manual/AI levels are provided
@@ -248,7 +250,9 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // Rule 4: SL Buffer (min 1.5x ATR)
     const technicalSl = wickResistance !== Infinity ? wickResistance * 1.002 : entry * 1.02;
     sl = options.sl || Math.max(technicalSl, entry + atrDist);
-    tp = options.tp || (bodySupport > 0 ? bodySupport * 1.002 : entry * (1 - (sl - entry) * MIN_RR / entry));
+    
+    // Realistic TP: Use Body Support, if none (Discovery), project 4x ATR downward
+    tp = options.tp || (bodySupport > 0 ? bodySupport * 1.002 : Math.max(entry - (options.atr * 4), 0));
     
     const slDistPercent = (sl - entry) / entry;
     if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) return null;
@@ -382,16 +386,18 @@ function evaluateSignal(symbol, data, options = {}) {
     shortReasons.push(`H1 bearish structure (Lower Highs) (+10)`);
   }
 
-  // Candlestick Bonus at Key Levels
+  // Candlestick Bonus at Key Levels (Trend-Weighted Fix)
   if (pricePosition !== 'middle') {
     if (longScore > shortScore && (h1Engulfing.bull || h1Pin.bullPin)) {
-      longScore += 10;
-      longReasons.push(`🕯️ Bullish candle pattern at key level (+10)`);
-      tags.push('PA CONFIRMED');
+      const bonus = d1Trend.direction === 'bullish' ? 10 : 2;
+      longScore += bonus;
+      longReasons.push(`🕯️ Bullish PA (+${bonus}, trend-dictated)`);
+      if (bonus === 10) tags.push('PA CONFIRMED');
     } else if (shortScore > longScore && (h1Engulfing.bear || h1Pin.bearPin)) {
-      shortScore += 10;
-      shortReasons.push(`🕯️ Bearish candle pattern at key level (+10)`);
-      tags.push('PA CONFIRMED');
+      const bonus = d1Trend.direction === 'bearish' ? 10 : 2;
+      shortScore += bonus;
+      shortReasons.push(`🕯️ Bearish PA (+${bonus}, trend-dictated)`);
+      if (bonus === 10) tags.push('PA CONFIRMED');
     }
   }
 

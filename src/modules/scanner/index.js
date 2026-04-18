@@ -352,10 +352,12 @@ async function runScanCycle() {
       
       // Hitung slippage/pergeseran dari entry AI
       const slippage = Math.abs(currentPriceLive - refined.entry) / refined.entry;
-      if (slippage > 0.015) {
-          logger.warn(`🚫 [Live Confirmation Failed] ${candidate.symbol} price slipped ${(slippage*100).toFixed(2)}% during confirmation window.`);
-          await sendStatus(`🚫 *SIGNAL DROPPED: ${candidate.symbol}*\n_Terdeteksi pergerakan harga terlalu volatile / fakeout (${(slippage*100).toFixed(1)}%) saat fase konfirmasi. Setup dibatalkan demi keamanan._`);
-          logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED', refined.confidence, `Price moved too violently during 3m window (Slippage: ${(slippage*100).toFixed(1)}%)`);
+      
+      // FIX: 0.5% dalam 3 menit adalah volatilitas abnormal (news/fakeout). Reject!
+      if (slippage > 0.005) {
+          logger.warn(`🚫 [Live Confirmation Failed] ${candidate.symbol} price slipped ${(slippage*100).toFixed(2)}% during 3m window.`);
+          await sendStatus(`🚫 *SIGNAL DROPPED: ${candidate.symbol}*\n_Terdeteksi pergerakan harga tidak normal (${(slippage*100).toFixed(1)}%) dlm 3 menit. Fakeout/News spike dihindari._`);
+          logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED', refined.confidence, `Price slipped ${(slippage*100).toFixed(1)}% in 3 mins.`);
           continue;
       }
 
