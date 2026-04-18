@@ -20,14 +20,18 @@ app.prepare().then(() => {
   });
 
   const port = process.env.PORT || 3000;
-  server.listen(port, '0.0.0.0', (err) => {
-    if (err) throw err;
+  server.listen(port, '0.0.0.0', async (err) => {
+    if (err) {
+      logger.error('Failed to start HTTP server:', err);
+      return;
+    }
     logger.info(`> 🚀 Next.js Dashboard Ready on http://localhost:${port}`);
     
     // Start Bot Backend Services safely in the background
     try {
-      initTelegram();
+      await initTelegram();
       startScanner();
+      logger.info('✅ Background services (Telegram & Scanner) started.');
     } catch (err) {
       logger.error('Failed to start background services:', err);
     }

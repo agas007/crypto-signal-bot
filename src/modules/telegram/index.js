@@ -38,19 +38,30 @@ function getHelpMessage(chatId) {
 /**
  * Initialize the Telegram bot with polling enabled for interactive commands.
  */
-function initTelegram() {
+async function initTelegram() {
   if (bot) return; // Prevent multiple initializations
 
   bot = new TelegramBot(config.telegram.botToken, { 
-    polling: true,
+    polling: false, // Start with polling false to clear webhook first
     request: {
         agentOptions: {
             keepAlive: true,
-            family: 4 // Force IPv4 to prevent AggregateError (common Node 17+ issue)
+            family: 4 
         }
     }
   });
-  logger.info('Telegram bot initialized with interactive POLLING mode');
+
+  try {
+    // Clear any existing webhooks to prevent 409 Conflict errors
+    await bot.deleteWebhook();
+    logger.info('Telegram webhook cleared.');
+    
+    // Now start polling
+    await bot.startPolling();
+    logger.info('Telegram bot initialized with interactive POLLING mode');
+  } catch (err) {
+    logger.error('Failed to initialize Telegram polling:', err.message);
+  }
 
   // Handle unhandled rejections to prevent crashes
   process.on('unhandledRejection', (reason, p) => {
