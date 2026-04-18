@@ -9,7 +9,7 @@ const {
 } = require('../data/binance');
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
-const { evaluateSignal } = require('../strategy');
+const { evaluateSignal, calculateRiskReward } = require('../strategy');
 const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../telegram');
 const { generateChartImage } = require('../chart');
@@ -361,6 +361,33 @@ async function runScanCycle() {
           continue;
       }
 
+      // FIX 1: Refresh data entry karena candle H1 sudah 'stale', apalagi setelah kena delay 3 menit Live Confirm
+      const freshEntry = currentPriceLive;
+      const freshRR = calculateRiskReward(
+        refined.bias, 
+        freshEntry, 
+        candidate.analysis?.h4SR,
+        {
+          atr: candidate.analysis?.h4OB?.atr || (freshEntry * 0.01), // Fallback ATR 1% jika tidak ada
+          accountBalance: effectiveBalance,
+          stepSize: exchangeSpecs?.[candidate.symbol]?.stepSize || 0,
+          minNotional: exchangeSpecs?.[candidate.symbol]?.minNotional || 5.0
+        }
+      );
+
+      if (!freshRR || freshRR.rr < config.strategy.minRrRatio) {
+        logger.warn(`🚫 [Fresh RR Check] ${candidate.symbol}: R:R expired after confirmation window (${freshRR?.rr?.toFixed(2) || 'N/A'})`);
+        await sendStatus(`🚫 *SIGNAL EXPIRED: ${candidate.symbol}*\n_Setup valid saat scan awal, tapi Risk:Reward memburuk setelah konfirmasi 3 menit (${freshRR?.rr?.toFixed(2) || 'N/A'}). Dibatalkan demi keamanan._`);
+        logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED_RR', refined.confidence, `R:R deteriorated to ${freshRR?.rr?.toFixed(2)} at fresh entry ${freshEntry}`);
+        continue;
+      }
+
+      // Apply fresh calculation to the refined signal
+      refined.riskReward = freshRR;
+      refined.entry = freshRR.entry;
+      refined.stop_loss = freshRR.sl;
+      refined.take_profit = freshRR.tp;
+
       // ─── 1. Send Text Instan ───
       logAudit(candidate.symbol, 'AI', 'APPROVED', refined.confidence, `${isUpdate ? 'Update signal sent' : 'Fresh signal sent'} to Telegram.`);
       refined.freshness = Math.round((Date.now() - startTime) / 1000);
@@ -501,6 +528,13 @@ async function checkActiveTrades() {
       const currentPrice = lastCandle.close;
       const ageMs = Date.now() - (trade.entryAt || trade.signalAt || Date.now());
       const movePercent = (Math.abs(currentPrice - trade.entry) / trade.entry) * 100;
+
+      // FIX 4: Minimum duration guard
+      // Trade minimal berjalan 5 menit sebelum SL/TP dievaluasi untuk menghindari SL hit dari noise milidetik
+      if (ageMs < 5 * 60 * 1000) {
+        logger.debug(`⏭️ ${trade.symbol}: Trade too young (${(ageMs/1000).toFixed(0)}s), skipping SL/TP check.`);
+        continue;
+      }
 
       // 1. Time-Based Invalidation Check (Momentum Stalled after 24h)
       const oneDayMs = 24 * 60 * 60 * 1000;

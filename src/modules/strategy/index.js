@@ -165,7 +165,10 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
   const MIN_RR = config.strategy.minRrRatio;
   const baseMaxSl = config.strategy.maxSlAllowed || 0.08;
   const MAX_SL_ALLOWED = options.atr ? Math.min(baseMaxSl, (options.atr * 2) / currentPrice) : baseMaxSl;
-  const MIN_SL_DISTANCE = 0.015;   // WIDENED: 1.5% Min Distance (avoid tight crypto noise)
+  
+  // FIX 2: SL minimum = 1.5x ATR atau 0.8%, ambil yang lebih besar
+  const atrBasedMinSl = options.atr ? (options.atr * 1.5) / currentPrice : 0.008;
+  const MIN_SL_DISTANCE = Math.max(0.008, atrBasedMinSl); // WIDENED: 0.8% Min Distance to avoid tight crypto noise
   const ATR_MULTIPLIER = 1.5;      // Rule 4: SL min 1.5x ATR
   
   const ACCOUNT_BALANCE = options.accountBalance || config.strategy.accountBalance;
@@ -210,6 +213,12 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     const riskPerUnit = entry - sl;
     const rewardPerUnit = tp - entry;
     const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
+
+    // FIX 3: Prevent Inflated R:R using unreachable historical TP
+    if (rr > 8) {
+      logger.debug(`LONG: R:R ${rr.toFixed(1)} too high, likely historical TP. Capping.`);
+      return null;
+    }
 
     // Position Sizing
     let quantity = riskDollar / riskPerUnit;
@@ -260,6 +269,12 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     const riskPerUnit = sl - entry;
     const rewardPerUnit = entry - tp;
     const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
+
+    // FIX 3: Prevent Inflated R:R using unreachable historical TP
+    if (rr > 8) {
+      logger.debug(`SHORT: R:R ${rr.toFixed(1)} too high, likely historical TP. Capping.`);
+      return null;
+    }
 
     let quantity = riskDollar / riskPerUnit;
     if (options.stepSize) quantity = roundStep(quantity, options.stepSize);
