@@ -48,6 +48,17 @@ app.prepare().then(() => {
     } catch (err) {
       console.error('❌ ERROR: Failed to start background services:', err);
     }
+
+    // Graceful Shutdown for Railway
+    const shutdown = (signal) => {
+      console.log(`\n👋 ${signal} received. Shutting down gracefully...`);
+      // We don't need complex cleanup since it's a single process, 
+      // but exiting with 0 tells Railway everything is OK.
+      process.exit(0);
+    };
+
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    process.on('SIGINT', () => shutdown('SIGINT'));
   });
 }).catch((err) => {
   logger.error('Error starting server:', err);
