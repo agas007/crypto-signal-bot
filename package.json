@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "build": "cd dashboard && npm ci && npm run build"
+    "build": "cd dashboard && npm install && npm run build"
   },
   "keywords": [
     "crypto",
