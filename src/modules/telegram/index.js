@@ -55,14 +55,16 @@ async function initTelegram() {
 
   try {
     // Clear any existing webhooks to prevent 409 Conflict errors
-    // Using both possible method names for compatibility
     if (typeof bot.deleteWebHook === 'function') {
       await bot.deleteWebHook();
     } else if (typeof bot.deleteWebhook === 'function') {
       await bot.deleteWebhook();
     }
     
-    logger.info('Telegram webhook cleared.');
+    logger.info('Telegram webhook cleared. Waiting 5s before starting polling to avoid race conditions...');
+    
+    // Give a small delay to let old Railway instances shut down completely
+    await new Promise(resolve => setTimeout(resolve, 5000));
     
     // Now start polling
     await bot.startPolling();

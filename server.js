@@ -22,18 +22,31 @@ app.prepare().then(() => {
   const port = process.env.PORT || 3000;
   server.listen(port, '0.0.0.0', async (err) => {
     if (err) {
-      logger.error('Failed to start HTTP server:', err);
+      console.error('❌ FATAL: Failed to start HTTP server:', err);
       return;
     }
-    logger.info(`> 🚀 Next.js Dashboard Ready on http://localhost:${port}`);
     
+    console.log(`> 🚀 Server is listening on PORT: ${port}`);
+    console.log(`> 🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    
+    // Check if dashboard directory exists (debugging for Railway)
+    const fs = require('fs');
+    const path = require('path');
+    const dashboardPath = path.join(__dirname, 'dashboard');
+    if (!fs.existsSync(dashboardPath)) {
+      console.error('❌ ERROR: Dashboard directory NOT FOUND at', dashboardPath);
+    } else {
+      console.log('✅ Dashboard directory found.');
+    }
+
     // Start Bot Backend Services safely in the background
     try {
+      console.log('🤖 Initializing Telegram & Scanner...');
       await initTelegram();
       startScanner();
-      logger.info('✅ Background services (Telegram & Scanner) started.');
+      console.log('✅ Background services (Telegram & Scanner) are now active.');
     } catch (err) {
-      logger.error('Failed to start background services:', err);
+      console.error('❌ ERROR: Failed to start background services:', err);
     }
   });
 }).catch((err) => {
