@@ -10,7 +10,7 @@ export async function GET() {
       path.join(process.cwd(), '../active_signals.json')
     ];
     
-    let filePath = possiblePaths.find(p => fs.existsSync(p));
+    const filePath = possiblePaths.find(p => fs.existsSync(p));
     
     if (filePath) {
       const data = fs.readFileSync(filePath, 'utf8');
@@ -18,7 +18,8 @@ export async function GET() {
     } else {
       return NextResponse.json({ success: true, signals: [] });
     }
-  } catch (error: any) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 500 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }
