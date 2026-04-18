@@ -6,14 +6,30 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 export async function GET() {
+  const debugInfo: any = {
+    cwd: process.cwd(),
+    dataDir: process.env.DATA_DIR || null,
+    testedPaths: {},
+    errors: {}
+  };
+
   try {
     const resolvePath = (filename: string) => {
-      const possiblePaths = [
-        path.join(process.cwd(), filename),
-        path.join(process.cwd(), '../' + filename),
-        path.join(__dirname, '../../../../../../', filename) // Fallback for deep Next.js dist paths
-      ];
-      return possiblePaths.find(p => fs.existsSync(p));
+      const possiblePaths = [];
+      
+      if (process.env.DATA_DIR) {
+          possiblePaths.push(path.join(process.env.DATA_DIR, filename));
+      }
+      possiblePaths.push(path.join(process.cwd(), filename));
+      possiblePaths.push(path.join(process.cwd(), '../' + filename));
+      possiblePaths.push(path.join(__dirname, '../../../../../../', filename));
+      
+      debugInfo.testedPaths[filename] = possiblePaths;
+
+      for (const p of possiblePaths) {
+        if (fs.existsSync(p)) return p;
+      }
+      return null;
     };
 
     const data: any = {
@@ -25,26 +41,29 @@ export async function GET() {
 
     const signalsPath = resolvePath('active_signals.json');
     if (signalsPath) {
-      try { data.signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8')); } catch (e) { }
+      debugInfo.resolvedSignalsPath = signalsPath;
+      try { data.signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8')); } catch (e: any) { debugInfo.errors.signals = e.message; }
     }
 
     const historyPath = resolvePath('trade_history.json');
     if (historyPath) {
-      try { data.history = JSON.parse(fs.readFileSync(historyPath, 'utf8')); } catch (e) { }
+      debugInfo.resolvedHistoryPath = historyPath;
+      try { data.history = JSON.parse(fs.readFileSync(historyPath, 'utf8')); } catch (e: any) { debugInfo.errors.history = e.message; }
     }
 
     const lessonsPath = resolvePath('history_lessons.json');
     if (lessonsPath) {
-      try { data.lessons = JSON.parse(fs.readFileSync(lessonsPath, 'utf8')); } catch (e) { }
+      debugInfo.resolvedLessonsPath = lessonsPath;
+      try { data.lessons = JSON.parse(fs.readFileSync(lessonsPath, 'utf8')); } catch (e: any) { debugInfo.errors.lessons = e.message; }
     }
 
     const logsPath = resolvePath('scan_audit.log');
     if (logsPath) {
+      debugInfo.resolvedLogsPath = logsPath;
       try { 
-        // Read only last 50 lines of logs to save bandwidth/memory
         const fullLogs = fs.readFileSync(logsPath, 'utf8'); 
         data.logs = fullLogs.trim().split('\n').slice(-50).join('\n');
-      } catch (e) { }
+      } catch (e: any) { debugInfo.errors.logs = e.message; }
     }
 
     // Normalize signal object if it's stored as keyed object instead of array
@@ -52,10 +71,11 @@ export async function GET() {
       data.signals = Object.values(data.signals);
     }
 
-    return NextResponse.json({ success: true, ...data });
+    return NextResponse.json({ success: true, ...data, debug: debugInfo });
 
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json({ success: false, error: message, debug: debugInfo }, { status: 500 });
   }
 }
+
