@@ -345,8 +345,6 @@ async function runScanCycle() {
       logger.info(`⏳ [Live Confirmation] Memantau pergerakan harga ${candidate.symbol} selama 3 menit...`);
       await sendStatus(`⏳ *LIVE CONFIRMATION: ${candidate.symbol}*\n_AI menyetujui setup. Bot sedang memantau pergerakan harga secara live (3 menit) untuk menghindari fakeout..._`);
       
-      const sleep = require('../../utils/sleep');
-      const { fetch24hTicker } = require('../data/binance');
       await sleep(3 * 60 * 1000); // Wait 3 minutes
 
       const latestTicker = await fetch24hTicker(candidate.symbol);

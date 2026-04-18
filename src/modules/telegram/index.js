@@ -1,5 +1,7 @@
 const fs = require('fs');
 const TelegramBot = require('node-telegram-bot-api');
+// Fix deprecation warnings for file options
+process.env.NTBA_FIX_350 = 1;
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const { formatJakartaTime, getNextJakartaReset } = require('../../utils/time');
@@ -53,7 +55,13 @@ async function initTelegram() {
 
   try {
     // Clear any existing webhooks to prevent 409 Conflict errors
-    await bot.deleteWebhook();
+    // Using both possible method names for compatibility
+    if (typeof bot.deleteWebHook === 'function') {
+      await bot.deleteWebHook();
+    } else if (typeof bot.deleteWebhook === 'function') {
+      await bot.deleteWebhook();
+    }
+    
     logger.info('Telegram webhook cleared.');
     
     // Now start polling
@@ -697,6 +705,8 @@ async function sendSignal(signal, imagePath = null) {
         caption: message,
         parse_mode: 'Markdown',
         reply_markup: replyMarkup
+      }, {
+        contentType: 'image/png' // Manually specifying to avoid deprecation warnings
       });
       fs.unlinkSync(imagePath);
     } else {
