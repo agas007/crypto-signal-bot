@@ -454,10 +454,10 @@ async function runScanCycle() {
 
     if (bestAlt) {
       const rr = bestAlt.riskReward;
-      const entryPrice = rr ? (rr.entry || bestAlt.entry || 'N/A') : 'N/A';
-      const slPrice = rr ? rr.sl.toFixed(5) : 'N/A';
-      const tpPrice = rr ? rr.tp.toFixed(5) : 'N/A';
-      const rrRatio = rr ? rr.rr.toFixed(2) : 'N/A';
+      const entryPrice = rr ? (rr.entry || bestAlt.entry || 'TBD') : (bestAlt.entry || 'TBD');
+      const slPrice = rr ? rr.sl.toFixed(5) : 'Calculating...';
+      const tpPrice = rr ? rr.tp.toFixed(5) : 'Calculating...';
+      const rrRatio = rr ? rr.rr.toFixed(2) : (bestAlt.score > 80 ? 'High' : 'Low');
       const label = bestAlt.quality === 'WATCHLIST' ? '(WATCHLIST)' : '(OBSERVATION)';
 
       logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${rrRatio})`);
