@@ -107,6 +107,12 @@ class BinancePerformance {
                 // For Futures: isBuyer=true (Buy to Close Short), isBuyer=false (Sell to Close Long)
                 const estimatedEntry = t.isBuyer ? (exitPrice + (pnlValue / qty)) : (exitPrice - (pnlValue / qty));
 
+                // Find matching signal record in bot memory
+                const signalRecord = tracker.history.find(h => 
+                    h.symbol === t.symbol && 
+                    Math.abs((h.closedAt || h.signalAt) - t.time) < 24 * 60 * 60 * 1000
+                );
+
                 details.push({
                     symbol: t.symbol,
                     market: 'FUT',
@@ -122,7 +128,8 @@ class BinancePerformance {
                 });
 
                 if (t.realizedPnl < -0.1) {
-                    this._triggerAiLesson(t.symbol, t.price, t.price, t.realizedPnl, t.time, 'FUTURES');
+                    const finalEntry = signalRecord ? signalRecord.entry : estimatedEntry;
+                    this._triggerAiLesson(t.symbol, finalEntry, t.price, t.realizedPnl, t.time, 'FUTURES');
                 }
             }
         });
@@ -151,7 +158,7 @@ class BinancePerformance {
 
           const signalRecord = tracker.history.find(h => 
               h.symbol === symbol && 
-              Math.abs(h.closedAt - t.time) < 24 * 60 * 60 * 1000
+              Math.abs((h.closedAt || h.signalAt) - t.time) < 24 * 60 * 60 * 1000
           );
 
           details.push({

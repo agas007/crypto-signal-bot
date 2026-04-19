@@ -208,7 +208,10 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     
     const slDistPercent = (entry - sl) / entry;
     // Skip technical rejection if manual/AI levels are provided
-    if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) return null;
+    if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) {
+      logger.debug(`[RR] LONG ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(Math.max(MIN_SL_DISTANCE, atrDistPercent)*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
+      return null;
+    }
 
     const riskPerUnit = entry - sl;
     const rewardPerUnit = tp - entry;
@@ -244,11 +247,17 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
       notionalValue = quantity * entry;
       // If after capping it's below minNotional, it's untradeable
-      if (notionalValue < minRequired) return null;
+      if (notionalValue < minRequired) {
+        logger.debug(`[RR] LONG: Notional ${notionalValue} < min ${minRequired} after cap`);
+        return null;
+      }
     }
 
     const margin = notionalValue / LEVERAGE;
-    if (margin > ACCOUNT_BALANCE) return null;
+    if (margin > ACCOUNT_BALANCE) {
+      logger.debug(`[RR] LONG: Margin ${margin} > balance ${ACCOUNT_BALANCE}`);
+      return null;
+    }
 
     return { entry, sl, tp, rr, isScaled: scaled, positionSize: { risk: (Math.abs(entry - sl) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
   } else {
@@ -264,7 +273,10 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     tp = options.tp || (bodySupport > 0 ? bodySupport * 1.002 : Math.max(entry - (options.atr * 4), 0));
     
     const slDistPercent = (sl - entry) / entry;
-    if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) return null;
+    if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) {
+      logger.debug(`[RR] SHORT ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(Math.max(MIN_SL_DISTANCE, atrDistPercent)*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
+      return null;
+    }
 
     const riskPerUnit = sl - entry;
     const rewardPerUnit = entry - tp;
@@ -296,11 +308,17 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       notionalValue = maxNotional;
       quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
       notionalValue = quantity * entry;
-      if (notionalValue < minRequired) return null;
+      if (notionalValue < minRequired) {
+        logger.debug(`[RR] SHORT: Notional ${notionalValue} < min ${minRequired} after cap`);
+        return null;
+      }
     }
 
     const margin = notionalValue / LEVERAGE;
-    if (margin > ACCOUNT_BALANCE) return null;
+    if (margin > ACCOUNT_BALANCE) {
+      logger.debug(`[RR] SHORT: Margin ${margin} > balance ${ACCOUNT_BALANCE}`);
+      return null;
+    }
 
     return { entry, sl, tp, rr, isScaled: scaled, positionSize: { risk: (Math.abs(sl - entry) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
   }

@@ -363,6 +363,7 @@ async function runScanCycle() {
 
       // FIX 1: Refresh data entry karena candle H1 sudah 'stale', apalagi setelah kena delay 3 menit Live Confirm
       const freshEntry = currentPriceLive;
+      const futuresSym = toFuturesSymbol(candidate.symbol);
       const freshRR = calculateRiskReward(
         refined.bias, 
         freshEntry, 
@@ -370,15 +371,18 @@ async function runScanCycle() {
         {
           atr: candidate.analysis?.h4OB?.atr || (freshEntry * 0.01), // Fallback ATR 1% jika tidak ada
           accountBalance: effectiveBalance,
-          stepSize: exchangeSpecs?.[candidate.symbol]?.stepSize || 0,
-          minNotional: exchangeSpecs?.[candidate.symbol]?.minNotional || 5.0
+          stepSize: exchangeSpecs?.[futuresSym]?.stepSize || 0,
+          minNotional: exchangeSpecs?.[futuresSym]?.minNotional || 5.0
         }
       );
 
       if (!freshRR || freshRR.rr < config.strategy.minRrRatio) {
-        logger.warn(`🚫 [Fresh RR Check] ${candidate.symbol}: R:R expired after confirmation window (${freshRR?.rr?.toFixed(2) || 'N/A'})`);
-        await sendStatus(`🚫 *SIGNAL EXPIRED: ${candidate.symbol}*\n_Setup valid saat scan awal, tapi Risk:Reward memburuk setelah konfirmasi 3 menit (${freshRR?.rr?.toFixed(2) || 'N/A'}). Dibatalkan demi keamanan._`);
-        logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED_RR', refined.confidence, `R:R deteriorated to ${freshRR?.rr?.toFixed(2)} at fresh entry ${freshEntry}`);
+        const rrVal = freshRR?.rr?.toFixed(2) || 'N/A';
+        const reason = !freshRR ? 'Safety/Distance bounds' : `Low R:R (${rrVal})`;
+        
+        logger.warn(`🚫 [Fresh RR Check] ${candidate.symbol}: Signal invalidated after 3m confirmation (${reason})`);
+        await sendStatus(`🚫 *SIGNAL EXPIRED: ${candidate.symbol}*\n_Setup valid saat scan awal, tapi kondisi memburuk setelah konfirmasi 3 menit (${reason}). Dibatalkan demi keamanan._`);
+        logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED_RR', refined.confidence, `Invalidated: ${reason} at fresh entry ${freshEntry.toFixed(5)}`);
         continue;
       }
 
