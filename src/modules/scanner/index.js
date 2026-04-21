@@ -250,16 +250,17 @@ async function runScanCycle() {
 
   // Inform user about technical candidates found
   if (sentCount === 0 && rejections.length > 0) {
-    const watchlist = rejections.map(r => {
-        const label = r.quality === 'WATCHLIST' ? '📋 *WATCHLIST*' : '🚫 *REJECTED*';
-        return `• *${r.symbol}* (Score ${r.score}) ${label}: _${r.reason}_`;
-    }).join('\n');
+    const watchlist = rejections.filter(r => r.quality === 'WATCHLIST');
+    if (watchlist.length > 0) {
+      const msg = `📡 *𝐑𝐞𝐬𝐮𝐥𝐭: 𝐇𝐢𝐠𝐡 𝐀𝐥𝐞𝐫𝐭 𝐖𝐚𝐭𝐜𝐡𝐥𝐢𝐬𝐭*\n\n` +
+                  watchlist.map(r => {
+                    const rr = r.riskReward?.rr ? r.riskReward.rr.toFixed(2) : 'N/A';
+                    return `• *${r.symbol}* (Score ${r.score}) 📋 WATCHLIST | R:R: \`${rr}\`\n  _${r.reason}_`;
+                  }).join('\n\n') +
+                  `\n\n🛡️ *Status:* Standing by. Waiting for Market Regime shift or better RR Ratio.`;
 
-    const msg = `📡 *𝐑𝐞𝐬𝐮𝐥𝐭: 𝐇𝐢𝐠𝐡 𝐀𝐥𝐞𝐫𝐭 𝐖𝐚𝐭𝐜𝐡𝐥𝐢𝐬𝐭*\n\n` +
-                `${watchlist}\n\n` +
-                `🛡️ *Status:* Standing by. Waiting for Market Regime shift or better RR Ratio.`;
-
-    await sendStatus(msg);
+      await sendStatus(msg);
+    }
   }
 
   for (const candidate of finalPool) {
@@ -343,7 +344,6 @@ async function runScanCycle() {
       // ─── Live Confirmation Engine ───
       // Cek ulang kondisi harga beberapa saat sebelum dikirim (Anti-Fakeout)
       logger.info(`⏳ [Live Confirmation] Memantau pergerakan harga ${candidate.symbol} selama 3 menit...`);
-      await sendStatus(`⏳ *LIVE CONFIRMATION: ${candidate.symbol}*\n_AI menyetujui setup. Bot sedang memantau pergerakan harga secara live (3 menit) untuk menghindari fakeout..._`);
       
       await sleep(3 * 60 * 1000); // Wait 3 minutes
 
@@ -454,23 +454,10 @@ async function runScanCycle() {
 
     if (bestAlt) {
       const rr = bestAlt.riskReward;
-      const entryPrice = rr ? (rr.entry || bestAlt.entry || 'TBD') : (bestAlt.entry || 'TBD');
-      const slPrice = rr ? rr.sl.toFixed(5) : 'Calculating...';
-      const tpPrice = rr ? rr.tp.toFixed(5) : 'Calculating...';
       const rrRatio = rr ? rr.rr.toFixed(2) : (bestAlt.score > 80 ? 'High' : 'Low');
-      const label = bestAlt.quality === 'WATCHLIST' ? '(WATCHLIST)' : '(OBSERVATION)';
-
       logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${rrRatio})`);
-      await sendStatus(`💡 *BEST ALTERNATIVE: ${bestAlt.symbol}* ${label} | ${bestAlt.bias}\n` +
-                     `_No high-quality signals this cycle. Best available setup below._\n\n` +
-                     `• *Score:* \`${bestAlt.score}/100\` | *R:R:* \`${rrRatio}\`\n` +
-                     `• *Entry:* \`${entryPrice}\`\n` +
-                     `• *TP:* \`${tpPrice}\` | *SL:* \`${slPrice}\`\n\n` +
-                     `🧠 *Analysis:* ${bestAlt.reason}\n\n` +
-                     `⚠️ _Pantau manual saja — tidak masuk Active Trades._`);
     } else {
       logger.info('⛔ No Best Alternative found (all candidates failed R:R or quality checks).');
-      await sendStatus('🛡️ *Scan Complete:* Market conditions do not favor any trade this cycle. Waiting for next scan.');
     }
   }
 
@@ -492,7 +479,7 @@ async function startScanner() {
   initAudit();
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
-  await sendStatus('🤖 *Crypto Signal Bot v4.4.1* started!\n_Adaptive Intelligence, Market Regime, Retest Guard & Memory Fix active._');
+  logger.info('🤖 Crypto Signal Bot v4.4.1 started. Telegram startup notification suppressed.');
 
   // Run first cycle immediately
   await runScanCycle();

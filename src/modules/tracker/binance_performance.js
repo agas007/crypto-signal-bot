@@ -69,17 +69,38 @@ class BinancePerformance {
       }
     }
 
-    const winRate = tradesCount > 0 ? (wins / tradesCount) * 100 : 0;
+    const positionLog = this._aggregatePositionTrades(tradeLog);
+    const positionCount = positionLog.length;
+    const positionWins = positionLog.filter(t => parseFloat(t.pnl) > 0).length;
+    const positionLosses = positionLog.filter(t => parseFloat(t.pnl) < 0).length;
+    const winRate = positionCount > 0 ? (positionWins / positionCount) * 100 : 0;
+
+    const latestTrade = positionLog.length > 0
+      ? [...positionLog].sort((a, b) => (b.exitTime || 0) - (a.exitTime || 0))[0]
+      : null;
+
+    tracker.saveBinanceSnapshot({
+      period,
+      market,
+      generatedAt: Date.now(),
+      totalPnl: totalPnl.toFixed(2),
+      tradesCount: positionCount,
+      winRate: winRate.toFixed(2) + '%',
+      wins: positionWins,
+      losses: positionLosses,
+      latestTrade
+    });
 
     return {
       period,
       market,
       totalPnl: totalPnl.toFixed(2),
-      tradesCount,
+      tradesCount: positionCount,
       winRate: winRate.toFixed(2) + '%',
-      wins,
-      losses,
-      tradeLog: tradeLog.reverse() // Return all trades, bot will slice for chat display
+      wins: positionWins,
+      losses: positionLosses,
+      tradeLog: positionLog.reverse(), // Return position-based ledger for chat display
+      rawTradeLog: tradeLog.reverse()
     };
   }
 
@@ -186,6 +207,63 @@ class BinancePerformance {
     }
 
     return { pnl, count, wins, losses, details };
+  }
+
+  /**
+   * Group fill-level trade rows into position-level rows.
+   * This collapses multiple partial fills/close orders into a single ledger line.
+   */
+  _aggregatePositionTrades(details = []) {
+    const buckets = new Map();
+
+    for (const trade of details) {
+      const entryPrice = trade.entryPrice != null ? parseFloat(trade.entryPrice) : null;
+      const entryTime = trade.entryTime != null ? Number(trade.entryTime) : null;
+      const timeKey = entryTime != null ? entryTime : (trade.exitTime != null ? Number(trade.exitTime) : 0);
+      const entryKey = entryPrice != null ? entryPrice.toFixed(6) : 'na';
+      const key = [
+        trade.market || 'UNK',
+        trade.symbol || 'PAIR',
+        entryKey,
+        timeKey
+      ].join('|');
+
+      const pnlValue = parseFloat(trade.pnl || 0);
+      const quoteQtyValue = trade.quoteQty != null ? Number(trade.quoteQty) : 0;
+
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          ...trade,
+          pnl: pnlValue,
+          quoteQty: quoteQtyValue,
+          fills: 1
+        });
+        continue;
+      }
+
+      const current = buckets.get(key);
+      current.pnl += pnlValue;
+      current.quoteQty += quoteQtyValue;
+      current.fills += 1;
+
+      if ((trade.exitTime || 0) > (current.exitTime || 0)) {
+        current.exitTime = trade.exitTime;
+        current.exitPrice = trade.exitPrice;
+      }
+
+      if (current.entryTime == null && trade.entryTime != null) current.entryTime = trade.entryTime;
+      if (current.entryPrice == null && trade.entryPrice != null) current.entryPrice = trade.entryPrice;
+      if (trade.sl != null && current.sl == null) current.sl = trade.sl;
+      if (trade.tp != null && current.tp == null) current.tp = trade.tp;
+      if (trade.rr != null && current.rr == null) current.rr = trade.rr;
+    }
+
+    return [...buckets.values()]
+      .map(t => ({
+        ...t,
+        pnl: Number(t.pnl).toFixed(2),
+      }))
+      .sort((a, b) => (b.exitTime || 0) - (a.exitTime || 0));
   }
 
   /**

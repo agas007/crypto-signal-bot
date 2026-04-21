@@ -24,6 +24,17 @@ interface Trade {
   close_reason: string;
   entryAt?: number;
   exitAt?: number;
+  quality?: string;
+  confidence?: number;
+}
+
+interface BinanceTrade {
+  symbol: string;
+  market?: string;
+  pnl?: string | number;
+  exitTime?: number;
+  entryPrice?: number;
+  entryTime?: number;
 }
 
 interface Lesson {
@@ -38,6 +49,18 @@ interface BotData {
   history: Trade[];
   lessons: Lesson[];
   logs: string;
+  watchlist?: Signal[];
+  binanceSnapshot?: {
+    period?: string;
+    market?: string;
+    generatedAt?: number;
+    totalPnl?: string;
+    tradesCount?: number;
+    winRate?: string;
+    wins?: number;
+    losses?: number;
+    latestTrade?: BinanceTrade;
+  } | null;
 }
 
 export default function Dashboard() {
@@ -54,7 +77,9 @@ export default function Dashboard() {
             signals: res.signals || [],
             history: res.history ? res.history.reverse() : [],
             lessons: res.lessons ? res.lessons.reverse() : [],
-            logs: res.logs || ""
+            logs: res.logs || "",
+            watchlist: res.watchlist || [],
+            binanceSnapshot: res.binanceSnapshot || null
           });
         }
         setLoading(false);
@@ -68,8 +93,8 @@ export default function Dashboard() {
   const signals = data.signals || [];
   const history = data.history || [];
   const lessons = data.lessons || [];
+  const watchlistSignals = data.watchlist || signals.filter((s) => s.bias === 'WATCHLIST' || s.quality === 'WATCHLIST');
   const activeSignals = signals.filter((s) => s.bias === 'LONG' || s.bias === 'SHORT');
-  const watchlistSignals = signals.filter((s) => s.bias === 'WATCHLIST' || s.quality === 'WATCHLIST');
   const approvedSignals = activeSignals.length;
   const completedTrades = history.filter((t) => t.close_reason === 'TP_HIT' || t.close_reason === 'SL_HIT');
   const winTrades = completedTrades.filter((t) => t.close_reason === 'TP_HIT').length;
@@ -81,6 +106,7 @@ export default function Dashboard() {
   const strongestSignal = [...signals]
     .sort((a, b) => (Number(b.confidence) || 0) - (Number(a.confidence) || 0))[0];
   const latestHistory = history[0];
+  const latestBinanceTrade = data.binanceSnapshot?.latestTrade || null;
   const latestLesson = lessons[0];
   const signalHealthLabel = signals.length === 0
     ? 'Tidak ada signal aktif'
@@ -148,8 +174,8 @@ export default function Dashboard() {
           </div>
           <div className="rounded-2xl border border-slate-800/80 bg-slate-900/60 p-4">
             <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Latest</p>
-            <p className="mt-2 text-2xl font-bold text-slate-100">{latestHistory ? latestHistory.symbol : (strongestSignal?.symbol || '-')}</p>
-            <p className="mt-1 text-xs text-slate-400">{latestHistory ? latestHistory.close_reason : signalHealthLabel}</p>
+            <p className="mt-2 text-2xl font-bold text-slate-100">{latestBinanceTrade?.symbol || latestHistory?.symbol || (strongestSignal?.symbol || '-')}</p>
+            <p className="mt-1 text-xs text-slate-400">{latestBinanceTrade ? 'Binance synced' : latestHistory ? latestHistory.close_reason : signalHealthLabel}</p>
           </div>
         </section>
 
@@ -237,8 +263,14 @@ export default function Dashboard() {
                         <p className="mt-2">{strongestSignal ? `${strongestSignal.symbol} paling kuat saat ini.` : 'Belum ada signal yang bisa difokuskan.'}</p>
                       </div>
                       <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
-                        <p className="text-slate-400 text-xs uppercase tracking-wider">Last Trade</p>
-                        <p className="mt-2">{latestHistory ? `${latestHistory.symbol} selesai dengan ${latestHistory.close_reason}.` : 'Belum ada trade history.'}</p>
+                        <p className="text-slate-400 text-xs uppercase tracking-wider">Latest Binance Trade</p>
+                        <p className="mt-2">
+                          {latestBinanceTrade
+                            ? `${latestBinanceTrade.symbol} ${latestBinanceTrade.market ? `(${latestBinanceTrade.market})` : ''} ${latestBinanceTrade.pnl ? `dengan PnL ${latestBinanceTrade.pnl}` : ''}`.trim()
+                            : latestHistory
+                              ? `${latestHistory.symbol} selesai dengan ${latestHistory.close_reason}.`
+                              : 'Belum ada trade history.'}
+                        </p>
                       </div>
                       <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
                         <p className="text-slate-400 text-xs uppercase tracking-wider">Latest Lesson</p>
@@ -256,8 +288,8 @@ export default function Dashboard() {
                     </div>
                     <span className="text-xs text-slate-500">Newest first</span>
                   </div>
-                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                    {history.slice(0, 6).map((t, i) => (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {history.slice(0, 6).map((t, i) => (
                       <div key={`${t.symbol}-${i}`} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div>
@@ -398,6 +430,31 @@ export default function Dashboard() {
                     )}
                   </tbody>
                 </table>
+              </div>
+            )}
+
+            {activeTab === 'signals' && watchlistSignals.length > 0 && (
+              <div className="mt-6 rounded-2xl border border-slate-800/80 bg-slate-900/40 p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-slate-100">Watchlist</h3>
+                  <span className="text-xs text-slate-500">{watchlistSignals.length} item(s)</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {watchlistSignals.slice(0, 6).map((signal, idx) => (
+                    <div key={`${signal.symbol}-watch-${idx}`} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-lg font-bold text-slate-100">{signal.symbol}</h4>
+                          <p className="text-xs text-slate-400 mt-1">{signal.trading_type || 'WATCHLIST'}</p>
+                        </div>
+                        <span className="px-3 py-1 text-xs font-bold rounded-lg border bg-amber-500/10 text-amber-300 border-amber-500/20">
+                          WATCHLIST
+                        </span>
+                      </div>
+                      <p className="mt-3 text-sm text-slate-400 line-clamp-3">{signal.reason || 'Belum ada alasan tercatat.'}</p>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 

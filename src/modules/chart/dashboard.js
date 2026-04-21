@@ -5,6 +5,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const { formatJakartaTime } = require('../../utils/time');
+const tracker = require('../tracker');
 
 function resolvePath(filename) {
   const candidates = [
@@ -50,6 +51,15 @@ function pickLatest(items, key = 'timestamp') {
 
 async function generateAndSendDashboard(targetChatId = null) {
   const chatId = targetChatId || config.telegram.chatId;
+  const isManual = Boolean(targetChatId);
+  const sixHoursMs = 6 * 60 * 60 * 1000;
+  const dashboardState = tracker.getDashboardState ? tracker.getDashboardState() : { lastAutoDashboardSentAt: 0 };
+  const lastAutoSentAt = dashboardState.lastAutoDashboardSentAt || 0;
+
+  if (!isManual && lastAutoSentAt && (Date.now() - lastAutoSentAt) < sixHoursMs) {
+    logger.info(`🕒 Dashboard auto-send skipped. Next eligible send in ${Math.ceil((sixHoursMs - (Date.now() - lastAutoSentAt)) / 60000)} min.`);
+    return;
+  }
 
   const rawSignals = readJson('active_signals.json', []);
   const history = readJson('trade_history.json', []);
@@ -397,6 +407,12 @@ async function generateAndSendDashboard(targetChatId = null) {
         `_Generated on: ${formatJakartaTime(new Date(), 'readable')} WIB_`,
       parse_mode: 'Markdown',
     });
+
+    if (!isManual) {
+      tracker.setDashboardState({
+        lastAutoDashboardSentAt: Date.now()
+      });
+    }
 
     if (fs.existsSync(screenshotPath)) fs.unlinkSync(screenshotPath);
     logger.info('✅ Dashboard pushed to Telegram successfully');

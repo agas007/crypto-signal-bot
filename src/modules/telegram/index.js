@@ -212,17 +212,18 @@ async function initTelegram() {
                    const pnlSafe = (parseFloat(t.pnl) > 0 ? '+' : '') + t.pnl;
                    const symbolSafe = (t.symbol || 'PAIR').replace(/_/g, '\\_');
                    const hasPlannedLevels = t.rr && t.tp != null && t.sl != null;
+                   const fillsTag = t.fills && t.fills > 1 ? ` • *Fills:* ${t.fills}` : '';
                    const entryTimeLine = t.entryTime
                      ? `\n   _Entry Time:_ \`${formatJakartaTime(new Date(t.entryTime), 'readable')} WIB\``
                      : '';
                    
                    let extraInfo = '';
                    if (hasPlannedLevels) {
-                     extraInfo = ` | *RR: ${parseFloat(t.rr).toFixed(2)}*\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`${entryTimeLine}\n   _TP:_ \`${t.tp || '?'}\` | _SL:_ \`${t.sl || '?'}\``;
+                     extraInfo = ` | *RR: ${parseFloat(t.rr).toFixed(2)}*${fillsTag}\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`${entryTimeLine}\n   _TP:_ \`${t.tp || '?'}\` | _SL:_ \`${t.sl || '?'}\``;
                    } else {
                      let marginEst = (t.quoteQty || 0) / 20; 
                      let pnlPct = marginEst > 0 ? (parseFloat(t.pnl) / marginEst * 100) : 0;
-                     extraInfo = `\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`${entryTimeLine}\n   _Manual_ | _ROE:_ \`${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%\` (est 20x)`;
+                     extraInfo = `\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`${entryTimeLine}\n   _Manual_ | _ROE:_ \`${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%\` (est 20x)${fillsTag}`;
                    }
                    
                    return `${emoji} \`${symbolSafe}\` (${t.market}): \`${pnlSafe} USDT\`${extraInfo}`;

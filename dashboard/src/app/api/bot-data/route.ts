@@ -36,7 +36,9 @@ export async function GET() {
       signals: [],
       history: [],
       lessons: [],
-      logs: ""
+      logs: "",
+      watchlist: [],
+      binanceSnapshot: null
     };
 
     const signalsPath = resolvePath('active_signals.json');
@@ -66,6 +68,18 @@ export async function GET() {
       } catch (e: any) { debugInfo.errors.logs = e.message; }
     }
 
+    const watchlistPath = resolvePath('latest_watchlist.json');
+    if (watchlistPath) {
+      debugInfo.resolvedWatchlistPath = watchlistPath;
+      try { data.watchlist = JSON.parse(fs.readFileSync(watchlistPath, 'utf8')); } catch (e: any) { debugInfo.errors.watchlist = e.message; }
+    }
+
+    const binanceSnapshotPath = resolvePath('binance_trade_snapshot.json');
+    if (binanceSnapshotPath) {
+      debugInfo.resolvedBinanceSnapshotPath = binanceSnapshotPath;
+      try { data.binanceSnapshot = JSON.parse(fs.readFileSync(binanceSnapshotPath, 'utf8')); } catch (e: any) { debugInfo.errors.binanceSnapshot = e.message; }
+    }
+
     // Normalize signal object if it's stored as keyed object instead of array
     if (data.signals && !Array.isArray(data.signals)) {
       data.signals = Object.values(data.signals);
@@ -78,4 +92,3 @@ export async function GET() {
     return NextResponse.json({ success: false, error: message, debug: debugInfo }, { status: 500 });
   }
 }
-

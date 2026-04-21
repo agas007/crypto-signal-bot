@@ -7,6 +7,9 @@ const DATA_DIR = process.env.DATA_DIR || process.cwd();
 const STORAGE_PATH = path.join(DATA_DIR, 'active_signals.json');
 const LESSONS_PATH = path.join(DATA_DIR, 'history_lessons.json');
 const HISTORY_PATH = path.join(DATA_DIR, 'trade_history.json');
+const WATCHLIST_PATH = path.join(DATA_DIR, 'latest_watchlist.json');
+const BINANCE_SNAPSHOT_PATH = path.join(DATA_DIR, 'binance_trade_snapshot.json');
+const DASHBOARD_STATE_PATH = path.join(DATA_DIR, 'dashboard_state.json');
 
 // Ensure directory exists if it's not the root or current directory
 if (DATA_DIR !== process.cwd() && !fs.existsSync(DATA_DIR)) {
@@ -25,7 +28,9 @@ class SignalTracker {
     this.signals = this._load();
     this.lessons = this._loadLessons();
     this.history = this._loadHistory();
-    this.latestWatchlist = [];
+    this.latestWatchlist = this._loadWatchlist();
+    this.latestBinanceSnapshot = this._loadBinanceSnapshot();
+    this.dashboardState = this._loadDashboardState();
     this.manualResetAt = 0;
   }
 
@@ -64,6 +69,33 @@ class SignalTracker {
       }
     } catch (err) { logger.debug('No trade history file found, creating new one...'); }
     return [];
+  }
+
+  _loadWatchlist() {
+    try {
+      if (fs.existsSync(WATCHLIST_PATH)) {
+        return JSON.parse(fs.readFileSync(WATCHLIST_PATH, 'utf8'));
+      }
+    } catch (err) { logger.error('Failed to load watchlist:', err.message); }
+    return [];
+  }
+
+  _loadBinanceSnapshot() {
+    try {
+      if (fs.existsSync(BINANCE_SNAPSHOT_PATH)) {
+        return JSON.parse(fs.readFileSync(BINANCE_SNAPSHOT_PATH, 'utf8'));
+      }
+    } catch (err) { logger.error('Failed to load Binance snapshot:', err.message); }
+    return null;
+  }
+
+  _loadDashboardState() {
+    try {
+      if (fs.existsSync(DASHBOARD_STATE_PATH)) {
+        return JSON.parse(fs.readFileSync(DASHBOARD_STATE_PATH, 'utf8'));
+      }
+    } catch (err) { logger.error('Failed to load dashboard state:', err.message); }
+    return { lastAutoDashboardSentAt: 0 };
   }
 
   _save() {
@@ -358,10 +390,44 @@ class SignalTracker {
    */
   saveWatchlist(list) {
     this.latestWatchlist = list || [];
+    try {
+      fs.writeFileSync(WATCHLIST_PATH, JSON.stringify(this.latestWatchlist, null, 2));
+    } catch (err) {
+      logger.error('Failed to save watchlist:', err.message);
+    }
   }
 
   getWatchlist() {
     return this.latestWatchlist;
+  }
+
+  saveBinanceSnapshot(snapshot) {
+    this.latestBinanceSnapshot = snapshot || null;
+    try {
+      fs.writeFileSync(BINANCE_SNAPSHOT_PATH, JSON.stringify(this.latestBinanceSnapshot, null, 2));
+    } catch (err) {
+      logger.error('Failed to save Binance snapshot:', err.message);
+    }
+  }
+
+  getBinanceSnapshot() {
+    return this.latestBinanceSnapshot;
+  }
+
+  getDashboardState() {
+    return this.dashboardState || { lastAutoDashboardSentAt: 0 };
+  }
+
+  setDashboardState(nextState = {}) {
+    this.dashboardState = {
+      ...(this.dashboardState || { lastAutoDashboardSentAt: 0 }),
+      ...nextState,
+    };
+    try {
+      fs.writeFileSync(DASHBOARD_STATE_PATH, JSON.stringify(this.dashboardState, null, 2));
+    } catch (err) {
+      logger.error('Failed to save dashboard state:', err.message);
+    }
   }
 }
 
