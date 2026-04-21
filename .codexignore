@@ -1,0 +1,28 @@
+# Dependencies (WAJIB di-ignore)
+node_modules/
+vendor/
+.venv/
+
+# Build output
+dist/
+build/
+.next/
+out/
+
+# Cache & coverage
+coverage/
+.cache/
+
+# File besar / tidak relevan
+*.log
+*.tmp
+*.csv
+*.json
+
+# Binary / media
+*.png
+*.jpg
+*.mp4
+
+# Generated files
+*.generated.*
