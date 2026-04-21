@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-
-const { aggregatePositionHistory } = require(path.join(process.cwd(), '../src/utils/trade_aggregation'));
+import { aggregatePositionHistory } from '../../../../../src/utils/trade_aggregation';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -17,10 +16,10 @@ export async function GET() {
 
   try {
     const resolvePath = (filename: string) => {
-      const possiblePaths = [];
+      const possiblePaths: string[] = [];
       
       if (process.env.DATA_DIR) {
-          possiblePaths.push(path.join(process.env.DATA_DIR, filename));
+        possiblePaths.push(path.join(process.env.DATA_DIR, filename));
       }
       possiblePaths.push(path.join(process.cwd(), filename));
       possiblePaths.push(path.join(process.cwd(), '../' + filename));
