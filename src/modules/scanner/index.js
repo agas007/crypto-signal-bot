@@ -356,7 +356,6 @@ async function runScanCycle() {
       // FIX: 0.5% dalam 3 menit adalah volatilitas abnormal (news/fakeout). Reject!
       if (slippage > 0.005) {
           logger.warn(`🚫 [Live Confirmation Failed] ${candidate.symbol} price slipped ${(slippage*100).toFixed(2)}% during 3m window.`);
-          await sendStatus(`🚫 *SIGNAL DROPPED: ${candidate.symbol}*\n_Terdeteksi pergerakan harga tidak normal (${(slippage*100).toFixed(1)}%) dlm 3 menit. Fakeout/News spike dihindari._`);
           logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED', refined.confidence, `Price slipped ${(slippage*100).toFixed(1)}% in 3 mins.`);
           continue;
       }
@@ -381,7 +380,6 @@ async function runScanCycle() {
         const reason = !freshRR ? 'Safety/Distance bounds' : `Low R:R (${rrVal})`;
         
         logger.warn(`🚫 [Fresh RR Check] ${candidate.symbol}: Signal invalidated after 3m confirmation (${reason})`);
-        await sendStatus(`🚫 *SIGNAL EXPIRED: ${candidate.symbol}*\n_Setup valid saat scan awal, tapi kondisi memburuk setelah konfirmasi 3 menit (${reason}). Dibatalkan demi keamanan._`);
         logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED_RR', refined.confidence, `Invalidated: ${reason} at fresh entry ${freshEntry.toFixed(5)}`);
         continue;
       }
@@ -479,7 +477,11 @@ async function startScanner() {
   initAudit();
   logger.info(`🚀 Scanner starting — interval: ${config.scanner.intervalMs / 1000}s, max pairs: ${config.scanner.maxPairs}`);
 
-  logger.info('🤖 Crypto Signal Bot v4.4.1 started. Telegram startup notification suppressed.');
+  await sendStatus(
+    `🤖 *Crypto Signal Bot v4.4.1 started*\n` +
+    `_Scanner active: interval ${config.scanner.intervalMs / 1000}s, max pairs ${config.scanner.maxPairs}_`
+  );
+  logger.info('🤖 Crypto Signal Bot v4.4.1 started. Telegram startup notification sent.');
 
   // Run first cycle immediately
   await runScanCycle();

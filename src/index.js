@@ -8,7 +8,7 @@ console.log('🤖 CRYPTO SIGNAL BOT v4.4.1 STARTED');
 async function main() {
   try {
     startDashboard(); // Jalankan Dashboard
-    initTelegram();   // Jalankan Telegram Bot
+    await initTelegram();   // Jalankan Telegram Bot
     await startScanner(); // Jalankan Market Scanner
   } catch (err) {
     logger.error('Fatal error:', err);
