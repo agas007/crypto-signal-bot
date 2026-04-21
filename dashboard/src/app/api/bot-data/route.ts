@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
 
+const { aggregatePositionHistory } = require(path.join(process.cwd(), '../src/utils/trade_aggregation'));
+
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
@@ -50,7 +52,10 @@ export async function GET() {
     const historyPath = resolvePath('trade_history.json');
     if (historyPath) {
       debugInfo.resolvedHistoryPath = historyPath;
-      try { data.history = JSON.parse(fs.readFileSync(historyPath, 'utf8')); } catch (e: any) { debugInfo.errors.history = e.message; }
+      try {
+        const rawHistory = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
+        data.history = aggregatePositionHistory(Array.isArray(rawHistory) ? rawHistory : []);
+      } catch (e: any) { debugInfo.errors.history = e.message; }
     }
 
     const lessonsPath = resolvePath('history_lessons.json');

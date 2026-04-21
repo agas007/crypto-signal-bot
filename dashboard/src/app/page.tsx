@@ -26,6 +26,7 @@ interface Trade {
   exitAt?: number;
   quality?: string;
   confidence?: number;
+  fills?: number;
 }
 
 interface BinanceTrade {
@@ -313,6 +314,9 @@ export default function Dashboard() {
                             <p className="mt-1 font-mono text-slate-200">{t.exit_price || '-'}</p>
                           </div>
                         </div>
+                        {t.fills && t.fills > 1 && (
+                          <p className="mt-3 text-xs text-slate-500">Position merged from {t.fills} fills</p>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -402,13 +406,14 @@ export default function Dashboard() {
                       <th className="px-6 py-4">Result</th>
                       <th className="px-6 py-4">Quality</th>
                       <th className="px-6 py-4">Confidence</th>
+                      <th className="px-6 py-4">Fills</th>
                       <th className="px-6 py-4">Entry</th>
                       <th className="px-6 py-4">Exit</th>
                     </tr>
                   </thead>
                   <tbody>
                     {data.history.length === 0 ? (
-                      <tr><td colSpan={7} className="text-center py-12 text-slate-500">No trade history recorded yet.</td></tr>
+                      <tr><td colSpan={8} className="text-center py-12 text-slate-500">No trade history recorded yet.</td></tr>
                     ) : (
                       data.history.map((t, i) => (
                         <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/30">
@@ -423,6 +428,7 @@ export default function Dashboard() {
                           </td>
                           <td className="px-6 py-4 font-mono text-xs">{(t as any).quality || '-'}</td>
                           <td className="px-6 py-4 font-mono text-xs">{(t as any).confidence ?? '-'}</td>
+                          <td className="px-6 py-4 font-mono text-xs">{(t as any).fills ?? 1}</td>
                           <td className="px-6 py-4 font-mono text-xs">{t.entry}</td>
                           <td className="px-6 py-4 font-mono text-xs">{t.exit_price || '-'}</td>
                         </tr>

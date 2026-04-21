@@ -6,6 +6,7 @@ const config = require('../../config');
 const logger = require('../../utils/logger');
 const { formatJakartaTime } = require('../../utils/time');
 const tracker = require('../tracker');
+const { aggregatePositionHistory } = require('../../utils/trade_aggregation');
 
 function resolvePath(filename) {
   const candidates = [
@@ -62,7 +63,7 @@ async function generateAndSendDashboard(targetChatId = null) {
   }
 
   const rawSignals = readJson('active_signals.json', []);
-  const history = readJson('trade_history.json', []);
+  const history = aggregatePositionHistory(readJson('trade_history.json', []));
   const lessons = readJson('history_lessons.json', []);
 
   const signals = normalizeSignals(rawSignals);

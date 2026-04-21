@@ -5,6 +5,7 @@ process.env.NTBA_FIX_350 = 1;
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const { formatJakartaTime, getNextJakartaReset } = require('../../utils/time');
+const { aggregatePositionHistory } = require('../../utils/trade_aggregation');
 const { analyzePerformanceSummary } = require('../ai/openrouter');
 const tracker = require('../tracker');
 const binancePerformance = require('../tracker/binance_performance');
@@ -320,7 +321,7 @@ async function initTelegram() {
 
   // /history command
   bot.onText(/\/history/, (msg) => {
-    const history = tracker.history.slice(-10).reverse();
+    const history = aggregatePositionHistory(tracker.history).slice(0, 10);
     if (history.length === 0) return bot.sendMessage(msg.chat.id, '📜 *No trade history* yet.');
 
     let report = `📜 *LAST 10 TRADE RESULTS*\n\n`;
@@ -328,7 +329,7 @@ async function initTelegram() {
       const resultEmoji = t.close_reason === 'TP_HIT' ? '✅' : t.close_reason === 'SL_HIT' ? '🚨' : '⚪';
       report += `${i+1}. ${resultEmoji} *${t.symbol}* (${t.bias})\n` +
                 `• In: \`${t.entry}\` → Out: \`${t.exit_price || 'N/A'}\`\n` +
-                `• Result: \`${t.close_reason}\`\n\n`;
+                `• Result: \`${t.close_reason}\`${t.fills > 1 ? ` | Fills: \`${t.fills}\`` : ''}\n\n`;
     });
     bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(() => {
         bot.sendMessage(msg.chat.id, report.replace(/[*_`]/g, ''));
