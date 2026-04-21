@@ -635,8 +635,12 @@ function formatSignalMessage(signal) {
   if (signal.trading_type?.includes('SWING')) expiryHours = 24;
   
   const expiryDate = new Date(now.getTime() + expiryHours * 60 * 60 * 1000);
-  const expiryStr = expiryDate.toLocaleString('id-ID', { hour: '2-digit', minute: '2-digit', hour12: false });
-  const dateStr = expiryDate.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit' });
+  const expiryStr = formatJakartaTime(expiryDate, 'short');
+  const dateStr = new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Jakarta',
+    day: '2-digit',
+    month: '2-digit',
+  }).format(expiryDate);
 
   const scalingTag = signal.riskReward?.isScaled ? ' (⚠️ AUTO SCALED)' : '';
 
