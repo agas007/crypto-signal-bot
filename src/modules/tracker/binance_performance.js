@@ -88,7 +88,16 @@ class BinancePerformance {
       winRate: winRate.toFixed(2) + '%',
       wins: positionWins,
       losses: positionLosses,
-      latestTrade
+      latestTrade: latestTrade
+        ? {
+            ...latestTrade,
+            close_reason: latestTrade.close_reason || (parseFloat(latestTrade.pnl) >= 0 ? 'TP_HIT' : 'SL_HIT'),
+          }
+        : null,
+      tradeLog: positionLog.slice(0, 20).map((trade) => ({
+        ...trade,
+        close_reason: trade.close_reason || (parseFloat(trade.pnl) >= 0 ? 'TP_HIT' : 'SL_HIT'),
+      }))
     });
 
     return {
@@ -139,7 +148,9 @@ class BinancePerformance {
                 details.push({
                     symbol: t.symbol,
                     market: 'FUT',
+                    bias: signalRecord ? signalRecord.bias : (t.isBuyer ? 'SHORT' : 'LONG'),
                     pnl: pnlValue.toFixed(2),
+                    close_reason: pnlValue >= 0 ? 'TP_HIT' : 'SL_HIT',
                     exitTime: t.time,
                     exitPrice: exitPrice,
                     entryPrice: signalRecord ? signalRecord.entry : (t.entryPrice || estimatedEntry),
@@ -187,7 +198,9 @@ class BinancePerformance {
           details.push({
             symbol,
             market: 'SPOT',
+            bias: signalRecord ? signalRecord.bias : (t.isBuyer ? 'LONG' : 'SHORT'),
             pnl: realizedPnl.toFixed(2),
+            close_reason: realizedPnl >= 0 ? 'TP_HIT' : 'SL_HIT',
             exitTime: t.time,
             exitPrice: t.price,
             entryPrice: signalRecord ? signalRecord.entry : avgCost,

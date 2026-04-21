@@ -22,6 +22,7 @@ interface Trade {
   entry: number;
   exit_price?: number;
   close_reason: string;
+  pnl?: number | string;
   entryAt?: number;
   exitAt?: number;
   quality?: string;
@@ -35,7 +36,9 @@ interface BinanceTrade {
   pnl?: string | number;
   exitTime?: number;
   entryPrice?: number;
+  exitPrice?: number;
   entryTime?: number;
+  close_reason?: string;
 }
 
 interface Lesson {
@@ -61,7 +64,37 @@ interface BotData {
     wins?: number;
     losses?: number;
     latestTrade?: BinanceTrade;
+    tradeLog?: BinanceTrade[];
   } | null;
+  livePrices?: Record<string, {
+    symbol: string;
+    lastPrice: number;
+    priceChangePercent: number;
+    quoteVolume: number;
+    updatedAt: number;
+  }>;
+}
+
+function formatPrice(value?: number | string | null) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return '-';
+
+  const abs = Math.abs(n);
+  const decimals = abs >= 1000 ? 2 : abs >= 100 ? 3 : abs >= 1 ? 4 : abs >= 0.01 ? 5 : 6;
+  return n.toFixed(decimals).replace(/\.?0+$/, '');
+}
+
+function getOutcomeLabel(trade?: Trade | BinanceTrade | null) {
+  if (!trade) return '-';
+
+  const closeReason = (trade as Trade).close_reason;
+  if (closeReason === 'TP_HIT') return 'TP';
+  if (closeReason === 'SL_HIT') return 'SL';
+
+  const pnl = Number((trade as BinanceTrade).pnl);
+  if (Number.isFinite(pnl)) return pnl >= 0 ? 'TP' : 'SL';
+
+  return '-';
 }
 
 export default function Dashboard() {
@@ -80,7 +113,8 @@ export default function Dashboard() {
             lessons: res.lessons ? res.lessons.reverse() : [],
             logs: res.logs || "",
             watchlist: res.watchlist || [],
-            binanceSnapshot: res.binanceSnapshot || null
+            binanceSnapshot: res.binanceSnapshot || null,
+            livePrices: res.livePrices || {}
           });
         }
         setLoading(false);
@@ -101,6 +135,12 @@ export default function Dashboard() {
   const winTrades = completedTrades.filter((t) => t.close_reason === 'TP_HIT').length;
   const lossTrades = completedTrades.filter((t) => t.close_reason === 'SL_HIT').length;
   const winRate = completedTrades.length > 0 ? (winTrades / completedTrades.length) * 100 : 0;
+  const performanceWins = data.binanceSnapshot?.wins ?? winTrades;
+  const performanceLosses = data.binanceSnapshot?.losses ?? lossTrades;
+  const performanceWinRate = data.binanceSnapshot?.winRate
+    ? Number.parseFloat(data.binanceSnapshot.winRate)
+    : winRate;
+  const performanceTradeCount = data.binanceSnapshot?.tradesCount ?? completedTrades.length;
   const avgConfidence = signals.length > 0
     ? signals.reduce((sum, s) => sum + (Number(s.confidence) || 0), 0) / signals.length
     : 0;
@@ -108,6 +148,8 @@ export default function Dashboard() {
     .sort((a, b) => (Number(b.confidence) || 0) - (Number(a.confidence) || 0))[0];
   const latestHistory = history[0];
   const latestBinanceTrade = data.binanceSnapshot?.latestTrade || null;
+  const recentBinanceTrades = Array.isArray(data.binanceSnapshot?.tradeLog) ? data.binanceSnapshot.tradeLog : [];
+  const recentOutcomes = recentBinanceTrades.length > 0 ? recentBinanceTrades : history;
   const latestLesson = lessons[0];
   const signalHealthLabel = signals.length === 0
     ? 'Tidak ada signal aktif'
@@ -165,8 +207,8 @@ export default function Dashboard() {
           </div>
           <div className="rounded-2xl border border-slate-800/80 bg-slate-900/60 p-4">
             <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Win Rate</p>
-            <p className="mt-2 text-3xl font-bold text-violet-300">{winRate.toFixed(0)}%</p>
-            <p className="mt-1 text-xs text-slate-400">{winTrades} TP / {lossTrades} SL</p>
+            <p className="mt-2 text-3xl font-bold text-violet-300">{performanceWinRate.toFixed(0)}%</p>
+            <p className="mt-1 text-xs text-slate-400">{performanceTradeCount} trades • {performanceWins} TP / {performanceLosses} SL{data.binanceSnapshot ? ' • Binance' : ''}</p>
           </div>
           <div className="rounded-2xl border border-slate-800/80 bg-slate-900/60 p-4">
             <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Avg Conf</p>
@@ -206,51 +248,74 @@ export default function Dashboard() {
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                        {topSetups.map((signal, idx) => (
-                          <div key={`${signal.symbol}-${idx}`} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
-                            <div className="flex items-start justify-between gap-3 mb-4">
-                              <div>
-                                <h3 className="text-xl font-bold text-slate-100">{signal.symbol}</h3>
-                                <p className="text-xs text-slate-400 mt-1">{signal.trading_type || 'DAY TRADING'}</p>
-                              </div>
-                              <span className={`px-3 py-1 text-xs font-bold rounded-lg border ${
-                                signal.bias === 'LONG' ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' :
-                                signal.bias === 'SHORT' ? 'bg-rose-500/10 text-rose-300 border-rose-500/20' :
-                                'bg-amber-500/10 text-amber-300 border-amber-500/20'
-                              }`}>
-                                {signal.bias}
-                              </span>
-                            </div>
+                        {topSetups.map((signal, idx) => {
+                          const livePrice = data.livePrices?.[signal.symbol];
+                          const liveValue = livePrice?.lastPrice;
+                          const deltaFromEntry = liveValue != null && Number(signal.entry)
+                            ? ((liveValue - Number(signal.entry)) / Number(signal.entry)) * 100
+                            : null;
+                          const deltaLabel = deltaFromEntry == null
+                            ? '-'
+                            : `${deltaFromEntry >= 0 ? '+' : ''}${deltaFromEntry.toFixed(2)}%`;
 
-                            <div className="grid grid-cols-2 gap-3 text-sm">
-                              <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3">
-                                <p className="text-[10px] uppercase tracking-wider text-slate-500">Entry</p>
-                                <p className="mt-1 font-mono text-slate-200">{typeof signal.entry === 'number' ? signal.entry.toFixed(5) : (signal.entry || '-')}</p>
+                          return (
+                            <div key={`${signal.symbol}-${idx}`} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5">
+                              <div className="flex items-start justify-between gap-3 mb-4">
+                                <div>
+                                  <h3 className="text-xl font-bold text-slate-100">{signal.symbol}</h3>
+                                  <p className="text-xs text-slate-400 mt-1">{signal.trading_type || 'DAY TRADING'}</p>
+                                </div>
+                                <span className={`px-3 py-1 text-xs font-bold rounded-lg border ${
+                                  signal.bias === 'LONG' ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' :
+                                  signal.bias === 'SHORT' ? 'bg-rose-500/10 text-rose-300 border-rose-500/20' :
+                                  'bg-amber-500/10 text-amber-300 border-amber-500/20'
+                                }`}>
+                                  {signal.bias}
+                                </span>
                               </div>
-                              <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3">
-                                <p className="text-[10px] uppercase tracking-wider text-slate-500">Confidence</p>
-                                <p className="mt-1 font-mono text-slate-200">{Number(signal.confidence).toFixed(0)}%</p>
-                              </div>
-                              <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3">
-                                <p className="text-[10px] uppercase tracking-wider text-slate-500">TP</p>
-                                <p className="mt-1 font-mono text-emerald-300">{signal.take_profit ?? '-'}</p>
-                              </div>
-                              <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3">
-                                <p className="text-[10px] uppercase tracking-wider text-slate-500">SL</p>
-                                <p className="mt-1 font-mono text-rose-300">{signal.stop_loss ?? '-'}</p>
-                              </div>
-                            </div>
 
-                            <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
-                              <span>Quality: {signal.quality || 'N/A'}</span>
-                              <span>{signal.timestamp ? new Date(signal.timestamp).toLocaleString('id-ID') : 'Just now'}</span>
-                            </div>
+                              <div className="grid grid-cols-2 gap-3 text-sm">
+                                <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3 min-w-0">
+                                  <p className="text-[10px] uppercase tracking-wider text-slate-500">Entry</p>
+                                  <p className="mt-1 font-mono text-slate-200 break-all leading-tight">{formatPrice(signal.entry)}</p>
+                                </div>
+                                <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3 min-w-0">
+                                  <p className="text-[10px] uppercase tracking-wider text-slate-500">Confidence</p>
+                                  <p className="mt-1 font-mono text-slate-200">{Number(signal.confidence).toFixed(0)}%</p>
+                                </div>
+                                <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3 min-w-0">
+                                  <p className="text-[10px] uppercase tracking-wider text-slate-500">TP</p>
+                                  <p className="mt-1 font-mono text-emerald-300 break-all leading-tight">{formatPrice(signal.take_profit)}</p>
+                                </div>
+                                <div className="rounded-xl bg-slate-900/70 border border-slate-800 p-3 min-w-0">
+                                  <p className="text-[10px] uppercase tracking-wider text-slate-500">SL</p>
+                                  <p className="mt-1 font-mono text-rose-300 break-all leading-tight">{formatPrice(signal.stop_loss)}</p>
+                                </div>
+                                <div className="col-span-2 flex items-center justify-between rounded-xl bg-slate-900/70 border border-slate-800 p-3">
+                                  <div className="min-w-0">
+                                    <p className="text-[10px] uppercase tracking-wider text-slate-500">Live Binance</p>
+                                    <p className="mt-1 font-mono text-sky-300 break-all leading-tight">{formatPrice(liveValue)}</p>
+                                  </div>
+                                  <div className="text-right">
+                                    <p className="text-[10px] uppercase tracking-wider text-slate-500">Vs Entry</p>
+                                    <p className={`mt-1 font-mono break-all leading-tight ${deltaFromEntry == null ? 'text-slate-300' : deltaFromEntry >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                                      {deltaLabel}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
 
-                            <p className="mt-4 text-sm text-slate-400 leading-relaxed line-clamp-4">
-                              {signal.reason || 'No reasoning provided.'}
-                            </p>
-                          </div>
-                        ))}
+                              <div className="mt-4 flex items-center justify-between text-xs text-slate-400">
+                                <span>Quality: {signal.quality || 'N/A'}</span>
+                                <span>{signal.timestamp ? new Date(signal.timestamp).toLocaleString('id-ID') : 'Just now'}</span>
+                              </div>
+
+                              <p className="mt-4 text-sm text-slate-400 leading-relaxed line-clamp-4">
+                                {signal.reason || 'No reasoning provided.'}
+                              </p>
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -267,7 +332,7 @@ export default function Dashboard() {
                         <p className="text-slate-400 text-xs uppercase tracking-wider">Latest Binance Trade</p>
                         <p className="mt-2">
                           {latestBinanceTrade
-                            ? `${latestBinanceTrade.symbol} ${latestBinanceTrade.market ? `(${latestBinanceTrade.market})` : ''} ${latestBinanceTrade.pnl ? `dengan PnL ${latestBinanceTrade.pnl}` : ''}`.trim()
+                            ? `${latestBinanceTrade.symbol} ${latestBinanceTrade.market ? `(${latestBinanceTrade.market})` : ''} ${latestBinanceTrade.pnl ? `PnL ${formatPrice(latestBinanceTrade.pnl)}` : ''} • ${getOutcomeLabel(latestBinanceTrade)}`.trim()
                             : latestHistory
                               ? `${latestHistory.symbol} selesai dengan ${latestHistory.close_reason}.`
                               : 'Belum ada trade history.'}
@@ -290,32 +355,32 @@ export default function Dashboard() {
                     <span className="text-xs text-slate-500">Newest first</span>
                   </div>
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                      {history.slice(0, 6).map((t, i) => (
+                      {recentOutcomes.slice(0, 6).map((t, i) => (
                       <div key={`${t.symbol}-${i}`} className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
                         <div className="flex items-start justify-between gap-3">
                           <div>
                             <h4 className="font-bold text-slate-100">{t.symbol}</h4>
-                            <p className="text-xs text-slate-400 mt-1">{t.bias} • {t.close_reason}</p>
+                            <p className="text-xs text-slate-400 mt-1">{(t as any).bias ?? '-'} • {t.close_reason}</p>
                           </div>
                           <span className={`text-xs px-2 py-1 rounded-lg border ${
-                            t.close_reason === 'TP_HIT' ? 'border-emerald-500/20 text-emerald-300 bg-emerald-500/10' :
+                            getOutcomeLabel(t) === 'TP' ? 'border-emerald-500/20 text-emerald-300 bg-emerald-500/10' :
                             'border-rose-500/20 text-rose-300 bg-rose-500/10'
                           }`}>
-                            {t.close_reason === 'TP_HIT' ? 'TP' : 'SL'}
+                            {getOutcomeLabel(t)}
                           </span>
                         </div>
                         <div className="mt-4 grid grid-cols-2 gap-3 text-xs text-slate-400">
                           <div>
                             <p className="uppercase tracking-wider text-slate-500">Entry</p>
-                            <p className="mt-1 font-mono text-slate-200">{t.entry}</p>
+                            <p className="mt-1 font-mono text-slate-200 break-all leading-tight">{formatPrice((t as Trade).entry ?? (t as BinanceTrade).entryPrice)}</p>
                           </div>
                           <div>
                             <p className="uppercase tracking-wider text-slate-500">Exit</p>
-                            <p className="mt-1 font-mono text-slate-200">{t.exit_price || '-'}</p>
+                            <p className="mt-1 font-mono text-slate-200 break-all leading-tight">{formatPrice((t as Trade).exit_price ?? (t as BinanceTrade).exitPrice)}</p>
                           </div>
                         </div>
-                        {t.fills && t.fills > 1 && (
-                          <p className="mt-3 text-xs text-slate-500">Position merged from {t.fills} fills</p>
+                        {(t as any).fills && (t as any).fills > 1 && (
+                          <p className="mt-3 text-xs text-slate-500">Position merged from {(t as any).fills} fills</p>
                         )}
                       </div>
                     ))}
@@ -353,7 +418,7 @@ export default function Dashboard() {
                       <div className="grid grid-cols-2 gap-4 mb-6 p-4 rounded-xl bg-slate-950/50 border border-slate-800">
                         <div>
                           <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Entry Zone</p>
-                          <p className="font-mono text-sm text-slate-200">{typeof signal.entry === 'number' ? signal.entry.toFixed(5) : (signal.entry || '-')}</p>
+                          <p className="font-mono text-sm text-slate-200 break-all leading-tight">{formatPrice(signal.entry)}</p>
                         </div>
                         <div>
                           <p className="text-[10px] uppercase tracking-wider text-slate-500 mb-1">Confidence</p>
@@ -371,14 +436,18 @@ export default function Dashboard() {
                             {signal.timestamp ? `${Math.max(0, Math.round((Date.now() - signal.timestamp) / 60000))}m` : '-'}
                           </p>
                         </div>
-                        <div className="col-span-2 flex justify-between border-t border-slate-800/50 pt-2 mt-2">
+                        <div className="col-span-2 grid grid-cols-3 gap-3 border-t border-slate-800/50 pt-2 mt-2">
                            <div>
                               <p className="text-[10px] uppercase tracking-wider text-emerald-500/70 mb-1">TP</p>
-                              <p className="font-mono text-xs text-slate-300">{signal.take_profit || '-'}</p>
+                              <p className="font-mono text-xs text-slate-300 break-all leading-tight">{formatPrice(signal.take_profit)}</p>
                            </div>
                            <div className="text-right">
                               <p className="text-[10px] uppercase tracking-wider text-rose-500/70 mb-1">SL</p>
-                              <p className="font-mono text-xs text-slate-300">{signal.stop_loss || '-'}</p>
+                              <p className="font-mono text-xs text-slate-300 break-all leading-tight">{formatPrice(signal.stop_loss)}</p>
+                           </div>
+                           <div className="text-right">
+                              <p className="text-[10px] uppercase tracking-wider text-sky-500/70 mb-1">Live</p>
+                              <p className="font-mono text-xs text-slate-300 break-all leading-tight">{formatPrice(data.livePrices?.[signal.symbol]?.lastPrice)}</p>
                            </div>
                         </div>
                       </div>
@@ -429,8 +498,8 @@ export default function Dashboard() {
                           <td className="px-6 py-4 font-mono text-xs">{(t as any).quality || '-'}</td>
                           <td className="px-6 py-4 font-mono text-xs">{(t as any).confidence ?? '-'}</td>
                           <td className="px-6 py-4 font-mono text-xs">{(t as any).fills ?? 1}</td>
-                          <td className="px-6 py-4 font-mono text-xs">{t.entry}</td>
-                          <td className="px-6 py-4 font-mono text-xs">{t.exit_price || '-'}</td>
+                          <td className="px-6 py-4 font-mono text-xs break-all">{formatPrice(t.entry)}</td>
+                          <td className="px-6 py-4 font-mono text-xs break-all">{formatPrice(t.exit_price)}</td>
                         </tr>
                       ))
                     )}
