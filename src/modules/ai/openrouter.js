@@ -339,11 +339,29 @@ Respond with ONLY this JSON:
  */
 async function analyzePerformanceSummary(stats, tradeLog) {
   try {
-    const ledgerSummary = tradeLog.map(t => `- ${t.symbol} (${t.market}): ${t.pnl} USDT`).join('\n');
+    const normalizedTradeLog = (tradeLog || []).map(trade => {
+      const hasPlannedLevels = trade?.sl != null && trade?.tp != null && trade?.rr != null;
+      return {
+        ...trade,
+        executionType: hasPlannedLevels ? 'planned' : 'manual',
+        hasPlannedLevels,
+        entryTimeReadable: trade?.entryTime ? new Date(trade.entryTime).toISOString() : null,
+        exitTimeReadable: trade?.exitTime ? new Date(trade.exitTime).toISOString() : null
+      };
+    });
     
     const prompt = `
 Kamu adalah Performance Analyst untuk sistem trading otomatis.
 Analisis data trade dengan framework:
+
+ATURAN PENTING:
+- Kalau sl, tp, atau rr null, anggap trade itu manual.
+- Jangan sebut trade manual sebagai bug atau missing data kecuali ada bukti eksplisit.
+- Kalau mayoritas loss datang dari trade manual, fokuskan hypothesis, experiment, dan action items ke eksekusi manual, disiplin exit, sizing, atau filter pair.
+- Jangan kasih action item audit pengiriman SL/TP kalau ledger memang menunjukkan trade manual.
+- Kalau entryTime tersedia di ledger, gunakan itu dan jangan bilang entryTime null.
+- One Experiment wajib satu kalimat pendek, sangat spesifik, dan langsung bisa diuji pada 10 trade berikutnya.
+- Action Items maksimal 2 item dan harus relevan langsung dengan pola dominan di ledger. Hindari saran generik.
 
 ## 1. STATISTICAL REALITY CHECK
 - Win rate vs Required win rate (berdasarkan data R:R yang disediakan di ledger) 
@@ -397,7 +415,7 @@ OVERALL STATS:
 - Total Trades: ${stats.tradesCount}
 
 RECENT TRADES LEDGER (JSON Data for analysis):
-${JSON.stringify(tradeLog, null, 2)}
+${JSON.stringify(normalizedTradeLog, null, 2)}
 `;
 
     const response = await axios.post(config.openRouter.baseUrl + '/chat/completions', {
@@ -419,6 +437,10 @@ ${JSON.stringify(tradeLog, null, 2)}
     }
 
     // Format to Markdown manually for Telegram
+    const actionItems = Array.isArray(parsed.action_items)
+      ? parsed.action_items.filter(Boolean).slice(0, 2)
+      : [];
+
     const report = `
 🔢 *Math Check:*
 ${parsed.math_check}
@@ -433,7 +455,7 @@ ${parsed.hypothesis}
 ${parsed.one_experiment}
 
 ✅ *Action Items:*
-${parsed.action_items?.map(item => `• ${item}`).join('\n')}
+${actionItems.map(item => `• ${item}`).join('\n')}
     `.trim();
 
     return report;

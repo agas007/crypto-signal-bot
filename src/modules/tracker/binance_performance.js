@@ -94,7 +94,9 @@ class BinancePerformance {
     const details = [];
 
     if (market === 'futures') {
-        trades.forEach(t => {
+        const enrichedTrades = this._attachFuturesEntryContext(trades);
+
+        enrichedTrades.forEach(t => {
             if (t.realizedPnl !== 0) {
                 pnl += t.realizedPnl;
                 count++;
@@ -119,8 +121,8 @@ class BinancePerformance {
                     pnl: pnlValue.toFixed(2),
                     exitTime: t.time,
                     exitPrice: exitPrice,
-                    entryPrice: signalRecord ? signalRecord.entry : estimatedEntry,
-                    entryTime: signalRecord ? (signalRecord.entryAt || signalRecord.signalAt) : null,
+                    entryPrice: signalRecord ? signalRecord.entry : (t.entryPrice || estimatedEntry),
+                    entryTime: signalRecord ? (signalRecord.entryAt || signalRecord.signalAt) : (t.entryTime || null),
                     sl: signalRecord ? signalRecord.stop_loss : null,
                     tp: signalRecord ? signalRecord.take_profit : null,
                     rr: signalRecord && signalRecord.riskReward ? signalRecord.riskReward.rr : null,
@@ -216,6 +218,70 @@ class BinancePerformance {
       case 'all': return null; // Null means fetch the MOST RECENT trades from Binance
       default: return null;
     }
+  }
+
+  /**
+   * Infer opening fill context for futures closing trades directly from Binance fills.
+   * This lets the report show entryTime/entryPrice even when the trade did not come from tracker memory.
+   */
+  _attachFuturesEntryContext(trades = []) {
+    const sorted = [...trades].sort((a, b) => a.time - b.time);
+    const openLots = [];
+    const enriched = [];
+
+    for (const trade of sorted) {
+      const signedQty = trade.isBuyer ? trade.qty : -trade.qty;
+      let remainingQty = Math.abs(signedQty);
+      const tradeSide = Math.sign(signedQty);
+      const consumedLots = [];
+
+      while (remainingQty > 0 && openLots.length > 0 && Math.sign(openLots[0].signedQty) !== tradeSide) {
+        const lot = openLots[0];
+        const availableQty = Math.abs(lot.signedQty);
+        const matchedQty = Math.min(remainingQty, availableQty);
+
+        consumedLots.push({
+          qty: matchedQty,
+          price: lot.price,
+          time: lot.time
+        });
+
+        remainingQty -= matchedQty;
+        const lotSign = Math.sign(lot.signedQty);
+        const leftoverQty = availableQty - matchedQty;
+
+        if (leftoverQty <= 0) {
+          openLots.shift();
+        } else {
+          openLots[0] = {
+            ...lot,
+            signedQty: lotSign * leftoverQty
+          };
+        }
+      }
+
+      const totalConsumedQty = consumedLots.reduce((sum, lot) => sum + lot.qty, 0);
+      const inferredEntryPrice = totalConsumedQty > 0
+        ? consumedLots.reduce((sum, lot) => sum + (lot.price * lot.qty), 0) / totalConsumedQty
+        : null;
+      const inferredEntryTime = consumedLots.length > 0 ? consumedLots[0].time : null;
+
+      if (remainingQty > 0) {
+        openLots.push({
+          signedQty: tradeSide * remainingQty,
+          price: trade.price,
+          time: trade.time
+        });
+      }
+
+      enriched.push({
+        ...trade,
+        entryPrice: inferredEntryPrice,
+        entryTime: inferredEntryTime
+      });
+    }
+
+    return enriched;
   }
 }
 

@@ -211,14 +211,18 @@ async function initTelegram() {
                    const emoji = parseFloat(t.pnl) > 0 ? '✅' : '🚨';
                    const pnlSafe = (parseFloat(t.pnl) > 0 ? '+' : '') + t.pnl;
                    const symbolSafe = (t.symbol || 'PAIR').replace(/_/g, '\\_');
+                   const hasPlannedLevels = t.rr && t.tp != null && t.sl != null;
+                   const entryTimeLine = t.entryTime
+                     ? `\n   _Entry Time:_ \`${formatJakartaTime(new Date(t.entryTime), 'readable')} WIB\``
+                     : '';
                    
                    let extraInfo = '';
-                   if (t.rr) {
-                     extraInfo = ` | *RR: ${parseFloat(t.rr).toFixed(2)}*\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`\n   _TP:_ \`${t.tp || '?'}\` | _SL:_ \`${t.sl || '?'}\``;
+                   if (hasPlannedLevels) {
+                     extraInfo = ` | *RR: ${parseFloat(t.rr).toFixed(2)}*\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`${entryTimeLine}\n   _TP:_ \`${t.tp || '?'}\` | _SL:_ \`${t.sl || '?'}\``;
                    } else {
                      let marginEst = (t.quoteQty || 0) / 20; 
                      let pnlPct = marginEst > 0 ? (parseFloat(t.pnl) / marginEst * 100) : 0;
-                     extraInfo = `\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`\n   _Manual_ | _ROE:_ \`${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%\` (est 20x)`;
+                     extraInfo = `\n   _Entry:_ \`${t.entryPrice || '?'}\` | _Exit:_ \`${t.exitPrice || '?'}\`${entryTimeLine}\n   _Manual_ | _ROE:_ \`${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%\` (est 20x)`;
                    }
                    
                    return `${emoji} \`${symbolSafe}\` (${t.market}): \`${pnlSafe} USDT\`${extraInfo}`;
