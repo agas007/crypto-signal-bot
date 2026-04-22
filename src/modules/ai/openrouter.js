@@ -258,11 +258,12 @@ ${trade.reason}
 [ACTUAL PRICE ACTION (H1 Summary from Entry to Exit)]:
 ${historySummary}
 
-TASK: Provide a very brief (2-3 sentences) analysis in Indonesian. 
-- COMPARE the [INITIAL REASON] with the [ACTUAL PRICE ACTION]. 
-- If it was a SUCCESS (TP), analyze what part of the thesis was most accurate.
-- If it was a FAILURE (SL), pinpoint whether the entry was too early, the SL was too tight, or the trend reversed completely.
-- Keep it simple, professional, and highly educational for a trader.
+TASK:
+- Tulis analisa trade berikut secara singkat, maksimal 500 karakter.
+- Wajib mencakup struktur market (trend), valid/tidaknya bias, kesalahan entry, dan konfirmasi yang seharusnya ditunggu.
+- Jika TP hit, jelaskan kenapa TP valid. Jika SL hit, jelaskan kenapa SL kena.
+- Gunakan kalimat padat, langsung ke inti, tanpa penjelasan panjang atau umum.
+- Bahasa Indonesia, satu paragraf, tanpa bullet, tanpa markdown.
 
 Respond with ONLY this JSON format:
 {
@@ -278,11 +279,24 @@ Respond with ONLY this JSON format:
     });
 
     const parsed = JSON.parse(data.choices?.[0]?.message?.content || '{}');
-    return parsed.analysis || "Analisa gagal: AI tidak memberikan respon.";
+    const normalizedAnalysis = normalizeLessonText(parsed.analysis || "Analisa gagal: AI tidak memberikan respon.");
+    return normalizedAnalysis;
   } catch (err) {
     logger.error('Post-mortem analysis failed:', err.message);
-    return "Analisa gagal: Koneksi AI terputus. Tetap semangat!";
+    return normalizeLessonText("Analisa gagal: Koneksi AI terputus. Tetap semangat!");
   }
+}
+
+function normalizeLessonText(text, maxLength = 500) {
+  const normalized = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return normalized.slice(0, maxLength).trim();
 }
 
 /**
