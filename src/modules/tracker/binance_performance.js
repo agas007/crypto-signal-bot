@@ -31,7 +31,7 @@ class BinancePerformance {
     for (const mkt of marketsToScan) {
       if (mkt === 'futures') {
         try {
-            const trades = await fetchUserTrades('', startTime, 'futures'); 
+            const trades = await this._fetchAllUserTrades('', startTime, 'futures');
             const pnlData = await this._calculateAndLearn('GLOBAL_FUTURES', trades, 'futures');
             totalPnl += pnlData.pnl;
             tradesCount += pnlData.count;
@@ -42,12 +42,18 @@ class BinancePerformance {
             logger.warn(`⚠️ Skipping futures sync due to error: ${err.message}`);
         }
       } else {
-        const scanPairs = await fetchTopPairs(50);
+        const livePairs = await fetchTopPairs(50);
+        const historyPairs = [...new Set(
+          tracker.history
+            .map((trade) => trade && trade.symbol ? trade.symbol.toUpperCase() : null)
+            .filter(Boolean)
+        )];
+        const scanPairs = [...new Set([...livePairs, ...historyPairs])];
         let error451Count = 0;
         
         for (const symbol of scanPairs) {
             try {
-                const trades = await fetchUserTrades(symbol, startTime, 'spot');
+                const trades = await this._fetchAllUserTrades(symbol, startTime, 'spot');
                 if (trades.length === 0) continue;
 
                 const pnlData = await this._calculateAndLearn(symbol, trades, 'spot');
@@ -108,8 +114,8 @@ class BinancePerformance {
       winRate: winRate.toFixed(2) + '%',
       wins: positionWins,
       losses: positionLosses,
-      tradeLog: positionLog.reverse(), // Return position-based ledger for chat display
-      rawTradeLog: tradeLog.reverse()
+      tradeLog: positionLog, // Newest-first position-based ledger for chat display
+      rawTradeLog: tradeLog
     };
   }
 
@@ -220,6 +226,33 @@ class BinancePerformance {
     }
 
     return { pnl, count, wins, losses, details };
+  }
+
+  /**
+   * Fetch all available user trades by paging forward from the requested start time.
+   * Binance limits each response to 1000 trades, so this avoids silently dropping
+   * older fills when the account has a long history.
+   */
+  async _fetchAllUserTrades(symbol, startTime = null, type = 'spot') {
+    const collected = [];
+    const maxPages = 20;
+    let cursorStartTime = startTime ?? 0;
+
+    for (let page = 0; page < maxPages; page++) {
+      const batch = await fetchUserTrades(symbol, cursorStartTime, type);
+      if (!Array.isArray(batch) || batch.length === 0) break;
+
+      collected.push(...batch);
+
+      if (batch.length < 1000) break;
+
+      const lastTradeTime = batch[batch.length - 1]?.time;
+      if (!Number.isFinite(lastTradeTime) || lastTradeTime < cursorStartTime) break;
+
+      cursorStartTime = lastTradeTime + 1;
+    }
+
+    return collected;
   }
 
   /**

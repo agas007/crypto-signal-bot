@@ -184,11 +184,12 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
  * Fetch personal trade history (PRIVATE).
  * Supports both SPOT and FUTURES.
  */
-async function fetchUserTrades(symbol, startTime = null, type = 'spot') {
+async function fetchUserTrades(symbol, startTime = null, type = 'spot', fromId = null) {
     try {
         const params = { limit: 1000 };
         if (symbol) params.symbol = symbol.toUpperCase();
-        if (startTime) params.startTime = startTime;
+        if (startTime !== null && startTime !== undefined) params.startTime = startTime;
+        if (fromId !== null && fromId !== undefined) params.fromId = fromId;
         
         const path = type === 'futures' ? '/fapi/v1/userTrades' : '/api/v3/myTrades';
         const data = await getWithFallback(path, params, true, type === 'futures');
