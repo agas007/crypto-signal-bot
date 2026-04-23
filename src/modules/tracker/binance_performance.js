@@ -1,4 +1,4 @@
-const { fetchUserTrades, fetchTopPairs, fetchOHLCV } = require('../data/binance');
+const { fetchUserTrades, fetchTopPairs, fetchOHLCV, fetchExchangeSpecs, fetchSpotExchangeSymbols } = require('../data/binance');
 const { analyzeRealTrade } = require('../ai/openrouter');
 const tracker = require('./index');
 const logger = require('../../utils/logger');
@@ -28,27 +28,53 @@ class BinancePerformance {
     const marketsToScan = market === 'combined' ? ['spot', 'futures'] : [market];
     logger.info(`📊 Global Binance ${market.toUpperCase()} sync starting (${period})...`);
 
+    const [spotSymbols, futuresSpecs] = await Promise.all([
+      marketsToScan.includes('spot') ? fetchSpotExchangeSymbols() : Promise.resolve([]),
+      marketsToScan.includes('futures') ? fetchExchangeSpecs() : Promise.resolve({}),
+    ]);
+    const futuresSymbols = new Set(Object.keys(futuresSpecs || {}));
+    const spotSymbolSet = new Set(spotSymbols);
+
     for (const mkt of marketsToScan) {
       if (mkt === 'futures') {
-        try {
-            const trades = await this._fetchAllUserTrades('', startTime, 'futures');
-            const pnlData = await this._calculateAndLearn('GLOBAL_FUTURES', trades, 'futures');
+        const historyPairs = [...new Set(
+          tracker.history
+            .map((trade) => trade && trade.symbol ? trade.symbol.toUpperCase() : null)
+            .filter((symbol) => symbol && (futuresSymbols.size === 0 || futuresSymbols.has(symbol)))
+        )];
+        const livePairs = await fetchTopPairs(50);
+        const filteredLivePairs = futuresSymbols.size === 0
+          ? livePairs
+          : livePairs.filter((symbol) => futuresSymbols.has(symbol));
+        const scanPairs = [...new Set([...historyPairs, ...filteredLivePairs])];
+
+        for (const symbol of scanPairs) {
+          try {
+            const trades = await this._fetchAllUserTrades(symbol, startTime, 'futures');
+            if (trades.length === 0) continue;
+
+            const pnlData = await this._calculateAndLearn(symbol, trades, 'futures');
             totalPnl += pnlData.pnl;
             tradesCount += pnlData.count;
             wins += pnlData.wins;
             losses += pnlData.losses;
-            tradeLog.push(...pnlData.details); 
-        } catch (err) {
-            logger.warn(`⚠️ Skipping futures sync due to error: ${err.message}`);
+            tradeLog.push(...pnlData.details);
+            await sleep(50);
+          } catch (err) {
+            logger.warn(`⚠️ Error fetching futures ${symbol}: ${err.message}`);
+          }
         }
       } else {
         const livePairs = await fetchTopPairs(50);
+        const filteredLivePairs = spotSymbolSet.size === 0
+          ? livePairs
+          : livePairs.filter((symbol) => spotSymbolSet.has(symbol));
         const historyPairs = [...new Set(
           tracker.history
             .map((trade) => trade && trade.symbol ? trade.symbol.toUpperCase() : null)
-            .filter(Boolean)
+            .filter((symbol) => symbol && (spotSymbolSet.size === 0 || spotSymbolSet.has(symbol)))
         )];
-        const scanPairs = [...new Set([...livePairs, ...historyPairs])];
+        const scanPairs = [...new Set([...filteredLivePairs, ...historyPairs])];
         let error451Count = 0;
         
         for (const symbol of scanPairs) {

@@ -555,6 +555,23 @@ async function fetchExchangeSpecs() {
     }
 }
 
+/**
+ * Fetch active Spot symbols from Binance exchange info.
+ */
+async function fetchSpotExchangeSymbols() {
+    try {
+        const data = await getWithFallback('/api/v3/exchangeInfo', {}, false, false);
+        if (!data || !Array.isArray(data.symbols)) return [];
+
+        return data.symbols
+            .filter((s) => s.status === 'TRADING')
+            .map((s) => s.symbol);
+    } catch (err) {
+        logger.error(`Failed to fetch spot exchange symbols: ${err.message}`);
+        return [];
+    }
+}
+
 module.exports = {
   fetchOHLCV,
   fetchMultiTimeframe,
@@ -564,6 +581,7 @@ module.exports = {
   fetchFundingRate,
   fetchFuturesBalance,
   fetchExchangeSpecs,
+  fetchSpotExchangeSymbols,
   toFuturesSymbol,
   // Market Microstructure
   fetchOpenInterest,
