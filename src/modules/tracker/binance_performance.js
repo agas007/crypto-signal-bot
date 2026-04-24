@@ -1,4 +1,4 @@
-const { fetchUserTrades, fetchTopPairs, fetchOHLCV, fetchExchangeSpecs, fetchSpotExchangeSymbols } = require('../data/binance');
+const { fetchUserTrades, fetchTopPairs, fetchOHLCV, fetchSpotExchangeSymbols } = require('../data/binance');
 const { analyzeRealTrade } = require('../ai/openrouter');
 const tracker = require('./index');
 const logger = require('../../utils/logger');
@@ -28,11 +28,9 @@ class BinancePerformance {
     const marketsToScan = market === 'combined' ? ['spot', 'futures'] : [market];
     logger.info(`📊 Global Binance ${market.toUpperCase()} sync starting (${period})...`);
 
-    const [spotSymbols, futuresSpecs] = await Promise.all([
+    const [spotSymbols] = await Promise.all([
       marketsToScan.includes('spot') ? fetchSpotExchangeSymbols() : Promise.resolve([]),
-      marketsToScan.includes('futures') ? fetchExchangeSpecs() : Promise.resolve({}),
     ]);
-    const futuresSymbols = new Set(Object.keys(futuresSpecs || {}));
     const spotSymbolSet = new Set(spotSymbols);
 
     for (const mkt of marketsToScan) {
@@ -40,13 +38,10 @@ class BinancePerformance {
         const historyPairs = [...new Set(
           tracker.history
             .map((trade) => trade && trade.symbol ? trade.symbol.toUpperCase() : null)
-            .filter((symbol) => symbol && (futuresSymbols.size === 0 || futuresSymbols.has(symbol)))
+            .filter(Boolean)
         )];
         const livePairs = await fetchTopPairs(50);
-        const filteredLivePairs = futuresSymbols.size === 0
-          ? livePairs
-          : livePairs.filter((symbol) => futuresSymbols.has(symbol));
-        const scanPairs = [...new Set([...historyPairs, ...filteredLivePairs])];
+        const scanPairs = [...new Set([...historyPairs, ...livePairs])];
 
         for (const symbol of scanPairs) {
           try {
