@@ -366,7 +366,8 @@ function evaluateSignal(symbol, data, options = {}) {
   const h1Trend = analyzeTrend(H1, emaParams);
   const m15Trend = M15 ? analyzeTrend(M15, emaParams) : null;
   
-  const h1Structure = analyzeStructure(H1, 3, { confirmationCandles: M15, confirmationCount: 2 });
+  const bosConfirmationCandles = config.strategy.bosConfirmationCandles || 2;
+  const h1Structure = analyzeStructure(H1, 3, { confirmationCandles: M15, confirmationCount: bosConfirmationCandles });
   const h1Stoch = calculateStochastic(H1, stochParams);
   const h1Spike = detectAtSpike(H1, 14);
   const ema1321 = detectEma1321(H1);
@@ -464,7 +465,7 @@ function evaluateSignal(symbol, data, options = {}) {
       }
     }
   } else if (h1Structure.pendingBosType) {
-    warnings.push(`⚠️ ${h1Structure.pendingBosType === 'bullish_bos' ? 'Breakout atas' : 'Breakdown bawah'} belum confirmed. Tunggu beberapa candle M15 closed dulu sebelum dianggap BoS valid.`);
+      warnings.push(`⚠️ ${h1Structure.pendingBosType === 'bullish_bos' ? 'Breakout atas' : 'Breakdown bawah'} belum confirmed. Tunggu ${bosConfirmationCandles} candle M15 closed dulu sebelum dianggap BoS valid.`);
   }
 
   // Candlestick Bonus at Key Levels (Trend-Weighted Fix)

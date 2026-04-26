@@ -118,6 +118,7 @@ H1:
 - Structure: ${h1Structure?.structure ?? 'N/A'}
 - Break of Structure: ${h1Structure?.bos ?? false} ${h1Structure?.bosType ? `(${h1Structure.bosType})` : ''}
 - Pending BoS: ${h1Structure?.pendingBosType ? h1Structure.pendingBosType : 'none'}
+- BOS confirmation candles: ${config.strategy.bosConfirmationCandles || 2}
 - Trend: ${h1Trend.direction} (${h1Trend.strengthLabel})
 - Stochastic: K=${h1Stoch.k.toFixed(1)}, D=${h1Stoch.d.toFixed(1)} (${h1Stoch.signal})
 
