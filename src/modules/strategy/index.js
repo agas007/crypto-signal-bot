@@ -369,6 +369,8 @@ function evaluateSignal(symbol, data, options = {}) {
   const bosConfirmationCandles = config.strategy.bosConfirmationCandles || 2;
   const h1Structure = analyzeStructure(H1, 3, { confirmationCandles: M15, confirmationCount: bosConfirmationCandles });
   const h1Stoch = calculateStochastic(H1, stochParams);
+  const h4Stoch = calculateStochastic(H4, stochParams);
+  const h1StochCross = detectStochCross(h1Stoch.kSeries, h1Stoch.dSeries);
   const h1Spike = detectAtSpike(H1, 14);
   const ema1321 = detectEma1321(H1);
   const h1OB = detectOrderBlocks(H1, { impulseMultiplier: 1.8, proximityPct: 0.025 });
@@ -492,6 +494,32 @@ function evaluateSignal(symbol, data, options = {}) {
     shortReasons.push(`H1 EMA13 < EMA21 alignment (+10)`);
   }
 
+  // Stochastic Momentum Scoring (H1 + H4)
+  if (h1Stoch.signal === 'oversold') {
+    longScore += 8;
+    longReasons.push(`H1 Stochastic oversold (K=${h1Stoch.k.toFixed(1)}) — long momentum expected (+8)`);
+  } else if (h1Stoch.signal === 'overbought') {
+    shortScore += 8;
+    shortReasons.push(`H1 Stochastic overbought (K=${h1Stoch.k.toFixed(1)}) — short momentum expected (+8)`);
+  }
+
+  if (h4Stoch.signal === 'oversold') {
+    longScore += 5;
+    longReasons.push(`H4 Stochastic oversold (K=${h4Stoch.k.toFixed(1)}) — bullish momentum building (+5)`);
+  } else if (h4Stoch.signal === 'overbought') {
+    shortScore += 5;
+    shortReasons.push(`H4 Stochastic overbought (K=${h4Stoch.k.toFixed(1)}) — bearish momentum building (+5)`);
+  }
+
+  // Stochastic crossover in zone (higher conviction)
+  if (h1StochCross.crossBullish && h1StochCross.crossInZone) {
+    longScore += 5;
+    longReasons.push(`H1 Stoch bullish cross in oversold zone (+5)`);
+  } else if (h1StochCross.crossBearish && h1StochCross.crossInZone) {
+    shortScore += 5;
+    shortReasons.push(`H1 Stoch bearish cross in overbought zone (+5)`);
+  }
+
   // Low Volatility Filter
   const minVol = config.filters.minAtrPercent || 0.5;
   if (atrPercent < minVol) {
@@ -516,8 +544,8 @@ function evaluateSignal(symbol, data, options = {}) {
     longReasons.push('H4 price dekat support — bounce lebih likely');
     warnings.push('ℹ️ Price dekat support. Short butuh breakdown valid, bukan sekadar wick.');
   } else {
-    longScore -= 4;
-    shortScore -= 4;
+    longScore -= 8;
+    shortScore -= 8;
     warnings.push('ℹ️ Price berada di middle zone. Edge menurun, tunggu area level yang lebih jelas.');
   }
 
@@ -565,10 +593,16 @@ function evaluateSignal(symbol, data, options = {}) {
       shortScore += 15;
       shortReasons.push(`H1 breakdown retest confirmed (+15)`);
     }
-  } else if (h1OB.inBullishOB || h1OB.inBearishOB || h4OB.inBullishOB || h4OB.inBearishOB) {
-    longScore += 10;
-    shortScore += 10;
-    longReasons.push(`Inside Order Block zone (internal retest) (+10)`);
+  } else {
+    // Directional OB scoring — bullish OB favours LONG, bearish OB favours SHORT
+    if (h1OB.inBullishOB || h4OB.inBullishOB) {
+      longScore += 10;
+      longReasons.push(`Inside Bullish Order Block — institutional demand zone (+10)`);
+    }
+    if (h1OB.inBearishOB || h4OB.inBearishOB) {
+      shortScore += 10;
+      shortReasons.push(`Inside Bearish Order Block — institutional supply zone (+10)`);
+    }
   }
 
   // ─── CATEGORY 6: R:R & Risk (Max: 10 pts) ───
@@ -611,7 +645,7 @@ function evaluateSignal(symbol, data, options = {}) {
     return options.includeRejectionReason ? { signal: null, rejectionReason: `Weighted score too low (${finalScore}/100)` } : null;
   }
 
-  if (!riskReward || riskReward.rr < 1.8) {
+  if (!riskReward || riskReward.rr < 2.0) {
       return options.includeRejectionReason ? { signal: null, rejectionReason: `Poor R:R Ratio (${riskReward ? riskReward.rr.toFixed(1) : 'N/A'}). Need min 2.0.` } : null;
   }
 
@@ -666,8 +700,6 @@ function evaluateSignal(symbol, data, options = {}) {
   // Rule 3: Hanya hitung POSITIVE reasons untuk isStrict (menghindari false positive dari warnings)
   const isStrict = finalScore >= 55 && reasons.length >= 3;
   const tradingType = distFromLvl < 4.0 ? 'SWING / DAY TRADING' : 'MOMENTUM SCALP';
-
-  const h4Stoch = calculateStochastic(H4, stochParams);
 
   return {
     symbol,
