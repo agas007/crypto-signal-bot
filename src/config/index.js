@@ -46,13 +46,13 @@ const config = {
 
   // Filter thresholds
   filters: {
-    minVolume24hUsd: 1_000_000,    // $1M minimum daily volume (was $5M)
-    minAtrPercent: 0.8,             // 0.8% minimum ATR (was 1.5%)
-    minTrendStrength: 0.2,          // Allow moderate trends through (was 0.6)
+    minVolume24hUsd: 1_000_000,    // $1M minimum daily volume
+    minAtrPercent: 1.2,             // 1.2% minimum ATR — filter near-zero volatility pairs
+    minTrendStrength: 0.4,          // 0.4 minimum — require a meaningful trend
   },
 
   strategy: {
-    minRrRatio: parseFloat(process.env.MIN_RR_RATIO) || 1.5,
+    minRrRatio: parseFloat(process.env.MIN_RR_RATIO) || 2.0,
     accountBalance: parseFloat(process.env.ACCOUNT_BALANCE) || 1000,
     riskPercentage: parseFloat(process.env.RISK_PERCENTAGE) || 0.05,           // Risk X% of account balance per trade
     maxPositionPercentage: parseFloat(process.env.MAX_POSITION_PERCENTAGE) || 3.0, // Default to 300% total balance
