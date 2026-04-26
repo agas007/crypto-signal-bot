@@ -49,29 +49,41 @@ function findSwingPoints(candles, swingWidth = 3) {
  *
  * @param {Array<{high: number, low: number, close: number, open: number}>} candles
  * @param {number} [swingWidth=3]
+ * @param {{
+ *   confirmationCandles?: Array<{close: number, low: number, high: number, closeTime?: number}>,
+ *   confirmationCount?: number,
+ *   now?: number
+ * }} [options]
  * @returns {{
  *   structure: 'bullish'|'bearish'|'no_structure',
  *   bos: boolean,
  *   bosType: 'bullish_bos'|'bearish_bos'|null,
+ *   pendingBosType: 'bullish_bos'|'bearish_bos'|null,
  *   lastSwingHigh: number|null,
  *   lastSwingLow: number|null,
  *   currentPrice: number,
  *   detail: string
  * }}
  */
-function analyzeStructure(candles, swingWidth = 3) {
+function analyzeStructure(candles, swingWidth = 3, options = {}) {
   const { swingHighs, swingLows } = findSwingPoints(candles, swingWidth);
   const currentPrice = candles[candles.length - 1].close;
+  const now = options.now || Date.now();
+  const confirmationCount = Math.max(1, options.confirmationCount || 2);
+  const confirmationCandles = Array.isArray(options.confirmationCandles)
+    ? options.confirmationCandles.filter((c) => !c.closeTime || c.closeTime <= now)
+    : candles.filter((c) => !c.closeTime || c.closeTime <= now);
 
   let structure = 'no_structure';
   let bos = false;
   let bosType = null;
+  let pendingBosType = null;
   let detail = 'Insufficient swing points for structure analysis';
   let lastSwingHigh = null;
   let lastSwingLow = null;
 
   if (swingHighs.length < 2 || swingLows.length < 2) {
-    return { structure, bos, bosType, lastSwingHigh, lastSwingLow, currentPrice, detail };
+    return { structure, bos, bosType, pendingBosType, lastSwingHigh, lastSwingLow, currentPrice, detail };
   }
 
   // Get the last 3 swing points (or fewer if not available)
@@ -105,26 +117,53 @@ function analyzeStructure(candles, swingWidth = 3) {
     }
   }
 
-  // Detect Break of Structure using the latest close only.
-  // This avoids treating a one-candle spike from a few bars ago as a still-valid BOS.
+  // BOS must be confirmed by closed candles and follow-through on M15.
   const bosMarginPct = 0.0025; // 0.25% confirmation buffer
-  const latestClose = candles[candles.length - 1].close;
+  const holdMarginPct = 0.0010; // allow tiny noise around the level after break
+  const findBosCandidate = (level, direction) => {
+    if (!Number.isFinite(level) || !confirmationCandles.length) return null;
 
-  if (lastSwingHigh !== null) {
-    const brokeAbove = latestClose > lastSwingHigh * (1 + bosMarginPct);
-    if (brokeAbove) {
-      bos = true;
-      bosType = 'bullish_bos';
-      detail += ` | BoS: price broke above swing high ${lastSwingHigh.toFixed(4)}`;
+    const crossed = (candle) => direction === 'bullish'
+      ? candle.close > level * (1 + bosMarginPct)
+      : candle.close < level * (1 - bosMarginPct);
+    const held = (candle) => direction === 'bullish'
+      ? candle.close >= level * (1 - holdMarginPct) && candle.low >= level * (1 - holdMarginPct)
+      : candle.close <= level * (1 + holdMarginPct) && candle.high <= level * (1 + holdMarginPct);
+
+    for (let i = 0; i < confirmationCandles.length; i++) {
+      if (!crossed(confirmationCandles[i])) continue;
+      const followThrough = confirmationCandles.slice(i + 1, i + 1 + confirmationCount);
+      if (followThrough.length < confirmationCount) {
+        return { confirmed: false, pending: true, breakoutIndex: i };
+      }
+      if (followThrough.every(held)) {
+        return { confirmed: true, pending: false, breakoutIndex: i };
+      }
+      return { confirmed: false, pending: false, breakoutIndex: i };
     }
+
+    return null;
+  };
+
+  const bullishCandidate = lastSwingHigh !== null ? findBosCandidate(lastSwingHigh, 'bullish') : null;
+  if (bullishCandidate?.confirmed) {
+    bos = true;
+    bosType = 'bullish_bos';
+    detail += ` | BoS confirmed above swing high ${lastSwingHigh.toFixed(4)} after ${confirmationCount} closed M15 candles`;
+  } else if (bullishCandidate?.pending) {
+    pendingBosType = 'bullish_bos';
+    detail += ` | Break above ${lastSwingHigh.toFixed(4)} exists but still waiting ${confirmationCount} closed M15 candles`;
   }
 
-  if (!bos && lastSwingLow !== null) {
-    const brokeBelow = latestClose < lastSwingLow * (1 - bosMarginPct);
-    if (brokeBelow) {
+  if (!bos) {
+    const bearishCandidate = lastSwingLow !== null ? findBosCandidate(lastSwingLow, 'bearish') : null;
+    if (bearishCandidate?.confirmed) {
       bos = true;
       bosType = 'bearish_bos';
-      detail += ` | BoS: price broke below swing low ${lastSwingLow.toFixed(4)}`;
+      detail += ` | BoS confirmed below swing low ${lastSwingLow.toFixed(4)} after ${confirmationCount} closed M15 candles`;
+    } else if (bearishCandidate?.pending && !pendingBosType) {
+      pendingBosType = 'bearish_bos';
+      detail += ` | Break below ${lastSwingLow.toFixed(4)} exists but still waiting ${confirmationCount} closed M15 candles`;
     }
   }
 
@@ -132,6 +171,7 @@ function analyzeStructure(candles, swingWidth = 3) {
     structure,
     bos,
     bosType,
+    pendingBosType,
     lastSwingHigh,
     lastSwingLow,
     currentPrice,

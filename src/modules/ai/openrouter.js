@@ -117,6 +117,7 @@ H4:
 H1:
 - Structure: ${h1Structure?.structure ?? 'N/A'}
 - Break of Structure: ${h1Structure?.bos ?? false} ${h1Structure?.bosType ? `(${h1Structure.bosType})` : ''}
+- Pending BoS: ${h1Structure?.pendingBosType ? h1Structure.pendingBosType : 'none'}
 - Trend: ${h1Trend.direction} (${h1Trend.strengthLabel})
 - Stochastic: K=${h1Stoch.k.toFixed(1)}, D=${h1Stoch.d.toFixed(1)} (${h1Stoch.signal})
 
@@ -130,6 +131,7 @@ INSTRUCTIONS:
    - Jika BELUM (kenaikan vertikal/ngawang), set trading_type menjadi 'MOMENTUM SCALP' atau kembalikan sebagai 'WATCHLIST'.
    - Jika SUDAH ada retest jelas, set trading_type ke 'SWING' atau 'DAY TRADING'.
    - Jika price dekat resistance/support yang sudah berkali-kali disentuh, prioritaskan skenario rejection/bounce sebelum memilih breakout.
+   - Breakout M15 belum boleh dianggap BoS kalau baru 1 candle break. Tunggu candle itu closed dan ada follow-through beberapa candle M15 setelahnya.
 4. Confidence scale: 0-100. (60+ is tradeable, 40-59 is Watchlist).
 5. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia). Provide explicit reasoning for your decision.
 
