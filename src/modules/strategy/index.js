@@ -178,6 +178,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
   
   const atrDist = options.atr ? options.atr * ATR_MULTIPLIER : 0;
   const atrDistPercent = options.atr ? atrDist / currentPrice : 0;
+  const breakoutContext = options.breakoutContext || null;
 
   let entry = currentPrice;
   let sl, tp;
@@ -198,18 +199,30 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // [CONSERVATIVE] SL at Wick Support, TP at Body Resistance
     const wickSupport = (levels && levels.wick) ? levels.wick.support : (typeof levels === 'number' ? levels : 0);
     const bodyResistance = (levels && levels.body) ? levels.body.resistance : (typeof options.resistance === 'number' ? options.resistance : Infinity);
+    const hasBullishBosAnchor =
+      breakoutContext &&
+      breakoutContext.type === 'bullish_bos' &&
+      Number.isFinite(breakoutContext.level) &&
+      breakoutContext.level > 0 &&
+      breakoutContext.level < entry;
 
-    // Rule 4: SL Buffer (min 1.5x ATR)
-    const technicalSl = wickSupport * 0.998;
-    sl = options.sl || Math.min(technicalSl, entry - atrDist);
+    // For breakout-retest longs, anchor the stop just below the broken resistance
+    // instead of the much older support far below the move.
+    const technicalSl = hasBullishBosAnchor
+      ? breakoutContext.level * 0.997
+      : wickSupport * 0.998;
+    sl = options.sl || (hasBullishBosAnchor ? technicalSl : Math.min(technicalSl, entry - atrDist));
     
     // Realistic TP: Use Body Resistance, if none (ATH/Discovery), project 4x ATR instead of forced RR
     tp = options.tp || (bodyResistance !== Infinity ? bodyResistance * 0.998 : entry + (options.atr * 4));
     
     const slDistPercent = (entry - sl) / entry;
     // Skip technical rejection if manual/AI levels are provided
-    if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) {
-      logger.debug(`[RR] LONG ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(Math.max(MIN_SL_DISTANCE, atrDistPercent)*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
+    const minSlDistance = hasBullishBosAnchor
+      ? Math.max(0.0035, atrDistPercent * 0.35)
+      : Math.max(MIN_SL_DISTANCE, atrDistPercent);
+    if (!options.sl && (slDistPercent < minSlDistance || slDistPercent > MAX_SL_ALLOWED)) {
+      logger.debug(`[RR] LONG ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(minSlDistance*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
       return null;
     }
 
@@ -264,17 +277,27 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // [CONSERVATIVE] SL at Wick Resistance, TP at Body Support
     const wickResistance = (levels && levels.wick) ? levels.wick.resistance : (typeof options.resistance === 'number' ? options.resistance : Infinity);
     const bodySupport = (levels && levels.body) ? levels.body.support : (typeof levels === 'number' ? levels : 0);
+    const hasBearishBosAnchor =
+      breakoutContext &&
+      breakoutContext.type === 'bearish_bos' &&
+      Number.isFinite(breakoutContext.level) &&
+      breakoutContext.level > entry;
 
-    // Rule 4: SL Buffer (min 1.5x ATR)
-    const technicalSl = wickResistance !== Infinity ? wickResistance * 1.002 : entry * 1.02;
-    sl = options.sl || Math.max(technicalSl, entry + atrDist);
+    // Symmetric rule for bearish breakdowns: keep the stop just above the broken support.
+    const technicalSl = hasBearishBosAnchor
+      ? breakoutContext.level * 1.003
+      : (wickResistance !== Infinity ? wickResistance * 1.002 : entry * 1.02);
+    sl = options.sl || (hasBearishBosAnchor ? technicalSl : Math.max(technicalSl, entry + atrDist));
     
     // Realistic TP: Use Body Support, if none (Discovery), project 4x ATR downward
     tp = options.tp || (bodySupport > 0 ? bodySupport * 1.002 : Math.max(entry - (options.atr * 4), 0));
     
     const slDistPercent = (sl - entry) / entry;
-    if (!options.sl && (slDistPercent < Math.max(MIN_SL_DISTANCE, atrDistPercent) || slDistPercent > MAX_SL_ALLOWED)) {
-      logger.debug(`[RR] SHORT ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(Math.max(MIN_SL_DISTANCE, atrDistPercent)*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
+    const minSlDistance = hasBearishBosAnchor
+      ? Math.max(0.0035, atrDistPercent * 0.35)
+      : Math.max(MIN_SL_DISTANCE, atrDistPercent);
+    if (!options.sl && (slDistPercent < minSlDistance || slDistPercent > MAX_SL_ALLOWED)) {
+      logger.debug(`[RR] SHORT ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(minSlDistance*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
       return null;
     }
 
@@ -355,12 +378,15 @@ function evaluateSignal(symbol, data, options = {}) {
   const h1Engulfing = detectEngulfing(H1);
   const h1Pin = detectPinBar(H1);
 
-  const breakoutLevel = d1Trend.direction === 'bullish' ? h4SR.wick.support : h4SR.wick.resistance;
-  const retestStatus = detectRetest(H1, breakoutLevel, d1Trend.direction === 'bullish' ? 'LONG' : 'SHORT');
+  const breakoutBias = d1Trend.direction === 'bullish' ? 'LONG' : 'SHORT';
+  const breakoutLevel = breakoutBias === 'LONG' ? h4SR.wick.support : h4SR.wick.resistance;
+  const retestStatus = detectRetest(H1, breakoutLevel, breakoutBias);
 
   const distToWickSupport = h4SR.wick.support ? ((h4SR.currentPrice - h4SR.wick.support) / h4SR.currentPrice) * 100 : Infinity;
   const distToWickResistance = h4SR.wick.resistance !== Infinity ? ((h4SR.wick.resistance - h4SR.currentPrice) / h4SR.currentPrice) * 100 : Infinity;
   const pricePosition = classifyPricePosition(distToWickSupport, distToWickResistance);
+  const supportTouches = h4SR.wick.supportTouches || 0;
+  const resistanceTouches = h4SR.wick.resistanceTouches || 0;
 
   const atr = h1Spike.atr;
   const atrPercent = (atr / h4SR.currentPrice) * 100;
@@ -419,6 +445,26 @@ function evaluateSignal(symbol, data, options = {}) {
     shortReasons.push(`H1 bearish structure (Lower Highs) (+10)`);
   }
 
+  if (h1Structure.bos) {
+    if (h1Structure.bosType === 'bullish_bos') {
+      if (pricePosition === 'near_resistance') {
+        longScore += 2;
+        warnings.push('⚠️ Bullish BoS muncul dekat resistance. Ini rawan false breakout, tunggu hold/retest dulu.');
+      } else {
+        longScore += 10;
+        longReasons.push(`H1 bullish BoS (+10)`);
+      }
+    } else if (h1Structure.bosType === 'bearish_bos') {
+      if (pricePosition === 'near_support') {
+        shortScore += 2;
+        warnings.push('⚠️ Bearish BoS muncul dekat support. Ini rawan false breakdown, tunggu hold/retest dulu.');
+      } else {
+        shortScore += 10;
+        shortReasons.push(`H1 bearish BoS (+10)`);
+      }
+    }
+  }
+
   // Candlestick Bonus at Key Levels (Trend-Weighted Fix)
   if (pricePosition !== 'middle') {
     if (longScore > shortScore && (h1Engulfing.bull || h1Pin.bullPin)) {
@@ -454,6 +500,48 @@ function evaluateSignal(symbol, data, options = {}) {
     shortScore += 5;
   }
 
+  // Price location filter: treat resistance/support context as directional bias,
+  // not just a label for charting.
+  if (pricePosition === 'near_resistance') {
+    shortScore += 12;
+    longScore -= 12;
+    shortReasons.push('H4 price dekat resistance — rejection/failed breakout lebih likely');
+    warnings.push('⚠️ Price dekat resistance. Long butuh confluence ekstra dan retest yang bersih.');
+  } else if (pricePosition === 'near_support') {
+    longScore += 12;
+    shortScore -= 12;
+    longReasons.push('H4 price dekat support — bounce lebih likely');
+    warnings.push('ℹ️ Price dekat support. Short butuh breakdown valid, bukan sekadar wick.');
+  } else {
+    longScore -= 4;
+    shortScore -= 4;
+    warnings.push('ℹ️ Price berada di middle zone. Edge menurun, tunggu area level yang lebih jelas.');
+  }
+
+  // Repeated-touch levels behave more like magnets for rejection/bounce until proven broken.
+  if (pricePosition === 'near_resistance' && resistanceTouches >= 3) {
+    const touchBonus = resistanceTouches >= 5 ? 10 : 7;
+    shortScore += touchBonus;
+    longScore -= 4;
+    shortReasons.push(`Resistance H4 sudah dites ${resistanceTouches}x — standby SHORT saat rejection lebih valid (+${touchBonus})`);
+    tags.push('REPEATED RESISTANCE');
+  } else if (pricePosition === 'near_support' && supportTouches >= 3) {
+    const touchBonus = supportTouches >= 5 ? 10 : 7;
+    longScore += touchBonus;
+    shortScore -= 4;
+    longReasons.push(`Support H4 sudah dites ${supportTouches}x — standby LONG saat bounce lebih valid (+${touchBonus})`);
+    tags.push('REPEATED SUPPORT');
+  }
+
+  const standbyBias =
+    pricePosition === 'near_resistance' && resistanceTouches >= 3
+      ? 'SHORT'
+      : pricePosition === 'near_support' && supportTouches >= 3
+        ? 'LONG'
+        : null;
+  const standbyTouches = standbyBias === 'SHORT' ? resistanceTouches : standbyBias === 'LONG' ? supportTouches : 0;
+  const standbyLevel = standbyBias === 'SHORT' ? h4SR.wick.support : standbyBias === 'LONG' ? h4SR.wick.resistance : null;
+
   // ─── CATEGORY 4: Micro Structure (Max: 10 pts) ───
   const microResult = analyzeMicrostructure(micro, h4SR.currentPrice);
   longScore += Math.min(10, microResult.longBonus);
@@ -464,8 +552,13 @@ function evaluateSignal(symbol, data, options = {}) {
 
   // ─── CATEGORY 5: Breakout & Retest (Max: 15 pts) ───
   if (retestStatus === 'CONFIRMED') {
-    longScore += 15;
-    longReasons.push(`H1 breakout retest confirmed (+15)`);
+    if (breakoutBias === 'LONG') {
+      longScore += 15;
+      longReasons.push(`H1 breakout retest confirmed (+15)`);
+    } else {
+      shortScore += 15;
+      shortReasons.push(`H1 breakdown retest confirmed (+15)`);
+    }
   } else if (h1OB.inBullishOB || h1OB.inBearishOB || h4OB.inBullishOB || h4OB.inBearishOB) {
     longScore += 10;
     shortScore += 10;
@@ -474,11 +567,18 @@ function evaluateSignal(symbol, data, options = {}) {
 
   // ─── CATEGORY 6: R:R & Risk (Max: 10 pts) ───
   const bias = longScore > shortScore ? 'LONG' : 'SHORT';
+  const breakoutContext =
+    bias === 'LONG' && h1Structure.bosType === 'bullish_bos' && Number.isFinite(h1Structure.lastSwingHigh)
+      ? { type: 'bullish_bos', level: h1Structure.lastSwingHigh }
+      : bias === 'SHORT' && h1Structure.bosType === 'bearish_bos' && Number.isFinite(h1Structure.lastSwingLow)
+        ? { type: 'bearish_bos', level: h1Structure.lastSwingLow }
+        : null;
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR, { 
     atr,
     accountBalance: options.accountBalance || config.strategy.accountBalance,
     stepSize: options.stepSize,
-    minNotional: options.minNotional
+    minNotional: options.minNotional,
+    breakoutContext,
   });
 
   if (riskReward) {
@@ -507,6 +607,38 @@ function evaluateSignal(symbol, data, options = {}) {
 
   if (!riskReward || riskReward.rr < 1.8) {
       return options.includeRejectionReason ? { signal: null, rejectionReason: `Poor R:R Ratio (${riskReward ? riskReward.rr.toFixed(1) : 'N/A'}). Need min 2.0.` } : null;
+  }
+
+  const standbyOnly = Boolean(standbyBias && bias === standbyBias && riskReward && riskReward.rr < 2.0);
+  if (standbyOnly) {
+    const rrValue = riskReward.rr.toFixed(2);
+    const targetLabel = standbyBias === 'SHORT' ? 'support' : 'resistance';
+    const standbyReason = `${symbol} dekat ${standbyBias === 'SHORT' ? 'resistance' : 'support'} kuat (${standbyTouches}x touch), tapi R:R ke ${targetLabel} terdekat baru ${rrValue}. Tetap standby dulu, tunggu > 2.0 sebelum naik jadi signal.`;
+
+    return {
+      symbol,
+      bias: standbyBias,
+      score: finalScore,
+      reasons,
+      warnings,
+      tags: [...tags, 'STANDBY_SETUP'],
+      analysis: {
+        d1Trend, h4SR, h4Trend, h1Trend, m15Trend, h1Structure, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
+      },
+      riskReward,
+      isStrict: false,
+      lowConfidence: true,
+      fundingRate: (fundingRate * 100).toFixed(4) + '%',
+      trading_type: 'MONITORING',
+      microstructure: microResult.raw,
+      standbyOnly: true,
+      standbyReason,
+      standbyContext: {
+        bias: standbyBias,
+        touches: standbyTouches,
+        targetLevel: standbyLevel,
+      },
+    };
   }
 
   const distFromLvl = bias === 'LONG' ? distToWickSupport : distToWickResistance;

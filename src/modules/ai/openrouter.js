@@ -107,7 +107,9 @@ D1:
 H4:
 - Trend: ${h4Trend.direction} (${h4Trend.strengthLabel})
 - Support (Wick): ${h4SR.wick && h4SR.wick.support ? h4SR.wick.support.toFixed(4) : 'N/A'}
+- Support Touches: ${h4SR.wick?.supportTouches || 0} (${h4SR.wick?.supportStrength || 'none'})
 - Resistance (Wick): ${h4SR.wick && h4SR.wick.resistance !== Infinity ? h4SR.wick.resistance.toFixed(4) : 'N/A'}
+- Resistance Touches: ${h4SR.wick?.resistanceTouches || 0} (${h4SR.wick?.resistanceStrength || 'none'})
 - Current Price: ${(h4SR.currentPrice || 0).toFixed(4)}
 - Price Position: ${pricePosition}
 - Stochastic: K=${h4Stoch.k.toFixed(1)}, D=${h4Stoch.d.toFixed(1)} (${h4Stoch.signal})
@@ -127,6 +129,7 @@ INSTRUCTIONS:
 3. VERIFIKASI RETEST: Cek apakah sudah terjadi retest pada breakout level?
    - Jika BELUM (kenaikan vertikal/ngawang), set trading_type menjadi 'MOMENTUM SCALP' atau kembalikan sebagai 'WATCHLIST'.
    - Jika SUDAH ada retest jelas, set trading_type ke 'SWING' atau 'DAY TRADING'.
+   - Jika price dekat resistance/support yang sudah berkali-kali disentuh, prioritaskan skenario rejection/bounce sebelum memilih breakout.
 4. Confidence scale: 0-100. (60+ is tradeable, 40-59 is Watchlist).
 5. IMPORTANT: Your "reason" MUST be written in INDONESIAN (Bahasa Indonesia). Provide explicit reasoning for your decision.
 

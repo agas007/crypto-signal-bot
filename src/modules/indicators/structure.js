@@ -62,8 +62,6 @@ function findSwingPoints(candles, swingWidth = 3) {
 function analyzeStructure(candles, swingWidth = 3) {
   const { swingHighs, swingLows } = findSwingPoints(candles, swingWidth);
   const currentPrice = candles[candles.length - 1].close;
-  const recentHigh = candles[candles.length - 1].high;
-  const recentLow = candles[candles.length - 1].low;
 
   let structure = 'no_structure';
   let bos = false;
@@ -107,13 +105,13 @@ function analyzeStructure(candles, swingWidth = 3) {
     }
   }
 
-  // Detect Break of Structure:
-  // Check if recent candles (last 3) broke above the last swing high or below the last swing low
-  const lookbackForBos = candles.slice(-3);
+  // Detect Break of Structure using the latest close only.
+  // This avoids treating a one-candle spike from a few bars ago as a still-valid BOS.
+  const bosMarginPct = 0.0025; // 0.25% confirmation buffer
+  const latestClose = candles[candles.length - 1].close;
 
-  // Bullish BoS: any recent candle closed above the last swing high
   if (lastSwingHigh !== null) {
-    const brokeAbove = lookbackForBos.some((c) => c.close > lastSwingHigh);
+    const brokeAbove = latestClose > lastSwingHigh * (1 + bosMarginPct);
     if (brokeAbove) {
       bos = true;
       bosType = 'bullish_bos';
@@ -121,9 +119,8 @@ function analyzeStructure(candles, swingWidth = 3) {
     }
   }
 
-  // Bearish BoS: any recent candle closed below the last swing low
   if (!bos && lastSwingLow !== null) {
-    const brokeBelow = lookbackForBos.some((c) => c.close < lastSwingLow);
+    const brokeBelow = latestClose < lastSwingLow * (1 - bosMarginPct);
     if (brokeBelow) {
       bos = true;
       bosType = 'bearish_bos';

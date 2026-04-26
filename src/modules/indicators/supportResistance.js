@@ -73,9 +73,16 @@ function findSupportResistance(candles, lookback = 20) {
     }
 
     return clusters.map((c) => {
-        if (mode === 'MIN') return Math.min(...c);
-        if (mode === 'MAX') return Math.max(...c);
-        return c.reduce((s, v) => s + v, 0) / c.length; // Default to mean
+        let price;
+        if (mode === 'MIN') price = Math.min(...c);
+        else if (mode === 'MAX') price = Math.max(...c);
+        else price = c.reduce((s, v) => s + v, 0) / c.length;
+
+        return {
+          price,
+          touches: c.length,
+          strength: c.length >= 4 ? 'major' : c.length >= 2 ? 'confirmed' : 'fresh',
+        };
     });
   };
 
@@ -86,21 +93,40 @@ function findSupportResistance(candles, lookback = 20) {
 
   const findNearest = (levels, type) => {
       if (type === 'SUPPORT') {
-          return levels.filter(l => l < currentPrice).sort((a,b) => b - a)[0] || 0;
+          return levels.filter(l => l.price < currentPrice).sort((a,b) => b.price - a.price)[0] || null;
       }
-      return levels.filter(l => l > currentPrice).sort((a,b) => a - b)[0] || Infinity;
+      return levels.filter(l => l.price > currentPrice).sort((a,b) => a.price - b.price)[0] || null;
   };
+
+  const nearestWickSupport = findNearest(supportWick, 'SUPPORT');
+  const nearestWickResistance = findNearest(resistanceWick, 'RESISTANCE');
+  const nearestBodySupport = findNearest(supportBody, 'SUPPORT');
+  const nearestBodyResistance = findNearest(resistanceBody, 'RESISTANCE');
 
   return {
     currentPrice,
     wick: {
-        support: findNearest(supportWick, 'SUPPORT'),
-        resistance: findNearest(resistanceWick, 'RESISTANCE')
+        support: nearestWickSupport ? nearestWickSupport.price : 0,
+        supportTouches: nearestWickSupport ? nearestWickSupport.touches : 0,
+        supportStrength: nearestWickSupport ? nearestWickSupport.strength : 'none',
+        resistance: nearestWickResistance ? nearestWickResistance.price : Infinity,
+        resistanceTouches: nearestWickResistance ? nearestWickResistance.touches : 0,
+        resistanceStrength: nearestWickResistance ? nearestWickResistance.strength : 'none',
     },
     body: {
-        support: findNearest(supportBody, 'SUPPORT'),
-        resistance: findNearest(resistanceBody, 'RESISTANCE')
-    }
+        support: nearestBodySupport ? nearestBodySupport.price : 0,
+        supportTouches: nearestBodySupport ? nearestBodySupport.touches : 0,
+        supportStrength: nearestBodySupport ? nearestBodySupport.strength : 'none',
+        resistance: nearestBodyResistance ? nearestBodyResistance.price : Infinity,
+        resistanceTouches: nearestBodyResistance ? nearestBodyResistance.touches : 0,
+        resistanceStrength: nearestBodyResistance ? nearestBodyResistance.strength : 'none',
+    },
+    levels: {
+      wickSupports: supportWick,
+      wickResistances: resistanceWick,
+      bodySupports: supportBody,
+      bodyResistances: resistanceBody,
+    },
   };
 }
 

@@ -84,6 +84,7 @@ async function runScanCycle() {
 
   // 2. Filter + evaluate each pair
   const candidates = [];
+  const technicalWatchlist = [];
   let filtered = 0;
   let rejected = 0;
   let errors = 0;
@@ -203,7 +204,20 @@ async function runScanCycle() {
       const isRejection = result && result.signal === null && result.rejectionReason;
       const signal = isRejection ? null : result;
 
-      if (signal) {
+      if (signal && signal.standbyOnly) {
+        technicalWatchlist.push({
+          symbol: signal.symbol,
+          score: signal.score,
+          reason: signal.standbyReason,
+          bias: 'WATCHLIST',
+          entry: signal.riskReward?.entry,
+          riskReward: signal.riskReward,
+          quality: 'WATCHLIST',
+          trading_type: signal.trading_type || 'MONITORING',
+        });
+        logger.info(`👀 ${symbol}: standby setup only (R:R ${signal.riskReward?.rr?.toFixed(2) || 'N/A'})`);
+        logAudit(symbol, 'STRATEGY', 'WATCHLIST', signal.score, signal.standbyReason);
+      } else if (signal) {
         signal.candles = mtfData.H1; // Save candles for the chart later
         candidates.push(signal);
         logger.info(`✅ ${symbol}: ${signal.bias} (score: ${signal.score})`);
@@ -246,7 +260,7 @@ async function runScanCycle() {
 
   // 4. Validation & Delivery
   let sentCount = 0;
-  const rejections = [];
+  const rejections = [...technicalWatchlist];
 
   // Inform user about technical candidates found
   if (sentCount === 0 && rejections.length > 0) {
