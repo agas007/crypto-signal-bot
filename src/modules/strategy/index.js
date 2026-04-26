@@ -522,13 +522,16 @@ function evaluateSignal(symbol, data, options = {}) {
   }
 
   // Repeated-touch levels behave more like magnets for rejection/bounce until proven broken.
-  if (pricePosition === 'near_resistance' && resistanceTouches >= 3) {
+  const repeatedLevelTouches = config.strategy.repeatedLevelTouches || 3;
+  const standbyMinRr = config.strategy.standbyMinRr || 2.0;
+
+  if (pricePosition === 'near_resistance' && resistanceTouches >= repeatedLevelTouches) {
     const touchBonus = resistanceTouches >= 5 ? 10 : 7;
     shortScore += touchBonus;
     longScore -= 4;
     shortReasons.push(`Resistance H4 sudah dites ${resistanceTouches}x — standby SHORT saat rejection lebih valid (+${touchBonus})`);
     tags.push('REPEATED RESISTANCE');
-  } else if (pricePosition === 'near_support' && supportTouches >= 3) {
+  } else if (pricePosition === 'near_support' && supportTouches >= repeatedLevelTouches) {
     const touchBonus = supportTouches >= 5 ? 10 : 7;
     longScore += touchBonus;
     shortScore -= 4;
@@ -537,9 +540,9 @@ function evaluateSignal(symbol, data, options = {}) {
   }
 
   const standbyBias =
-    pricePosition === 'near_resistance' && resistanceTouches >= 3
+    pricePosition === 'near_resistance' && resistanceTouches >= repeatedLevelTouches
       ? 'SHORT'
-      : pricePosition === 'near_support' && supportTouches >= 3
+      : pricePosition === 'near_support' && supportTouches >= repeatedLevelTouches
         ? 'LONG'
         : null;
   const standbyTouches = standbyBias === 'SHORT' ? resistanceTouches : standbyBias === 'LONG' ? supportTouches : 0;
@@ -612,11 +615,11 @@ function evaluateSignal(symbol, data, options = {}) {
       return options.includeRejectionReason ? { signal: null, rejectionReason: `Poor R:R Ratio (${riskReward ? riskReward.rr.toFixed(1) : 'N/A'}). Need min 2.0.` } : null;
   }
 
-  const standbyOnly = Boolean(standbyBias && bias === standbyBias && riskReward && riskReward.rr < 2.0);
+  const standbyOnly = Boolean(standbyBias && bias === standbyBias && riskReward && riskReward.rr < standbyMinRr);
   if (standbyOnly) {
     const rrValue = riskReward.rr.toFixed(2);
     const targetLabel = standbyBias === 'SHORT' ? 'support' : 'resistance';
-    const standbyReason = `${symbol} dekat ${standbyBias === 'SHORT' ? 'resistance' : 'support'} kuat (${standbyTouches}x touch), tapi R:R ke ${targetLabel} terdekat baru ${rrValue}. Tetap standby dulu, tunggu > 2.0 sebelum naik jadi signal.`;
+    const standbyReason = `${symbol} dekat ${standbyBias === 'SHORT' ? 'resistance' : 'support'} kuat (${standbyTouches}x touch), tapi R:R ke ${targetLabel} terdekat baru ${rrValue}. Tetap standby dulu, tunggu > ${standbyMinRr.toFixed(1)} sebelum naik jadi signal.`;
 
     return {
       symbol,

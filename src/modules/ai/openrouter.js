@@ -119,6 +119,8 @@ H1:
 - Break of Structure: ${h1Structure?.bos ?? false} ${h1Structure?.bosType ? `(${h1Structure.bosType})` : ''}
 - Pending BoS: ${h1Structure?.pendingBosType ? h1Structure.pendingBosType : 'none'}
 - BOS confirmation candles: ${config.strategy.bosConfirmationCandles || 2}
+- Repeated level touches: ${config.strategy.repeatedLevelTouches || 3}
+- Standby minimum R:R: ${config.strategy.standbyMinRr || 2.0}
 - Trend: ${h1Trend.direction} (${h1Trend.strengthLabel})
 - Stochastic: K=${h1Stoch.k.toFixed(1)}, D=${h1Stoch.d.toFixed(1)} (${h1Stoch.signal})
 

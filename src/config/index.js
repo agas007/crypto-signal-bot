@@ -59,6 +59,8 @@ const config = {
     minRiskDollar: 0.25,             // Minimum $0.20 risk if 5% is lower
     maxSlAllowed: 0.08,              // Max 8% Stop Loss distance allowed
     bosConfirmationCandles: parseInt(process.env.BOS_CONFIRMATION_CANDLES, 10) || 2,
+    repeatedLevelTouches: parseInt(process.env.REPEATED_LEVEL_TOUCHES, 10) || 3,
+    standbyMinRr: parseFloat(process.env.STANDBY_MIN_RR) || 2.0,
   },
 };
 
