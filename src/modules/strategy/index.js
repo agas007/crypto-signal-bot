@@ -430,13 +430,14 @@ function evaluateSignal(symbol, data, options = {}) {
     }
   }
 
-  // Trend Conflict Kill-switch
+  // Trend Conflict Kill-switch — D1 vs H4 berlawanan = hard rejection
+  // Root cause: SAHARAUSDT (D1 bearish + H4 bullish) lolos dengan -20 penalty saja
   const trendConflict = d1Trend.direction !== 'neutral' && h4Trend.direction !== 'neutral' && d1Trend.direction !== h4Trend.direction;
   if (trendConflict) {
-    longScore -= 20;
-    shortScore -= 20;
-    warnings.push(`⚠️ Trend Conflict (D1 ${d1Trend.direction} vs H4 ${h4Trend.direction}). Low conviction.`);
-    tags.push('CONFLICT');
+    const conflictReason = `Trend conflict D1 ${d1Trend.direction} vs H4 ${h4Trend.direction} — timeframe utama berlawanan, tidak ada edge.`;
+    return options.includeRejectionReason
+      ? { signal: null, rejectionReason: conflictReason }
+      : null;
   }
 
   // ─── CATEGORY 2: H1 Structure & Candles (Max: 20 pts) ───
@@ -446,6 +447,12 @@ function evaluateSignal(symbol, data, options = {}) {
   } else if (h1Structure.structure === 'bearish') {
     shortScore += 10;
     shortReasons.push(`H1 bearish structure (Lower Highs) (+10)`);
+  } else {
+    // H1 no_structure = ranging/mixed — entry prematur, semua SL hit terjadi saat kondisi ini
+    longScore -= 8;
+    shortScore -= 8;
+    warnings.push('⚠️ H1 structure tidak terbentuk (ranging/mixed). Entry tanpa struktur rawan SL prematur — tunggu HH/HL atau LH/LL terbentuk dulu.');
+    tags.push('NO_STRUCTURE');
   }
 
   if (h1Structure.bos) {
@@ -593,6 +600,12 @@ function evaluateSignal(symbol, data, options = {}) {
       shortScore += 15;
       shortReasons.push(`H1 breakdown retest confirmed (+15)`);
     }
+  } else if (retestStatus === 'PENDING') {
+    // Retest ada tapi belum ada close confirmation — root cause dari banyak SL hit prematur
+    longScore -= 5;
+    shortScore -= 5;
+    warnings.push('⏳ Retest belum terkonfirmasi (PENDING). Tunggu candle close di sisi yang benar sebelum entry.');
+    tags.push('RETEST_PENDING');
   } else {
     // Directional OB scoring — bullish OB favours LONG, bearish OB favours SHORT
     if (h1OB.inBullishOB || h4OB.inBullishOB) {
@@ -681,6 +694,31 @@ function evaluateSignal(symbol, data, options = {}) {
     };
   }
 
+  // ─── POST-BIAS DIRECTIONAL BARRIERS ──────────────────────
+  // Root cause dari SL hits: LONG masuk tepat di resistance tanpa retest konfirmasi
+
+  // Fix A: LONG dekat resistance tanpa retest = hard penalty
+  // (IMXUSDT, ZECUSDT, PENGUUSDT masuk di resistance tanpa tunggu retest)
+  if (bias === 'LONG' && pricePosition === 'near_resistance' && retestStatus !== 'CONFIRMED') {
+    finalScore -= 15;
+    tags.push('RESISTANCE_ENTRY_UNCONFIRMED');
+    warnings.push('🚫 LONG dekat resistance tanpa retest konfirmasi — tunggu breakout hold atau pullback ke support sebelum entry.');
+  }
+  if (bias === 'SHORT' && pricePosition === 'near_support' && retestStatus !== 'CONFIRMED') {
+    finalScore -= 15;
+    tags.push('SUPPORT_ENTRY_UNCONFIRMED');
+    warnings.push('🚫 SHORT dekat support tanpa retest konfirmasi — tunggu breakdown valid atau bounce ke resistance sebelum entry.');
+  }
+
+  // Fix B: Middle zone + tidak ada BoS + retest PENDING = blokir
+  // (ZAMAUSDT masuk di tengah range tanpa edge apapun)
+  if (pricePosition === 'middle' && !h1Structure.bos && retestStatus !== 'CONFIRMED') {
+    finalScore -= 12;
+    tags.push('MIDDLE_ZONE_NO_EDGE');
+    warnings.push('🚫 Price di middle zone, tidak ada BoS, dan retest belum konfirmasi. Tidak ada edge struktural — skip setup ini.');
+  }
+
+  // ─── VERTICAL ENTRY ───────────────────────────────────────
   const distFromLvl = bias === 'LONG' ? distToWickSupport : distToWickResistance;
   if (distFromLvl > 5.0) {
     finalScore -= 10;
