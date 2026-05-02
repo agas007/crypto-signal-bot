@@ -1,4 +1,4 @@
-const { fetchUserTrades, fetchTopPairs, fetchOHLCV, fetchSpotExchangeSymbols } = require('../data/binance');
+const { fetchUserTrades, fetchTopPairs, fetchOHLCV, fetchSpotExchangeSymbols } = require('../data/bybit');
 const { analyzeRealTrade } = require('../ai/openrouter');
 const tracker = require('./index');
 const logger = require('../../utils/logger');

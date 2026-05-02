@@ -6,7 +6,7 @@ const {
   fetchFuturesBalance, fetchOHLCV, fetchExchangeSpecs, toFuturesSymbol,
   fetchOpenInterest, fetchOpenInterestHistory, fetchGlobalLongShortRatio,
   fetchTopTraderLongShortRatio, fetchOrderBookDepth, fetchLiquidationOrders,
-} = require('../data/binance');
+} = require('../data/bybit');
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
 const { evaluateSignal, calculateRiskReward } = require('../strategy');
@@ -117,7 +117,7 @@ async function runScanCycle() {
 
       // Fetch D1 candles for trend check (only D1 for pre-filter)
       const d1Candles = await (async () => {
-        const { fetchOHLCV } = require('../data/binance');
+        const { fetchOHLCV } = require('../data/bybit');
         return fetchOHLCV(symbol, config.timeframes.D1, 50);
       })();
 
@@ -526,7 +526,7 @@ async function checkActiveTrades() {
 
   if (actives.length === 0) return hitInThisScan;
 
-  const { fetchOHLCV } = require('../data/binance');
+  const { fetchOHLCV } = require('../data/bybit');
   logger.info(`🧠 Monitoring ${actives.length} active trades for SL/TP (Wick Detection active)...`);
 
   for (const trade of actives) {

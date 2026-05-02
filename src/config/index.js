@@ -27,6 +27,12 @@ const config = {
     statusWebhookUrl: process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
   },
 
+  bybit: {
+    baseUrl:   process.env.BYBIT_BASE_URL   || 'https://api.bybit.com',
+    apiKey:    process.env.BYBIT_API_KEY,
+    apiSecret: process.env.BYBIT_API_SECRET,
+  },
+
   scanner: {
     intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 3_600_000, // 1 hour
     topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 5,

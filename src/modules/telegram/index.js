@@ -97,7 +97,7 @@ async function initTelegram() {
   bot.onText(/\/ping/, async (msg) => {
     const chatId = msg.chat.id;
     const start = Date.now();
-    const { fetchFuturesBalance, fetchTopPairs } = require('../data/binance');
+    const { fetchFuturesBalance, fetchTopPairs } = require('../data/bybit');
     const axios = require('axios');
 
     try {
@@ -469,7 +469,7 @@ async function initTelegram() {
     bot.sendMessage(msg.chat.id, `🔍 *Manual Analysis Request: ${finalSym}*\n_Fetching multi-TF data and calling AI..._`, { parse_mode: 'Markdown' });
 
     try {
-        const { fetchMultiTimeframe, fetchFundingRate, fetchOHLCV } = require('../data/binance');
+        const { fetchMultiTimeframe, fetchFundingRate, fetchOHLCV } = require('../data/bybit');
         const { evaluateSignal } = require('../strategy');
         const { refineSignal } = require('../ai/openrouter');
         const { analyzeTrend } = require('../indicators');
@@ -572,7 +572,7 @@ async function initTelegram() {
 
   // /pairs command
   bot.onText(/\/pairs/, async (msg) => {
-    const { fetchTopPairs } = require('../data/binance');
+    const { fetchTopPairs } = require('../data/bybit');
     bot.sendMessage(msg.chat.id, '🔍 Fetching current top pairs...');
     
     try {
