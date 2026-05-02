@@ -474,11 +474,15 @@ async function runScanCycle() {
   }
 
   // ─── Auto Dashboard Update ───
-  try {
-    const { generateAndSendDashboard } = require('../chart/dashboard');
-    await generateAndSendDashboard();
-  } catch (err) {
-    logger.error('Dashboard auto-update failed:', err.message);
+  if (process.env.SKIP_DASHBOARD === 'true') {
+    logger.info('📊 Dashboard auto-send skipped (SKIP_DASHBOARD=true).');
+  } else {
+    try {
+      const { generateAndSendDashboard } = require('../chart/dashboard');
+      await generateAndSendDashboard();
+    } catch (err) {
+      logger.error('Dashboard auto-update failed:', err.message);
+    }
   }
 
   return sentCount;

@@ -1,0 +1,63 @@
+# Koyeb deployment config for crypto-signal-bot
+# Deploy: connect GitHub repo di koyeb.com, pilih file ini
+#
+# Free tier: 512MB RAM, 0.1 CPU, Frankfurt (EU)
+# Frankfurt IP → tidak kena Binance 451 block
+
+services:
+  - name: crypto-signal-bot
+    type: worker          # background process, tidak butuh HTTP port
+    routes: []
+    instance_type: free   # 512MB RAM, 0.1 vCPU
+    regions:
+      - fra               # Frankfurt, Germany (EU)
+    git:
+      branch: main
+      build_command: npm ci --ignore-scripts   # skip puppeteer chrome download
+      run_command: node server.js
+    env:
+      # ── State Storage ──────────────────────────────
+      - key: UPSTASH_REDIS_REST_URL
+        secret: true
+      - key: UPSTASH_REDIS_REST_TOKEN
+        secret: true
+
+      # ── Discord ────────────────────────────────────
+      - key: DISCORD_SIGNAL_WEBHOOK_URL
+        secret: true
+      - key: DISCORD_STATUS_WEBHOOK_URL
+        secret: true
+
+      # ── Binance (direct — EU IP not blocked) ───────
+      - key: BINANCE_API_KEY
+        secret: true
+      - key: BINANCE_API_SECRET
+        secret: true
+      - key: BINANCE_BASE_URL
+        value: https://api.binance.com
+
+      # ── AI ─────────────────────────────────────────
+      - key: OPENROUTER_API_KEY
+        secret: true
+      - key: OPENROUTER_MODEL
+        value: openai/gpt-4o-mini
+
+      # ── Config ─────────────────────────────────────
+      - key: ACCOUNT_BALANCE
+        secret: true
+      - key: MIN_RR_RATIO
+        value: "1.5"
+      - key: MAX_PAIRS
+        value: "30"
+      - key: SCAN_INTERVAL_MS
+        value: "3600000"
+      - key: LOG_LEVEL
+        value: info
+      - key: NODE_ENV
+        value: production
+
+      # ── Memory saving: disable Puppeteer dashboard ─
+      # Koyeb free = 512MB RAM. Puppeteer alone needs 200-500MB.
+      # Dashboard tetap bisa di-trigger manual via Discord /dashboard (nanti).
+      - key: SKIP_DASHBOARD
+        value: "true"
