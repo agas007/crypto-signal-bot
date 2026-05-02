@@ -11,14 +11,14 @@ const sleep = require('../../utils/sleep');
   'https://api.binance.me',
 ];
 
-const FUTURES_URL = 'https://fapi.binance.com';
+const FUTURES_URL = process.env.BINANCE_FAPI_BASE_URL || 'https://fapi.binance.com';
 const FUTURES_FALLBACK_URLS = [
   'https://fapi1.binance.com',
   'https://fapi2.binance.com',
   'https://fapi3.binance.com',
 ];
 
-let currentWorkingUrl = config.binance.baseUrl;
+let currentWorkingUrl = process.env.BINANCE_PROXY_BASE_URL || config.binance.baseUrl;
 let currentWorkingFuturesUrl = FUTURES_URL;
 let isIpBlocked = false;
 let blockResetTime = 0;

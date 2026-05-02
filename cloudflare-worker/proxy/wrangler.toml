@@ -1,0 +1,6 @@
+name = "crypto-binance-proxy"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# No secrets needed — this worker just proxies public + signed requests.
+# The API key/signature is passed through from the bot, not stored here.
