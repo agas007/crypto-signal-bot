@@ -8,10 +8,10 @@ on:
 jobs:
   scan:
     name: Run Scan Cycle
-    # Using GitHub-hosted runner + Cloudflare Worker proxy to bypass:
-    #   - Binance US IP block (451) from Azure runners
-    #   - Biznet ISP SSL interception on self-hosted Mac
-    runs-on: ubuntu-latest
+    # Self-hosted runner di Mac dengan Cloudflare WARP (1.1.1.1) aktif.
+    # WARP = WireGuard tunnel → bypass Biznet SSL interception + dapat IP yang bisa akses Binance.
+    # Setup: GitHub repo → Settings → Actions → Runners → New self-hosted runner
+    runs-on: self-hosted
     timeout-minutes: 30
 
     steps:
@@ -24,10 +24,8 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - name: Install dependencies (skip dashboard build)
+      - name: Install dependencies
         run: npm ci --ignore-scripts
-        # --ignore-scripts skips puppeteer's postinstall Chrome download.
-        # We install Chrome separately below so we control the version.
 
       - name: Detect Chrome / Chromium path
         run: |
@@ -60,18 +58,14 @@ jobs:
           OPENROUTER_API_KEY:   ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL:     ${{ secrets.OPENROUTER_MODEL }}
 
-          # ── Binance (via Cloudflare Worker Proxy) ────────────────────────
-          # CF Worker proxies /fapi/* → fapi.binance.com, /api/* → api.binance.com
-          # Bypasses both Binance US IP block AND Biznet ISP SSL interception
-          BINANCE_FAPI_BASE_URL:   ${{ secrets.BINANCE_FAPI_BASE_URL }}
-          BINANCE_PROXY_BASE_URL:  ${{ secrets.BINANCE_PROXY_BASE_URL }}
-          BINANCE_BASE_URL:        https://api.binance.com
-          BINANCE_API_KEY:         ${{ secrets.BINANCE_API_KEY }}
-          BINANCE_API_SECRET:      ${{ secrets.BINANCE_API_SECRET }}
+          # ── Binance (direct — WARP routes through Cloudflare, not US Azure)
+          BINANCE_BASE_URL:   https://api.binance.com
+          BINANCE_API_KEY:    ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
 
           # ── Strategy Config ───────────────────────────────────────────────
-          ACCOUNT_BALANCE:          ${{ secrets.ACCOUNT_BALANCE }}
-          MIN_RR_RATIO:             ${{ vars.MIN_RR_RATIO || '1.5' }}
-          MAX_PAIRS:                ${{ vars.MAX_PAIRS    || '30' }}
-          SCAN_INTERVAL_MS:         3600000
-          LOG_LEVEL:                info
+          ACCOUNT_BALANCE:  ${{ secrets.ACCOUNT_BALANCE }}
+          MIN_RR_RATIO:     ${{ vars.MIN_RR_RATIO || '1.5' }}
+          MAX_PAIRS:        ${{ vars.MAX_PAIRS    || '30' }}
+          SCAN_INTERVAL_MS: 3600000
+          LOG_LEVEL:        info
