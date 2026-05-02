@@ -2,6 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const logger = require('../../utils/logger');
 const { getJakartaResetTime } = require('../../utils/time');
+const { getState, setState, isEnabled: redisEnabled } = require('../../utils/redis');
+
+// Redis key prefix
+const R = {
+  signals:   'bot:signals',
+  lessons:   'bot:lessons',
+  history:   'bot:history',
+  watchlist: 'bot:watchlist',
+  dashboard: 'bot:dashboard_state',
+};
 
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
 const STORAGE_PATH = path.join(DATA_DIR, 'active_signals.json');
@@ -102,6 +112,7 @@ class SignalTracker {
     try {
       fs.writeFileSync(STORAGE_PATH, JSON.stringify(this.signals, null, 2));
     } catch (err) { logger.error('Failed to save signals:', err.message); }
+    if (redisEnabled()) setState(R.signals, this.signals).catch(e => logger.error('[Redis] save signals:', e.message));
   }
 
   _saveLessons() {
@@ -110,6 +121,7 @@ class SignalTracker {
       this.lessons = this.lessons.slice(-15);
       fs.writeFileSync(LESSONS_PATH, JSON.stringify(this.lessons, null, 2));
     } catch (err) { logger.error('Failed to save lessons:', err.message); }
+    if (redisEnabled()) setState(R.lessons, this.lessons).catch(e => logger.error('[Redis] save lessons:', e.message));
   }
 
   _saveHistory() {
@@ -118,6 +130,7 @@ class SignalTracker {
       const trimmed = this.history.slice(-100);
       fs.writeFileSync(HISTORY_PATH, JSON.stringify(trimmed, null, 2));
     } catch (err) { logger.error('Failed to save trade history:', err.message); }
+    if (redisEnabled()) setState(R.history, this.history.slice(-100)).catch(e => logger.error('[Redis] save history:', e.message));
   }
 
   /**
@@ -428,6 +441,48 @@ class SignalTracker {
     } catch (err) {
       logger.error('Failed to save dashboard state:', err.message);
     }
+    if (redisEnabled()) setState(R.dashboard, this.dashboardState).catch(e => logger.error('[Redis] save dashboard:', e.message));
+  }
+
+  /**
+   * Load all state from Upstash Redis (called at startup in run_once.js).
+   * Local JSON files are used as fallback when Redis data is absent.
+   */
+  async syncFromRedis() {
+    if (!redisEnabled()) return;
+    logger.info('📥 [Tracker] Loading state from Upstash Redis...');
+
+    const [signals, lessons, history, watchlist, dashboard] = await Promise.all([
+      getState(R.signals),
+      getState(R.lessons),
+      getState(R.history),
+      getState(R.watchlist),
+      getState(R.dashboard),
+    ]);
+
+    if (signals)   { this.signals = signals;           logger.info(`  ✅ signals: ${Object.keys(signals).length} active`); }
+    if (lessons)   { this.lessons = lessons;           logger.info(`  ✅ lessons: ${lessons.length}`); }
+    if (history)   { this.history = history;           logger.info(`  ✅ history: ${history.length} trades`); }
+    if (watchlist) { this.latestWatchlist = watchlist; logger.info(`  ✅ watchlist: ${watchlist.length}`); }
+    if (dashboard) { this.dashboardState = dashboard; }
+
+    logger.info('✅ [Tracker] Redis sync complete.');
+  }
+
+  /**
+   * Force-push all current state to Redis (called at end of run_once.js).
+   */
+  async syncToRedis() {
+    if (!redisEnabled()) return;
+    logger.info('📤 [Tracker] Pushing state to Upstash Redis...');
+    await Promise.all([
+      setState(R.signals,   this.signals),
+      setState(R.lessons,   this.lessons),
+      setState(R.history,   this.history.slice(-100)),
+      setState(R.watchlist, this.latestWatchlist),
+      setState(R.dashboard, this.dashboardState),
+    ]);
+    logger.info('✅ [Tracker] Redis push complete.');
   }
 }
 

@@ -1,37 +1,66 @@
-name: Crypto Signal Bot Cron
+name: Crypto Signal Bot — Cron Scanner
 
 on:
   schedule:
-    - cron: '0 * * * *'    # Run every hour
-  workflow_dispatch:      # Allow manual trigger
+    - cron: '0 * * * *'   # Setiap jam tepat (UTC). WIB = UTC+7
+  workflow_dispatch:       # Bisa trigger manual dari GitHub UI
 
 jobs:
-  run-bot:
+  scan:
+    name: Run Scan Cycle
     runs-on: ubuntu-latest
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    timeout-minutes: 30    # Safety: kill jika nyangkut (Live Confirmation = 3 menit)
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '24'
+          node-version: '22'
+          cache: 'npm'
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install dependencies (skip dashboard build)
+        run: npm ci --ignore-scripts
+        # --ignore-scripts skips puppeteer's postinstall Chrome download.
+        # We install Chrome separately below so we control the version.
 
-      - name: Setup Chrome
+      - name: Install Chromium for Puppeteer
         uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
 
-      - name: Run scanner
-        run: npm start
+      - name: Set PUPPETEER_EXECUTABLE_PATH
+        run: |
+          CHROME_PATH=$(which google-chrome || which chromium-browser || which chromium)
+          echo "PUPPETEER_EXECUTABLE_PATH=$CHROME_PATH" >> $GITHUB_ENV
+
+      - name: Run one-shot scanner
+        run: node src/run_once.js
         env:
-          MODE: oneshot
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Optional envs (you can add more to secrets if needed)
-          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL || 'openai/gpt-4o-mini' }}
-          MIN_RR_RATIO: ${{ secrets.MIN_RR_RATIO || '2.0' }}
+          NODE_ENV: production
+
+          # ── Upstash Redis (State Persistence) ────────────────────────────
+          UPSTASH_REDIS_REST_URL:   ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+
+          # ── Discord (Signal Delivery) ─────────────────────────────────────
+          DISCORD_SIGNAL_WEBHOOK_URL: ${{ secrets.DISCORD_SIGNAL_WEBHOOK_URL }}
+          DISCORD_STATUS_WEBHOOK_URL: ${{ secrets.DISCORD_STATUS_WEBHOOK_URL }}
+
+          # ── OpenRouter AI ─────────────────────────────────────────────────
+          OPENROUTER_API_KEY:   ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL:     ${{ secrets.OPENROUTER_MODEL }}
+
+          # ── Binance ───────────────────────────────────────────────────────
+          BINANCE_API_KEY:    ${{ secrets.BINANCE_API_KEY }}
+          BINANCE_API_SECRET: ${{ secrets.BINANCE_API_SECRET }}
+          BINANCE_BASE_URL:   https://api.binance.com
+
+          # ── Strategy Config ───────────────────────────────────────────────
+          ACCOUNT_BALANCE:          ${{ secrets.ACCOUNT_BALANCE }}
+          MIN_RR_RATIO:             ${{ vars.MIN_RR_RATIO || '1.5' }}
+          MAX_PAIRS:                ${{ vars.MAX_PAIRS    || '30' }}
+          SCAN_INTERVAL_MS:         3600000
+          LOG_LEVEL:                info

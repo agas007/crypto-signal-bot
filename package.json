@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
+    "scan": "node src/run_once.js",
     "build": "cd dashboard && npm install --legacy-peer-deps && npm run build"
   },
   "keywords": [

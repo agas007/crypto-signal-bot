@@ -1,8 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer');
-const TelegramBot = require('node-telegram-bot-api');
-const config = require('../../config');
+const { sendStatus } = require('../../utils/discord');
 const logger = require('../../utils/logger');
 const { formatJakartaTime } = require('../../utils/time');
 const tracker = require('../tracker');
@@ -51,7 +50,7 @@ function pickLatest(items, key = 'timestamp') {
 }
 
 async function generateAndSendDashboard(targetChatId = null) {
-  const chatId = targetChatId || config.telegram.chatId;
+  // targetChatId kept for API compatibility but ignored in Discord mode
   const isManual = Boolean(targetChatId);
   const sixHoursMs = 6 * 60 * 60 * 1000;
   const dashboardState = tracker.getDashboardState ? tracker.getDashboardState() : { lastAutoDashboardSentAt: 0 };
@@ -396,18 +395,32 @@ async function generateAndSendDashboard(targetChatId = null) {
     await page.screenshot({ path: screenshotPath, fullPage: true });
     await browser.close();
 
-    const bot = new TelegramBot(config.telegram.botToken);
-    await bot.sendPhoto(chatId, fs.createReadStream(screenshotPath), {
-      caption: `📊 *SIGNAL OPS DASHBOARD*\n` +
+    // Send via Discord webhook (file upload)
+    const DASHBOARD_WEBHOOK = process.env.DISCORD_SIGNAL_WEBHOOK_URL;
+    if (DASHBOARD_WEBHOOK) {
+      const { FormData, Blob } = globalThis;
+      const form = new FormData();
+      const caption = `📊 **SIGNAL OPS DASHBOARD**\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
         `• Active: ${signals.length}\n` +
         `• Approved: ${activeSignals.length}\n` +
         `• Watchlist: ${watchlistSignals.length}\n` +
         `• Win Rate: ${winRate.toFixed(0)}%\n` +
         `• Latest: ${latestTrade ? latestTrade.symbol : (latestSignal ? latestSignal.symbol : 'N/A')}\n\n` +
-        `_Generated on: ${formatJakartaTime(new Date(), 'readable')} WIB_`,
-      parse_mode: 'Markdown',
-    });
+        `*Generated: ${formatJakartaTime(new Date(), 'readable')} WIB*`;
+
+      form.append('payload_json', JSON.stringify({ content: caption }));
+      const buf = fs.readFileSync(screenshotPath);
+      form.append('file[0]', new Blob([buf], { type: 'image/png' }), 'dashboard.png');
+
+      const res = await fetch(DASHBOARD_WEBHOOK, { method: 'POST', body: form });
+      if (!res.ok) throw new Error(`Discord dashboard upload ${res.status}: ${await res.text()}`);
+    } else {
+      // Fallback: send stats as text only
+      await sendStatus(
+        `📊 **SIGNAL OPS DASHBOARD**\n• Active: ${signals.length} | Approved: ${activeSignals.length}\n• Win Rate: ${winRate.toFixed(0)}% (${wins}W/${losses}L)\n_${formatJakartaTime(new Date(), 'readable')} WIB_`
+      );
+    }
 
     if (!isManual) {
       tracker.setDashboardState({
