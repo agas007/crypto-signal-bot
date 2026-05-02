@@ -8,7 +8,10 @@ on:
 jobs:
   scan:
     name: Run Scan Cycle
-    runs-on: ubuntu-latest
+    # ⚠️  GitHub-hosted runners (ubuntu-latest) use US IPs → Binance blocks them (451).
+    # Use a self-hosted runner on a non-restricted region (your Mac or Oracle Cloud Free VM).
+    # Setup: GitHub repo → Settings → Actions → Runners → New self-hosted runner
+    runs-on: self-hosted
     timeout-minutes: 30    # Safety: kill jika nyangkut (Live Confirmation = 3 menit)
 
     steps:
@@ -26,15 +29,19 @@ jobs:
         # --ignore-scripts skips puppeteer's postinstall Chrome download.
         # We install Chrome separately below so we control the version.
 
-      - name: Install Chromium for Puppeteer
-        uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: stable
-
-      - name: Set PUPPETEER_EXECUTABLE_PATH
+      - name: Detect Chrome / Chromium path
         run: |
-          CHROME_PATH=$(which google-chrome || which chromium-browser || which chromium)
-          echo "PUPPETEER_EXECUTABLE_PATH=$CHROME_PATH" >> $GITHUB_ENV
+          CHROME=$(which google-chrome 2>/dev/null || \
+                   which chromium-browser 2>/dev/null || \
+                   which chromium 2>/dev/null || \
+                   ls /Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome 2>/dev/null || \
+                   echo "")
+          if [ -z "$CHROME" ]; then
+            echo "⚠️ Chrome not found, Puppeteer will use bundled Chromium."
+          else
+            echo "✅ Chrome found: $CHROME"
+            echo "PUPPETEER_EXECUTABLE_PATH=$CHROME" >> $GITHUB_ENV
+          fi
 
       - name: Run one-shot scanner
         run: node src/run_once.js
