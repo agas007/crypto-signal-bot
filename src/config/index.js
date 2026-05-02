@@ -22,6 +22,11 @@ const config = {
     chatId: process.env.TELEGRAM_CHAT_ID,
   },
 
+  discord: {
+    signalWebhookUrl: process.env.DISCORD_SIGNAL_WEBHOOK_URL,
+    statusWebhookUrl: process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
+  },
+
   scanner: {
     intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 3_600_000, // 1 hour
     topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 5,
@@ -67,12 +72,18 @@ const config = {
 // ── validation ──────────────────────────────────────────
 const required = [
   ['openRouter.apiKey', config.openRouter.apiKey],
-  ['telegram.botToken', config.telegram.botToken],
-  ['telegram.chatId', config.telegram.chatId],
 ];
+
+// Discord webhook is required UNLESS Telegram is configured (backward compat)
+const hasDiscord   = !!config.discord.signalWebhookUrl;
+const hasTelegram  = !!(config.telegram.botToken && config.telegram.chatId);
+if (!hasDiscord && !hasTelegram) {
+  required.push(['discord.signalWebhookUrl OR telegram.botToken+chatId', null]);
+}
 
 for (const [name, value] of required) {
   if (!value) {
+    console.error(`❌ [Config] Missing required env var: ${name}`);
     process.exit(1);
   }
 }
