@@ -157,6 +157,14 @@ async function initTelegram() {
     } else if (dailyCount >= 5) {
       cooldownStatus = '⏳ *Daily Trade Limit Reached* (5/5 trades)';
     }
+
+    const isLegacyScannerEnabled = process.env.ENABLE_LEGACY_SCANNER === '1';
+    const scanLine = isLegacyScannerEnabled
+      ? '⚠️ *Scan:* Legacy long-running scanner (local only)'
+      : '⌛ *Scan:* cron-job.org → Vercel `/api/check-signal`';
+    const commandLine = isLegacyScannerEnabled
+      ? '🕒 *Commands:* Telegram bot (legacy runtime)'
+      : '🕒 *Commands:* cron-job.org hourly scheduler';
     
     const text = `✅ *Bot Status: ONLINE*\n\n` +
       `🕒 *Uptime:* ${hrs}h ${mins}m\n` +
@@ -166,6 +174,9 @@ async function initTelegram() {
       `• *Trades Today:* ${dailyCount}/5\n` +
       `• *SL Hits Today:* ${globalSlToday}/3\n` +
       `• *Status:* ${cooldownStatus}\n\n` +
+      `${scanLine}\n` +
+      `${commandLine}\n` +
+      `📨 *Alert:* Discord Webhook\n\n` +
       `🧠 *AI Memory:* ${tracker.lessons.length} lessons learned\n` +
       `🎯 *Mode:* Strict (Score ≥ 65)`;
 
