@@ -315,10 +315,15 @@ function verifyDiscordRequest({ signature, timestamp, body, publicKeyHex }) {
   if (!signature || !timestamp || !publicKeyHex) return false;
 
   try {
+    const normalizedPublicKey = String(publicKeyHex).replace(/\s+/g, '').replace(/^0x/i, '');
+    if (!/^[0-9a-fA-F]{64}$/.test(normalizedPublicKey)) {
+      return false;
+    }
+
     const publicKey = crypto.createPublicKey({
       key: Buffer.concat([
         Buffer.from('302a300506032b6570032100', 'hex'),
-        Buffer.from(publicKeyHex, 'hex'),
+        Buffer.from(normalizedPublicKey, 'hex'),
       ]),
       format: 'der',
       type: 'spki',

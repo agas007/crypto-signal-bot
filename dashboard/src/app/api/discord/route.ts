@@ -12,11 +12,28 @@ const {
 } = require('../../../../../src/services/discord_commands');
 const logger = require('../../../../../src/utils/logger');
 
+function getDiscordPublicKey() {
+  return (
+    process.env.DISCORD_PUBLIC_KEY ||
+    process.env.DISCORD_APPLICATION_PUBLIC_KEY ||
+    process.env.DISCORD_INTERACTIONS_PUBLIC_KEY ||
+    ''
+  ).replace(/\s+/g, '').replace(/^0x/i, '');
+}
+
+export async function GET() {
+  return Response.json({
+    ok: true,
+    service: 'discord-interactions',
+    status: 'alive',
+  });
+}
+
 export async function POST(req: Request) {
   const rawBody = await req.text();
   const signature = req.headers.get('x-signature-ed25519') || '';
   const timestamp = req.headers.get('x-signature-timestamp') || '';
-  const publicKey = process.env.DISCORD_PUBLIC_KEY || '';
+  const publicKey = getDiscordPublicKey();
 
   if (!verifyDiscordRequest({ signature, timestamp, body: rawBody, publicKeyHex: publicKey })) {
     return Response.json(

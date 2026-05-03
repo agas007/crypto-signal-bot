@@ -66,6 +66,7 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 | `UPSTASH_REDIS_REST_TOKEN` | Token Upstash Redis |
 | `OPENROUTER_API_KEY` | AI validator / refinement |
 | `DISCORD_PUBLIC_KEY` | Public key Discord app untuk verifikasi interaction |
+| `DISCORD_APPLICATION_PUBLIC_KEY` | Alias opsional kalau lo pakai nama env ini |
 | `DISCORD_APPLICATION_ID` | Application ID Discord untuk register command |
 | `DISCORD_BOT_TOKEN` | Bot token untuk register slash command |
 | `DISCORD_GUILD_ID` | Opsional, buat register command cepat ke guild test |
