@@ -54,7 +54,7 @@ function getCheckSignalUrl() {
 
 async function triggerRemoteScan() {
   const targetUrl = getCheckSignalUrl();
-  const cronSecret = process.env.CRON_SECRET;
+  const cronSecret = process.env.CRON_SECRET || process.env.CHECK_SIGNAL_SECRET;
 
   if (!targetUrl) {
     throw new Error('CHECK_SIGNAL_URL is not configured');
@@ -81,10 +81,13 @@ async function triggerRemoteScan() {
       },
     });
 
+    const text = await res.text().catch(() => '');
+
     return {
       ok: res.ok,
       status: res.status,
       url: url.toString(),
+      body: text,
     };
   } finally {
     clearTimeout(timeoutId);
@@ -231,6 +234,44 @@ function buildHealthResponse() {
   return parts.join('\n');
 }
 
+function buildLogResponse() {
+  const scanReport = tracker.getScanReport ? tracker.getScanReport() : null;
+  const providerHealth = scanReport?.providerHealth || null;
+  const recentErrors = Array.isArray(scanReport?.errors) ? scanReport.errors : [];
+  const recentEvents = Array.isArray(providerHealth?.recentEvents) ? providerHealth.recentEvents : [];
+  const fallbackEvents = recentEvents.filter((event) => ['blocked', 'degraded', 'missing-symbol'].includes(event.status));
+
+  const lines = [
+    '📋 **Scan Log**',
+    '',
+    `• Status: ${scanReport?.status || 'unknown'}`,
+    `• Signals: ${scanReport?.signalCount ?? 0}`,
+    `• Duration: ${scanReport?.durationMs ? `${Math.round(scanReport.durationMs / 1000)}s` : 'n/a'}`,
+    `• Provider fallback events: ${fallbackEvents.length}`,
+    `• Recent errors: ${recentErrors.length}`,
+  ];
+
+  if (recentErrors.length > 0) {
+    lines.push('', 'Recent errors:');
+    for (const err of recentErrors.slice(0, 5)) {
+      lines.push(`• ${truncate(err, 130)}`);
+    }
+  }
+
+  if (fallbackEvents.length > 0) {
+    lines.push('', 'Recent provider events:');
+    for (const event of fallbackEvents.slice(-5)) {
+      lines.push(`• ${event.method}/${event.provider} (${event.status}) - ${truncate(event.message, 110)}`);
+    }
+  }
+
+  if (lines.length <= 6) {
+    lines.push('', 'Belum ada log scan yang berguna.');
+  }
+
+  return lines.join('\n');
+}
+
 function buildHelpResponse() {
   const lines = [
     '🤖 **Discord Commands**',
@@ -242,6 +283,7 @@ function buildHelpResponse() {
     '• `/performance` - cached performance summary',
     '• `/last-signal` - signal terakhir',
     '• `/health` - environment/service health',
+    '• `/log` - scan log summary',
     '• `/help` - list command',
     '',
     'Scan hasilnya akan dikirim lewat Discord webhook yang sama.',
@@ -268,15 +310,27 @@ async function handleInteraction(interaction, context = {}) {
 
   if (commandName === 'scan-now') {
     const logger = context.logger || console;
-    void triggerRemoteScan().catch((err) => {
-      const logger = context.logger || console;
-      logger.error?.(`[discord/scan-now] runSignalCheck failed: ${err.message}`);
-    });
+    try {
+      const result = await triggerRemoteScan();
+      const summary = result.ok
+        ? `✅ Scan request sent (${result.status})`
+        : `⚠️ Scan request returned ${result.status}`;
 
-    return buildInteractionResponse(
-      '⏳ Scan request dikirim ke endpoint check-signal. Hasil alert akan muncul di channel Discord lewat webhook biasa.',
-      { ephemeral: true }
-    );
+      const extra = result.ok
+        ? 'Hasil alert akan muncul di channel Discord lewat webhook biasa.'
+        : `Response: ${truncate(result.body || '(empty)', 500)}`;
+
+      return buildInteractionResponse(
+        `${summary}\n${extra}`,
+        { ephemeral: true }
+      );
+    } catch (err) {
+      logger.error?.(`[discord/scan-now] triggerRemoteScan failed: ${err.message}`);
+      return buildInteractionResponse(
+        `❌ Scan trigger gagal: ${err.message}`,
+        { ephemeral: true }
+      );
+    }
   }
 
   if (commandName === 'performance') {
@@ -291,6 +345,7 @@ async function handleInteraction(interaction, context = {}) {
   if (commandName === 'watchlist') return buildInteractionResponse(buildWatchlistResponse(), { ephemeral: true });
   if (commandName === 'last-signal') return buildInteractionResponse(buildLastSignalResponse(), { ephemeral: true });
   if (commandName === 'health') return buildInteractionResponse(buildHealthResponse(), { ephemeral: true });
+  if (commandName === 'log') return buildInteractionResponse(buildLogResponse(), { ephemeral: true });
   if (commandName === 'help') return buildInteractionResponse(buildHelpResponse(), { ephemeral: true });
 
   return buildInteractionResponse(`Unknown command: ${commandName || '(empty)'}`, { ephemeral: true });
@@ -333,6 +388,7 @@ module.exports = {
   buildActiveResponse,
   buildHelpResponse,
   buildHealthResponse,
+  buildLogResponse,
   buildInteractionResponse,
   buildLastSignalResponse,
   buildPerformanceResponse,

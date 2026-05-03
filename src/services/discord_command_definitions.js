@@ -60,6 +60,11 @@ const COMMANDS = [
     type: 1,
   },
   {
+    name: 'log',
+    description: 'Show the latest scan log summary',
+    type: 1,
+  },
+  {
     name: 'help',
     description: 'Show available commands',
     type: 1,
