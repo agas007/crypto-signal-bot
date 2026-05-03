@@ -1,0 +1,18 @@
+{
+  "status": "NO_SIGNAL",
+  "signalCount": 0,
+  "watchlistCount": 0,
+  "candidateCount": 0,
+  "rejectedCount": 0,
+  "filteredCount": 0,
+  "errorCount": 0,
+  "errors": [
+    "x"
+  ],
+  "checks": {
+    "pairs": 0
+  },
+  "startedAt": 1777785920260,
+  "finishedAt": 1777785920260,
+  "durationMs": 1
+}

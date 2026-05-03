@@ -268,6 +268,8 @@ function pickKeyLevel(currentPrice, candidates, side) {
 
 function getPatternScoreWeight(patternName) {
   switch (patternName) {
+    case 'range':
+      return 12;
     case 'ascending_triangle':
     case 'descending_triangle':
       return 20;
@@ -397,11 +399,11 @@ function evaluateSignal(symbol, data, options = {}) {
   // MTA Timing (M15)
   if (m15Trend) {
     if (m15Trend.direction === 'bullish') {
-      longScore += 5;
-      longReasons.push(`M15 timing confirmation (bullish) (+5)`);
+      longScore += 3;
+      longReasons.push(`M15 timing confirmation (bullish) (+3)`);
     } else if (m15Trend.direction === 'bearish') {
-      shortScore += 5;
-      shortReasons.push(`M15 timing confirmation (bearish) (+5)`);
+      shortScore += 3;
+      shortReasons.push(`M15 timing confirmation (bearish) (+3)`);
     }
   }
 
@@ -424,7 +426,8 @@ function evaluateSignal(symbol, data, options = {}) {
 
   if (h4Pattern.detected) {
     tags.push(h4Pattern.name.toUpperCase());
-    warnings.push(`ℹ️ H4 pattern: ${h4Pattern.name} (${(h4Pattern.gapPct * 100).toFixed(2)}% gap, contraction ${(h4Pattern.contractionRatio * 100).toFixed(0)}%).`);
+    const patternLabel = h4Pattern.name === 'range' && h4Pattern.rangeDetected ? 'range / box' : h4Pattern.name;
+    warnings.push(`ℹ️ H4 pattern: ${patternLabel} (${(h4Pattern.gapPct * 100).toFixed(2)}% gap, contraction ${(h4Pattern.contractionRatio * 100).toFixed(0)}%).`);
     const patternWeight = getPatternScoreWeight(h4Pattern.name);
 
     if (h4Pattern.breakout) {
@@ -433,13 +436,13 @@ function evaluateSignal(symbol, data, options = {}) {
 
       if (h4Pattern.breakoutDirection === 'bullish') {
         longScore += patternWeight + retestBonus;
-        longReasons.push(`H4 ${h4Pattern.name} bullish breakout (+${patternWeight}${retestBonus > 0 ? ` +${retestBonus}` : retestBonus < 0 ? ` ${retestBonus}` : ''})`);
-        tags.push('PATTERN BREAKOUT UP');
+        longReasons.push(`H4 ${patternLabel} bullish breakout (+${patternWeight}${retestBonus > 0 ? ` +${retestBonus}` : retestBonus < 0 ? ` ${retestBonus}` : ''})`);
+        tags.push(h4Pattern.name === 'range' ? 'RANGE BREAKOUT UP' : 'PATTERN BREAKOUT UP');
         if (breakoutRetestStatus === 'CONFIRMED') tags.push('BREAKOUT_RETEST_CONTINUATION');
       } else if (h4Pattern.breakoutDirection === 'bearish') {
         shortScore += patternWeight + retestBonus;
-        shortReasons.push(`H4 ${h4Pattern.name} bearish breakout (+${patternWeight}${retestBonus > 0 ? ` +${retestBonus}` : retestBonus < 0 ? ` ${retestBonus}` : ''})`);
-        tags.push('PATTERN BREAKOUT DOWN');
+        shortReasons.push(`H4 ${patternLabel} bearish breakout (+${patternWeight}${retestBonus > 0 ? ` +${retestBonus}` : retestBonus < 0 ? ` ${retestBonus}` : ''})`);
+        tags.push(h4Pattern.name === 'range' ? 'RANGE BREAKOUT DOWN' : 'PATTERN BREAKOUT DOWN');
         if (breakoutRetestStatus === 'CONFIRMED') tags.push('BREAKOUT_RETEST_CONTINUATION');
       }
     } else if (h4Pattern.direction === 'bullish') {
@@ -515,37 +518,37 @@ function evaluateSignal(symbol, data, options = {}) {
 
   // ─── CATEGORY 3: Indicators (Max: 15 pts) ───
   if (ema1321.ema13AboveEma21) {
-    longScore += 10;
-    longReasons.push(`H1 EMA13 > EMA21 alignment (+10)`);
+    longScore += 6;
+    longReasons.push(`H1 EMA13 > EMA21 alignment (+6)`);
   } else {
-    shortScore += 10;
-    shortReasons.push(`H1 EMA13 < EMA21 alignment (+10)`);
+    shortScore += 6;
+    shortReasons.push(`H1 EMA13 < EMA21 alignment (+6)`);
   }
 
   // Stochastic Momentum Scoring (H1 + H4)
   if (h1Stoch.signal === 'oversold') {
-    longScore += 8;
-    longReasons.push(`H1 Stochastic oversold (K=${h1Stoch.k.toFixed(1)}) — long momentum expected (+8)`);
+    longScore += 4;
+    longReasons.push(`H1 Stochastic oversold (K=${h1Stoch.k.toFixed(1)}) — long momentum expected (+4)`);
   } else if (h1Stoch.signal === 'overbought') {
-    shortScore += 8;
-    shortReasons.push(`H1 Stochastic overbought (K=${h1Stoch.k.toFixed(1)}) — short momentum expected (+8)`);
+    shortScore += 4;
+    shortReasons.push(`H1 Stochastic overbought (K=${h1Stoch.k.toFixed(1)}) — short momentum expected (+4)`);
   }
 
   if (h4Stoch.signal === 'oversold') {
-    longScore += 5;
-    longReasons.push(`H4 Stochastic oversold (K=${h4Stoch.k.toFixed(1)}) — bullish momentum building (+5)`);
+    longScore += 3;
+    longReasons.push(`H4 Stochastic oversold (K=${h4Stoch.k.toFixed(1)}) — bullish momentum building (+3)`);
   } else if (h4Stoch.signal === 'overbought') {
-    shortScore += 5;
-    shortReasons.push(`H4 Stochastic overbought (K=${h4Stoch.k.toFixed(1)}) — bearish momentum building (+5)`);
+    shortScore += 3;
+    shortReasons.push(`H4 Stochastic overbought (K=${h4Stoch.k.toFixed(1)}) — bearish momentum building (+3)`);
   }
 
   // Stochastic crossover in zone (higher conviction)
   if (h1StochCross.crossBullish && h1StochCross.crossInZone) {
-    longScore += 5;
-    longReasons.push(`H1 Stoch bullish cross in oversold zone (+5)`);
+    longScore += 3;
+    longReasons.push(`H1 Stoch bullish cross in oversold zone (+3)`);
   } else if (h1StochCross.crossBearish && h1StochCross.crossInZone) {
-    shortScore += 5;
-    shortReasons.push(`H1 Stoch bearish cross in overbought zone (+5)`);
+    shortScore += 3;
+    shortReasons.push(`H1 Stoch bearish cross in overbought zone (+3)`);
   }
 
   // Low Volatility Filter

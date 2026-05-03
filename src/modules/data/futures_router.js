@@ -226,6 +226,7 @@ function createProviderState() {
     preferredByMethod: new Map(),
     blockedProviders: new Set(),
     probeCache: new Map(),
+    recentEvents: [],
   };
 }
 
@@ -282,11 +283,31 @@ function markProviderBlocked(provider, method, err) {
     state.blockedProviders.add(provider);
     logger.warn(`🛑 ${provider.toUpperCase()} blocked for ${method}. Falling through to next provider.`);
   }
+
+  state.recentEvents.push({
+    ts: Date.now(),
+    provider,
+    method,
+    status: isBlocked ? 'blocked' : 'error',
+    message: err?.message || 'Unknown error',
+  });
+  if (state.recentEvents.length > 30) state.recentEvents = state.recentEvents.slice(-30);
 }
 
 function maybeRememberPreferred(method, provider, value) {
   if (!isNonEmpty(value)) return;
   state.preferredByMethod.set(method, provider);
+}
+
+function recordSuccess(method, provider) {
+  state.recentEvents.push({
+    ts: Date.now(),
+    provider,
+    method,
+    status: 'ok',
+    message: 'Provider returned data',
+  });
+  if (state.recentEvents.length > 30) state.recentEvents = state.recentEvents.slice(-30);
 }
 
 async function callProviderChain(method, invoker, options = {}) {
@@ -298,6 +319,7 @@ async function callProviderChain(method, invoker, options = {}) {
       const result = await invoker(provider);
       if (isNonEmpty(result)) {
         maybeRememberPreferred(method, provider, result);
+        recordSuccess(method, provider);
         return result;
       }
     } catch (err) {
@@ -768,6 +790,17 @@ async function primePublicProviderChain() {
   return null;
 }
 
+function getProviderHealth() {
+  return {
+    blockedProviders: [...state.blockedProviders],
+    preferredByMethod: Object.fromEntries(state.preferredByMethod.entries()),
+    recentEvents: state.recentEvents.slice(-12).map((event) => ({
+      ...event,
+      time: new Date(event.ts).toISOString(),
+    })),
+  };
+}
+
 async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
   return callProviderChain('fetchOHLCV', async (provider) => providers[provider]?.fetchOHLCV?.(symbol, interval, limit, options), {
     binanceArgs: [symbol, interval, limit, options],
@@ -857,6 +890,7 @@ async function fetchSpotExchangeSymbols() {
 
 module.exports = {
   primePublicProviderChain,
+  getProviderHealth,
   fetchOHLCV,
   fetchTopPairs,
   fetch24hTicker,

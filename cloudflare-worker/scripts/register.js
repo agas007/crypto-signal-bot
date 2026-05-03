@@ -26,6 +26,10 @@ const COMMANDS = [
     name: 'status',
     description: '📊 Bot health: active trades, SL count, scan info',
   },
+  {
+    name: 'log',
+    description: '🧾 View the latest scan report and errors',
+  },
 ];
 
 async function register() {

@@ -330,6 +330,7 @@ async function fetchUserTrades(symbol, startTime = null, type = 'futures', fromI
 // ─── Exports ─────────────────────────────────────────────────────────────────
 module.exports = {
   primePublicProviderChain: futuresRouter.primePublicProviderChain,
+  getProviderHealth: futuresRouter.getProviderHealth,
   fetchOHLCV,
   fetchMultiTimeframe,
   fetchTopPairs,

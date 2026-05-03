@@ -11,6 +11,7 @@ const R = {
   history:   'bot:history',
   watchlist: 'bot:watchlist',
   dashboard: 'bot:dashboard_state',
+  scanReport: 'bot:scan_report',
 };
 
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
@@ -20,6 +21,7 @@ const HISTORY_PATH = path.join(DATA_DIR, 'trade_history.json');
 const WATCHLIST_PATH = path.join(DATA_DIR, 'latest_watchlist.json');
 const BINANCE_SNAPSHOT_PATH = path.join(DATA_DIR, 'binance_trade_snapshot.json');
 const DASHBOARD_STATE_PATH = path.join(DATA_DIR, 'dashboard_state.json');
+const SCAN_REPORT_PATH = path.join(DATA_DIR, 'scan_report.json');
 
 // Ensure directory exists if it's not the root or current directory
 if (DATA_DIR !== process.cwd() && !fs.existsSync(DATA_DIR)) {
@@ -41,6 +43,7 @@ class SignalTracker {
     this.latestWatchlist = this._loadWatchlist();
     this.latestBinanceSnapshot = this._loadBinanceSnapshot();
     this.dashboardState = this._loadDashboardState();
+    this.latestScanReport = this._loadScanReport();
     this.manualResetAt = 0;
   }
 
@@ -106,6 +109,15 @@ class SignalTracker {
       }
     } catch (err) { logger.error('Failed to load dashboard state:', err.message); }
     return { lastAutoDashboardSentAt: 0 };
+  }
+
+  _loadScanReport() {
+    try {
+      if (fs.existsSync(SCAN_REPORT_PATH)) {
+        return JSON.parse(fs.readFileSync(SCAN_REPORT_PATH, 'utf8'));
+      }
+    } catch (err) { logger.error('Failed to load scan report:', err.message); }
+    return null;
   }
 
   _save() {
@@ -444,6 +456,20 @@ class SignalTracker {
     if (redisEnabled()) setState(R.dashboard, this.dashboardState).catch(e => logger.error('[Redis] save dashboard:', e.message));
   }
 
+  saveScanReport(report) {
+    this.latestScanReport = report || null;
+    try {
+      fs.writeFileSync(SCAN_REPORT_PATH, JSON.stringify(this.latestScanReport, null, 2));
+    } catch (err) {
+      logger.error('Failed to save scan report:', err.message);
+    }
+    if (redisEnabled()) setState(R.scanReport, this.latestScanReport).catch(e => logger.error('[Redis] save scan report:', e.message));
+  }
+
+  getScanReport() {
+    return this.latestScanReport || null;
+  }
+
   /**
    * Load all state from Upstash Redis (called at startup in run_once.js).
    * Local JSON files are used as fallback when Redis data is absent.
@@ -452,12 +478,13 @@ class SignalTracker {
     if (!redisEnabled()) return;
     logger.info('📥 [Tracker] Loading state from Upstash Redis...');
 
-    const [signals, lessons, history, watchlist, dashboard] = await Promise.all([
+    const [signals, lessons, history, watchlist, dashboard, scanReport] = await Promise.all([
       getState(R.signals),
       getState(R.lessons),
       getState(R.history),
       getState(R.watchlist),
       getState(R.dashboard),
+      getState(R.scanReport),
     ]);
 
     if (signals)   { this.signals = signals;           logger.info(`  ✅ signals: ${Object.keys(signals).length} active`); }
@@ -465,6 +492,7 @@ class SignalTracker {
     if (history)   { this.history = history;           logger.info(`  ✅ history: ${history.length} trades`); }
     if (watchlist) { this.latestWatchlist = watchlist; logger.info(`  ✅ watchlist: ${watchlist.length}`); }
     if (dashboard) { this.dashboardState = dashboard; }
+    if (scanReport) { this.latestScanReport = scanReport; }
 
     logger.info('✅ [Tracker] Redis sync complete.');
   }
@@ -481,6 +509,7 @@ class SignalTracker {
       setState(R.history,   this.history.slice(-100)),
       setState(R.watchlist, this.latestWatchlist),
       setState(R.dashboard, this.dashboardState),
+      setState(R.scanReport, this.latestScanReport),
     ]);
     logger.info('✅ [Tracker] Redis push complete.');
   }

@@ -3,7 +3,7 @@ const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
 const { 
   fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, 
-  fetchFuturesBalance, fetchOHLCV, fetchExchangeSpecs, primePublicProviderChain, toFuturesSymbol,
+  fetchFuturesBalance, fetchOHLCV, fetchExchangeSpecs, primePublicProviderChain, getProviderHealth, toFuturesSymbol,
 } = require('../data/bybit');
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
@@ -25,70 +25,108 @@ const { logAudit, initAudit } = require('../../utils/audit');
  */
 async function runScanCycle() {
   const startTime = Date.now();
+  const scanReport = {
+    startedAt: startTime,
+    finishedAt: null,
+    durationMs: null,
+    status: 'RUNNING',
+    signalCount: 0,
+    watchlistCount: 0,
+    candidateCount: 0,
+    strictCount: 0,
+    filteredCount: 0,
+    rejectedCount: 0,
+    errorCount: 0,
+    errors: [],
+    checks: {},
+  };
   logger.info('═══════════════════════════════════════════════');
   logger.info('🔍 Starting scan cycle...');
  
-  // ─── -1. Global Daily Limit Check ───
-  const dailyCount = tracker.getDailyTradeCount();
-  const globalSlToday = tracker.getGlobalSLCountToday();
+  let sentCount = 0;
+  let dailyCount = 0;
+  let globalSlToday = 0;
+  const pushScanError = (message) => {
+    scanReport.errorCount++;
+    if (scanReport.errors.length < 8) {
+      scanReport.errors.push(message);
+    }
+  };
 
-  // ─── 0. Early Exit Check (Hard Killswitch) ───
-  // Rule: Stop all trades if we hit 3 SLs globally in a day (Resets 00:00 WIB)
-  if (globalSlToday >= 3) {
-    logger.info(`🚫 Global Killswitch Active: ${globalSlToday}/3 Stop Loss hits today. Scanning suspended until 00:00 WIB reset.`);
-    await checkActiveTrades(); // Still check existing trades for accuracy
-    return 0;
-  }
-
-  logger.info(`📈 Daily Status: ${dailyCount}/5 total trades, ${globalSlToday}/3 SL hits.`);
-
-  // ─── 0. Fetch Real Balance & Exchange Specs ───
-  // We fetch specs to ensure Lot Size (Step size) and Min Notional compliance
-  await primePublicProviderChain();
-  const [balance, exchangeSpecs] = await Promise.all([
-      fetchFuturesBalance(),
-      fetchExchangeSpecs()
-  ]);
-  
-  const effectiveBalance = balance > 0 ? balance : config.strategy.accountBalance;
-  if (balance > 0) {
-    logger.info(`💰 Current Futures Balance: $${balance.toFixed(2)} USDT`);
-  } else {
-    logger.warn(`⚠️ Could not fetch real balance, using fallback: $${config.strategy.accountBalance}`);
-  }
-
-  // ─── 1. Monitor Active Trades ──────────────────────────
-  // Now returns symbols that hit TP/SL to prevent re-tracking in SAME cycle
-  const hitSymbols = await checkActiveTrades();
-
-  // ─── 1. Fetch top pairs by volume ──────────────────────
-  const pairs = await fetchTopPairs();
-  if (!pairs.length) {
-    logger.warn('No pairs fetched, aborting cycle');
-    return 0;
-  }
-
-  // ─── Market Regime: Fetch BTC Trend ───
-  let btcTrend = 'NEUTRAL';
   try {
-      const btcCandles = await fetchOHLCV('BTCUSDT', config.timeframes.D1, 50);
-      if (btcCandles.length > 0) {
-          const trend = analyzeTrend(btcCandles);
-          btcTrend = trend.direction;
-          logger.info(`🌐 Market Regime: BTC D1 is ${btcTrend}`);
-      }
-  } catch (err) {
+    // ─── -1. Global Daily Limit Check ───
+    dailyCount = tracker.getDailyTradeCount();
+    globalSlToday = tracker.getGlobalSLCountToday();
+    scanReport.checks.dailyCount = dailyCount;
+    scanReport.checks.globalSlToday = globalSlToday;
+
+    // ─── 0. Early Exit Check (Hard Killswitch) ───
+    // Rule: Stop all trades if we hit 3 SLs globally in a day (Resets 00:00 WIB)
+    if (globalSlToday >= 3) {
+      logger.info(`🚫 Global Killswitch Active: ${globalSlToday}/3 Stop Loss hits today. Scanning suspended until 00:00 WIB reset.`);
+      scanReport.status = 'GLOBAL_KILLSWITCH';
+      scanReport.checks.killswitch = true;
+      await checkActiveTrades(); // Still check existing trades for accuracy
+      return 0;
+    }
+
+    logger.info(`📈 Daily Status: ${dailyCount}/5 total trades, ${globalSlToday}/3 SL hits.`);
+
+    // ─── 0. Fetch Real Balance & Exchange Specs ───
+    // We fetch specs to ensure Lot Size (Step size) and Min Notional compliance
+    await primePublicProviderChain();
+    const [balance, exchangeSpecs] = await Promise.all([
+        fetchFuturesBalance(),
+        fetchExchangeSpecs()
+    ]);
+    
+    const effectiveBalance = balance > 0 ? balance : config.strategy.accountBalance;
+    scanReport.checks.balance = balance > 0 ? balance : null;
+    if (balance > 0) {
+      logger.info(`💰 Current Futures Balance: $${balance.toFixed(2)} USDT`);
+    } else {
+      logger.warn(`⚠️ Could not fetch real balance, using fallback: $${config.strategy.accountBalance}`);
+      pushScanError('Futures balance unavailable; fallback balance used.');
+    }
+
+    // ─── 1. Monitor Active Trades ──────────────────────────
+    // Now returns symbols that hit TP/SL to prevent re-tracking in SAME cycle
+    const hitSymbols = await checkActiveTrades();
+    scanReport.checks.hitSymbols = hitSymbols.length;
+
+    // ─── 1. Fetch top pairs by volume ──────────────────────
+    const pairs = await fetchTopPairs();
+    if (!pairs.length) {
+      logger.warn('No pairs fetched, aborting cycle');
+      scanReport.status = 'NO_PAIRS';
+      scanReport.errors.push('No pairs fetched');
+      return 0;
+    }
+    scanReport.checks.pairs = pairs.length;
+
+    // ─── Market Regime: Fetch BTC Trend ───
+    let btcTrend = 'NEUTRAL';
+    try {
+        const btcCandles = await fetchOHLCV('BTCUSDT', config.timeframes.D1, 50);
+        if (btcCandles.length > 0) {
+            const trend = analyzeTrend(btcCandles);
+            btcTrend = trend.direction;
+            logger.info(`🌐 Market Regime: BTC D1 is ${btcTrend}`);
+        }
+    } catch (err) {
       logger.error('Failed to fetch BTC trend for market regime:', err.message);
-  }
+      pushScanError(`BTC regime fetch failed: ${err.message}`);
+    }
+    scanReport.checks.btcTrend = btcTrend;
 
-  // 2. Filter + evaluate each pair
-  const candidates = [];
-  const technicalWatchlist = [];
-  let filtered = 0;
-  let rejected = 0;
-  let errors = 0;
+    // 2. Filter + evaluate each pair
+    const candidates = [];
+    const technicalWatchlist = [];
+    let filtered = 0;
+    let rejected = 0;
+    let errors = 0;
 
-  for (const symbol of pairs) {
+    for (const symbol of pairs) {
     // Skip if just hit TP/SL in this cycle to avoid duplicate signals
     if (hitSymbols.includes(symbol.toUpperCase())) {
       logger.info(`⏭️ Skipping ${symbol} - just hit TP/SL in this cycle.`);
@@ -111,6 +149,7 @@ async function runScanCycle() {
       const ticker = await fetch24hTicker(symbol);
       if (!ticker) {
         errors++;
+        pushScanError(`Ticker unavailable for ${symbol}`);
         continue;
       }
 
@@ -119,6 +158,7 @@ async function runScanCycle() {
 
       if (!d1Candles.length) {
         errors++;
+        pushScanError(`No D1 candles for ${symbol}`);
         continue;
       }
 
@@ -134,6 +174,7 @@ async function runScanCycle() {
 
       if (!filterResult.pass) {
         filtered++;
+        scanReport.filteredCount++;
         logAudit(symbol, 'PRE-FILTER', 'REJECTED', 0, filterResult.reasons.join(', '));
         continue;
       }
@@ -145,6 +186,7 @@ async function runScanCycle() {
       
       if (!mtfData) {
         errors++;
+        pushScanError(`Multi-timeframe fetch failed for ${symbol}`);
         continue;
       }
 
@@ -166,6 +208,7 @@ async function runScanCycle() {
       const signal = isRejection ? null : result;
 
       if (signal && signal.standbyOnly) {
+        scanReport.watchlistCount++;
         technicalWatchlist.push({
           symbol: signal.symbol,
           score: signal.score,
@@ -181,10 +224,12 @@ async function runScanCycle() {
       } else if (signal) {
         signal.candles = mtfData.H1; // Save candles for the chart later
         candidates.push(signal);
+        scanReport.candidateCount++;
         logger.info(`✅ ${symbol}: ${signal.bias} (score: ${signal.score})`);
         logAudit(symbol, 'STRATEGY', 'PASSED', signal.score, signal.reasons.join(', '));
       } else {
         rejected++;
+        scanReport.rejectedCount++;
         const reason = isRejection ? result.rejectionReason : 'Technical requirements not met';
         logAudit(symbol, 'STRATEGY', 'REJECTED', 0, reason);
       }
@@ -193,12 +238,15 @@ async function runScanCycle() {
     } catch (err) {
       logger.error(`Error processing ${symbol}:`, err.message);
       errors++;
+      pushScanError(`${symbol}: ${err.message}`);
     }
   }
 
   // 3. Selection & Batching
   const qualityCandidates = candidates.filter((c) => c.isStrict);
   const okCandidates = candidates.filter((c) => !c.isStrict);
+  scanReport.checks.qualityCandidates = qualityCandidates.length;
+  scanReport.checks.okCandidates = okCandidates.length;
   const isDailyLimitReached = dailyCount >= 5;
   
   const finalPool = isDailyLimitReached
@@ -446,7 +494,38 @@ async function runScanCycle() {
     }
   }
 
+  scanReport.status = sentCount > 0
+    ? 'SIGNALS_SENT'
+    : scanReport.watchlistCount > 0
+      ? 'WATCHLIST_ONLY'
+      : scanReport.errorCount > 0
+        ? 'NO_SIGNAL_WITH_ERRORS'
+        : 'NO_SIGNAL';
+
   return sentCount;
+  } catch (err) {
+    scanReport.status = 'ERROR';
+    scanReport.errorCount++;
+    scanReport.errors.push(err.message);
+    throw err;
+  } finally {
+    scanReport.finishedAt = Date.now();
+    scanReport.durationMs = scanReport.finishedAt - startTime;
+    scanReport.signalCount = sentCount;
+    scanReport.summary = {
+      dailyCount,
+      globalSlToday,
+      pairs: scanReport.checks.pairs || 0,
+      candidates: scanReport.candidateCount,
+      watchlist: scanReport.watchlistCount,
+      filtered: scanReport.filteredCount,
+      rejected: scanReport.rejectedCount,
+      errors: scanReport.errorCount,
+    };
+    scanReport.providerHealth = getProviderHealth ? getProviderHealth() : null;
+    tracker.saveScanReport(scanReport);
+    logger.info(`🧾 Scan report saved: ${scanReport.status} | signals=${scanReport.signalCount} | errors=${scanReport.errorCount}`);
+  }
 }
 
 /**

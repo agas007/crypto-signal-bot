@@ -7,6 +7,7 @@
  *  /lessons   — recent AI lessons
  *  /watchlist — last cycle watchlist
  *  /status    — bot status summary
+ *  /log       — last scan cycle summary and error samples
  *
  * Secrets needed (set via: wrangler secret put <NAME>):
  *   DISCORD_PUBLIC_KEY, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
@@ -29,6 +30,18 @@ async function redisGet(env, key) {
   });
   const data = await res.json();
   return data.result ? JSON.parse(data.result) : null;
+}
+
+function formatWibTime(timestamp) {
+  if (!timestamp) return 'N/A';
+  try {
+    return new Date(timestamp).toLocaleString('id-ID', {
+      timeZone: 'Asia/Jakarta',
+      hour12: false,
+    });
+  } catch (_) {
+    return 'N/A';
+  }
 }
 
 // ─── Discord signature verification ──────────────────────────────────────────
@@ -152,6 +165,90 @@ async function handleStatus(env) {
          `🕒 **Commands:** Cloudflare Workers`;
 }
 
+async function handleLog(env) {
+  const report = await redisGet(env, 'bot:scan_report');
+  if (!report) {
+    return '🧾 **No scan report yet.** Wait for the next scan cycle to complete.';
+  }
+
+  const started = formatWibTime(report.startedAt);
+  const finished = formatWibTime(report.finishedAt);
+  const durationSec = typeof report.durationMs === 'number'
+    ? (report.durationMs / 1000).toFixed(1)
+    : 'N/A';
+  const checks = report.checks || {};
+  const summary = report.summary || {};
+  const errorSamples = Array.isArray(report.errors) ? report.errors.slice(0, 5) : [];
+  const providerHealth = report.providerHealth || {};
+  const providerEvents = Array.isArray(providerHealth.recentEvents) ? providerHealth.recentEvents.slice(-4) : [];
+  const statusEmoji = report.status === 'ERROR' || report.status === 'GLOBAL_KILLSWITCH'
+    ? '🚨'
+    : report.errorCount > 0
+      ? '⚠️'
+      : '🟢';
+
+  const lines = [
+    `${statusEmoji} **LAST SCAN REPORT**`,
+    '',
+    `• **Status:** \`${report.status || 'UNKNOWN'}\``,
+    `• **Started:** \`${started}\``,
+    `• **Finished:** \`${finished}\``,
+    `• **Duration:** \`${durationSec}s\``,
+    `• **Signals sent:** \`${report.signalCount ?? 0}\``,
+    `• **Watchlist:** \`${report.watchlistCount ?? 0}\``,
+    `• **Candidates:** \`${report.candidateCount ?? 0}\``,
+    `• **Rejected:** \`${report.rejectedCount ?? 0}\``,
+    `• **Filtered:** \`${report.filteredCount ?? 0}\``,
+    `• **Errors:** \`${report.errorCount ?? 0}\``,
+  ];
+
+  if (checks.dailyCount !== undefined || checks.globalSlToday !== undefined || checks.pairs !== undefined) {
+    lines.push('');
+    lines.push('**Checks**');
+    if (checks.dailyCount !== undefined) lines.push(`• Daily Count: \`${checks.dailyCount}\``);
+    if (checks.globalSlToday !== undefined) lines.push(`• SL Today: \`${checks.globalSlToday}/3\``);
+    if (checks.pairs !== undefined) lines.push(`• Pairs Fetched: \`${checks.pairs}\``);
+    if (checks.btcTrend) lines.push(`• BTC Trend: \`${checks.btcTrend}\``);
+  }
+
+  if (errorSamples.length > 0) {
+    lines.push('');
+    lines.push('**Error Samples**');
+    for (const err of errorSamples) {
+      lines.push(`• ${String(err).slice(0, 180)}`);
+    }
+    if (report.errorCount > errorSamples.length) {
+      lines.push(`• ...and ${report.errorCount - errorSamples.length} more`);
+    }
+  } else {
+    lines.push('');
+    lines.push('**Errors:** None captured in the last cycle.');
+  }
+
+  if (summary && Object.keys(summary).length > 0) {
+    lines.push('');
+    lines.push('**Summary**');
+    if (summary.dailyCount !== undefined) lines.push(`• Daily Count: \`${summary.dailyCount}\``);
+    if (summary.globalSlToday !== undefined) lines.push(`• SL Today: \`${summary.globalSlToday}/3\``);
+  }
+
+  if (providerHealth.blockedProviders?.length || providerEvents.length) {
+    lines.push('');
+    lines.push('**Provider Health**');
+    if (providerHealth.blockedProviders?.length) {
+      lines.push(`• Blocked: \`${providerHealth.blockedProviders.join(', ')}\``);
+    }
+    if (providerEvents.length) {
+      for (const evt of providerEvents) {
+        const time = formatWibTime(evt.ts);
+        lines.push(`• [${time}] \`${evt.provider}\` / \`${evt.method}\` -> \`${evt.status}\``);
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
 // ─── Command Router ───────────────────────────────────────────────────────────
 
 const COMMANDS = {
@@ -160,6 +257,7 @@ const COMMANDS = {
   lessons:   handleLessons,
   watchlist: handleWatchlist,
   status:    handleStatus,
+  log:       handleLog,
 };
 
 // ─── Main Worker Handler ──────────────────────────────────────────────────────

@@ -189,16 +189,22 @@ function detectChartPattern(highPoints, lowPoints, currentIndex, currentPrice, o
   } else if (upperFit.slope < 0 && lowerFit.slope < 0) {
     name = 'descending_channel';
     direction = 'bearish';
+  } else if (upperFlat && lowerFlat) {
+    name = 'range';
+    direction = 'neutral';
   } else if (compressed) {
     name = 'consolidation';
     direction = 'neutral';
   }
 
   const breakoutDirection = breakoutUp ? 'bullish' : breakoutDown ? 'bearish' : null;
-  const detected = name !== 'range' || breakoutUp || breakoutDown;
+  const rangeDetected = upperFlat && lowerFlat && highs.length >= 2 && lows.length >= 2;
+  const detected = name !== 'range' || rangeDetected || breakoutUp || breakoutDown;
   const strength = highs.length >= 4 && lows.length >= 4 ? 'major' : highs.length >= 3 && lows.length >= 3 ? 'confirmed' : 'fresh';
 
-  let reason = `${name} detected`;
+  let reason = rangeDetected && name === 'range'
+    ? 'range / box detected'
+    : `${name} detected`;
   if (breakoutUp) reason = `${name} with bullish breakout above upper trendline`;
   if (breakoutDown) reason = `${name} with bearish breakout below lower trendline`;
 
@@ -212,6 +218,7 @@ function detectChartPattern(highPoints, lowPoints, currentIndex, currentPrice, o
     currentLower: lowerNow,
     gapPct,
     contractionRatio,
+    rangeDetected,
     upper: {
       slope: upperFit.slope,
       intercept: upperFit.intercept,
