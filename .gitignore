@@ -1,7 +1,6 @@
 node_modules/
 .env
-.env copy
-.env copy 2
+.env copy*
 .claude/
 *.log
 tmp_charts/
