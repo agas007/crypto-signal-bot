@@ -1,4 +1,4 @@
-const { getDiscordCommandDefinitions } = require('../../src/services/discord_commands');
+const { COMMANDS } = require('../../src/services/discord_command_definitions');
 
 async function main() {
   const appId = process.env.DISCORD_APPLICATION_ID;
@@ -17,7 +17,7 @@ async function main() {
     ? `https://discord.com/api/v10/applications/${appId}/guilds/${guildId}/commands`
     : `https://discord.com/api/v10/applications/${appId}/commands`;
 
-  const commands = getDiscordCommandDefinitions();
+  const commands = COMMANDS;
 
   const res = await fetch(endpoint, {
     method: 'PUT',
