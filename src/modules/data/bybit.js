@@ -160,7 +160,7 @@ function markPublicBybitBlocked(err, path) {
     publicBybitBlockLogged = true;
     const status = err?.response?.status || 'N/A';
     logger.warn(
-      `🛑 Bybit public endpoints blocked (${status}) on ${path}. Falling back to Binance market data for public requests.`
+      `🛑 Bybit public endpoints blocked (${status}) on ${path}. Falling back to other market-data providers.`
     );
   }
 }
@@ -206,9 +206,18 @@ function logBybitOnce(kind, baseUrl, path, err) {
   }
 
   const status = err?.response?.status;
-  const payload = err?.response?.data;
-  const detail = payload ? JSON.stringify(payload) : err?.message;
+  const detail = isBybitGeoBlockedError(err)
+    ? 'geo-blocked by Bybit region policy'
+    : (err?.message || 'unknown error');
   logger.warn(`[Bybit] ${kind} failed on ${baseUrl}${path}${status ? ` (${status})` : ''}: ${detail}`);
+}
+
+function createBybitRegionBlockedError(path, baseUrl) {
+  const error = new Error('BYBIT_REGION_BLOCKED');
+  error.isBybitRegionBlocked = true;
+  error.path = path;
+  error.baseUrl = baseUrl;
+  return error;
 }
 
 async function requestBybitAcrossBases(kind, path, params = {}, signer = null) {
@@ -231,6 +240,7 @@ async function requestBybitAcrossBases(kind, path, params = {}, signer = null) {
       if (isTransientBybitUrlError(err)) {
         if (isBybitGeoBlockedError(err)) {
           markPublicBybitBlocked(err, path);
+          throw createBybitRegionBlockedError(path, baseUrl);
         }
         logBybitOnce(kind, baseUrl, path, err);
         continue;
@@ -253,6 +263,9 @@ async function bybitGet(path, params = {}) {
   try {
     return await requestBybitAcrossBases('Public API', path, params);
   } catch (err) {
+    if (err?.isBybitRegionBlocked) {
+      return null;
+    }
     if (isBybitGeoBlockedError(err)) {
       throw err;
     }
@@ -274,6 +287,9 @@ async function bybitGetSigned(path, params = {}) {
     logger.warn(`[Bybit] Private endpoint ${path} called but BYBIT_API_KEY/SECRET not set. Returning null.`);
     return null;
   }
+  if (publicBybitBlocked) {
+    return null;
+  }
 
   const timestamp = Date.now().toString();
   const recvWindow = '20000';
@@ -291,8 +307,12 @@ async function bybitGetSigned(path, params = {}) {
       'X-BAPI-RECV-WINDOW': recvWindow,
     }));
   } catch (err) {
+    if (err?.isBybitRegionBlocked) {
+      return null;
+    }
     if (isBybitGeoBlockedError(err)) {
-      throw err;
+      publicBybitBlocked = true;
+      return null;
     }
     if (err.response) {
       logger.error(`❌ Bybit Private API Error (${path}): ${err.response.status} ${JSON.stringify(err.response.data)}`);
@@ -499,11 +519,20 @@ async function fetchFuturesBalance() {
     logger.warn('⚠️ No Bybit API key — using ACCOUNT_BALANCE env var for position sizing.');
     return 0;
   }
+  if (publicBybitBlocked) {
+    logger.warn('⚠️ Bybit region blocked — using ACCOUNT_BALANCE env var for position sizing.');
+    return 0;
+  }
   try {
     const result = await bybitGetSigned('/v5/account/wallet-balance', { accountType: 'UNIFIED' });
     const usdtCoin = result?.list?.[0]?.coin?.find(c => c.coin === 'USDT');
     return usdtCoin ? parseFloat(usdtCoin.walletBalance) : 0;
   } catch (err) {
+    if (isBybitGeoBlockedError(err)) {
+      publicBybitBlocked = true;
+      logger.warn('⚠️ Bybit region blocked — using ACCOUNT_BALANCE env var for position sizing.');
+      return 0;
+    }
     logger.error(`Failed to fetch Bybit balance: ${err.message}`);
     return 0;
   }
