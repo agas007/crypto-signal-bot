@@ -34,11 +34,15 @@ const config = {
   },
 
   futuresData: {
-    providerOrder: process.env.FUTURES_DATA_PROVIDER_ORDER || 'bitget,okx,kucoin',
+    providerOrder: process.env.FUTURES_DATA_PROVIDER_ORDER || 'bitget,okx,kucoin,hyperliquid',
+    enableHyperliquid: process.env.FUTURES_DATA_ENABLE_HYPERLIQUID !== '0',
     enableBinanceFallback: process.env.FUTURES_DATA_ENABLE_BINANCE_FALLBACK === '1',
     bitgetBaseUrl: process.env.BITGET_BASE_URL || 'https://api.bitget.com',
     okxBaseUrl: process.env.OKX_BASE_URL || 'https://www.okx.com',
     kucoinBaseUrl: process.env.KUCOIN_BASE_URL || 'https://api-futures.kucoin.com',
+    hyperliquidBaseUrl: process.env.HYPERLIQUID_BASE_URL || 'https://api.hyperliquid.xyz',
+    providerBlockCooldownMs: parseInt(process.env.FUTURES_PROVIDER_BLOCK_COOLDOWN_MS, 10) || 15 * 60 * 1000,
+    providerTransientCooldownMs: parseInt(process.env.FUTURES_PROVIDER_TRANSIENT_COOLDOWN_MS, 10) || 2 * 60 * 1000,
   },
 
   scanner: {

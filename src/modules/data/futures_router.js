@@ -55,6 +55,8 @@ function httpBaseUrl(provider) {
       return process.env.OKX_BASE_URL || config.futuresData?.okxBaseUrl || 'https://www.okx.com';
     case 'kucoin':
       return process.env.KUCOIN_BASE_URL || config.futuresData?.kucoinBaseUrl || 'https://api-futures.kucoin.com';
+    case 'hyperliquid':
+      return process.env.HYPERLIQUID_BASE_URL || config.futuresData?.hyperliquidBaseUrl || 'https://api.hyperliquid.xyz';
     default:
       return null;
   }
@@ -226,11 +228,191 @@ function createProviderState() {
     preferredByMethod: new Map(),
     blockedProviders: new Set(),
     probeCache: new Map(),
+    methodStats: new Map(),
+    missingSymbolCache: new Map(),
     recentEvents: [],
   };
 }
 
 const state = createProviderState();
+
+function getMethodStats(method) {
+  if (!state.methodStats.has(method)) {
+    state.methodStats.set(method, new Map());
+  }
+  return state.methodStats.get(method);
+}
+
+function getProviderStats(method, provider) {
+  const methodStats = getMethodStats(method);
+  if (!methodStats.has(provider)) {
+    methodStats.set(provider, {
+      attempts: 0,
+      success: 0,
+      failures: 0,
+      blocked: 0,
+      missingSymbol: 0,
+      totalLatencyMs: 0,
+      lastLatencyMs: null,
+      lastSuccessAt: null,
+      lastFailureAt: null,
+      blockedUntil: 0,
+      lastOutcome: 'idle',
+      lastMessage: '',
+    });
+  }
+  return methodStats.get(provider);
+}
+
+function isProviderBlockedNow(method, provider) {
+  const stats = getProviderStats(method, provider);
+  return stats.blockedUntil && stats.blockedUntil > Date.now();
+}
+
+function getBlockedMs() {
+  return config.futuresData?.providerBlockCooldownMs || 15 * 60 * 1000;
+}
+
+function getTransientCooldownMs() {
+  return config.futuresData?.providerTransientCooldownMs || 2 * 60 * 1000;
+}
+
+function isMissingSymbolCached(method, provider, symbol) {
+  if (!symbol) return false;
+  const key = `${method}:${provider}`;
+  const set = state.missingSymbolCache.get(key);
+  return set ? set.has(String(symbol).toUpperCase()) : false;
+}
+
+function cacheMissingSymbol(method, provider, symbol) {
+  if (!symbol) return;
+  const key = `${method}:${provider}`;
+  if (!state.missingSymbolCache.has(key)) {
+    state.missingSymbolCache.set(key, new Set());
+  }
+  state.missingSymbolCache.get(key).add(String(symbol).toUpperCase());
+}
+
+function isGeoBlockedError(err) {
+  const status = err?.response?.status;
+  const payload = err?.response?.data;
+  const body = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
+  const message = `${err?.message || ''} ${body}`.toLowerCase();
+  return status === 403 || status === 451 || message.includes('block access from your country');
+}
+
+function isMissingMarketError(provider, err) {
+  const status = err?.response?.status;
+  const payload = err?.response?.data;
+  const body = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
+  const message = `${err?.message || ''} ${body}`.toLowerCase();
+
+  if (status === 404) return true;
+  if (message.includes('invalid symbol')) return true;
+  if (message.includes("instrument id, instrument id code, or spread id doesn't exist")) return true;
+  if (message.includes("doesn't exist") && message.includes('instrument')) return true;
+  if (message.includes('symbol not exist')) return true;
+  if (message.includes('symbol does not exist')) return true;
+  if (provider === 'okx' && message.includes('51001')) return true;
+  if (provider === 'kucoin' && message.includes('200003')) return true;
+  if (provider === 'bitget' && message.includes('4000')) return true;
+  if (provider === 'hyperliquid' && (message.includes('coin') && message.includes('not'))) return true;
+  return false;
+}
+
+function recordProviderEvent(method, provider, status, message, extra = {}) {
+  state.recentEvents.push({
+    ts: Date.now(),
+    method,
+    provider,
+    status,
+    message,
+    ...extra,
+  });
+  if (state.recentEvents.length > 40) state.recentEvents = state.recentEvents.slice(-40);
+}
+
+function markCooldown(method, provider, err, reason, durationMs) {
+  const stats = getProviderStats(method, provider);
+  const now = Date.now();
+  stats.blockedUntil = now + durationMs;
+  stats.lastOutcome = reason;
+  stats.lastMessage = err?.message || reason;
+  if (reason === 'blocked') {
+    stats.blocked += 1;
+    state.blockedProviders.add(provider);
+  }
+  recordProviderEvent(method, provider, reason, err?.message || 'unknown error', {
+    blockedUntil: stats.blockedUntil,
+  });
+}
+
+function recordSuccess(method, provider, latencyMs) {
+  const stats = getProviderStats(method, provider);
+  stats.attempts += 1;
+  stats.success += 1;
+  stats.lastSuccessAt = Date.now();
+  stats.lastLatencyMs = latencyMs;
+  stats.totalLatencyMs += latencyMs;
+  stats.lastOutcome = 'ok';
+  stats.lastMessage = 'success';
+  stats.blockedUntil = 0;
+  state.blockedProviders.delete(provider);
+  recordProviderEvent(method, provider, 'ok', 'Provider returned data', { latencyMs });
+}
+
+function recordFailure(method, provider, err, latencyMs, reason = 'error') {
+  const stats = getProviderStats(method, provider);
+  stats.attempts += 1;
+  stats.failures += 1;
+  stats.lastFailureAt = Date.now();
+  stats.lastLatencyMs = latencyMs;
+  stats.totalLatencyMs += latencyMs;
+  stats.lastOutcome = reason;
+  stats.lastMessage = err?.message || 'unknown error';
+  recordProviderEvent(method, provider, reason, err?.message || 'unknown error', { latencyMs });
+}
+
+function recordMissingSymbol(method, provider, symbol, latencyMs, message = 'missing market') {
+  const stats = getProviderStats(method, provider);
+  stats.attempts += 1;
+  stats.missingSymbol += 1;
+  stats.lastFailureAt = Date.now();
+  stats.lastLatencyMs = latencyMs;
+  stats.totalLatencyMs += latencyMs;
+  stats.lastOutcome = 'missing-symbol';
+  stats.lastMessage = message;
+  recordProviderEvent(method, provider, 'missing-symbol', message, { symbol, latencyMs });
+}
+
+function providerScore(method, provider) {
+  const stats = getProviderStats(method, provider);
+  const attempts = Math.max(stats.attempts, 1);
+  const successRate = stats.success / attempts;
+  const avgLatency = stats.totalLatencyMs > 0 ? stats.totalLatencyMs / attempts : 1000;
+  const missedPenalty = stats.missingSymbol * 2;
+  const blockedPenalty = stats.blocked * 15;
+  const failurePenalty = stats.failures * 3;
+  return (successRate * 100) - failurePenalty - blockedPenalty - missedPenalty - (avgLatency / 100);
+}
+
+function includeProvider(provider) {
+  if (provider === 'hyperliquid') {
+    return config.futuresData?.enableHyperliquid !== false && process.env.FUTURES_DATA_ENABLE_HYPERLIQUID !== '0';
+  }
+  return true;
+}
+
+function providerOrderForMethod(method) {
+  const order = parseProviderOrder();
+  const preferred = state.preferredByMethod.get(method);
+  const includeBinanceFallback = shouldIncludeBinanceFallback();
+  const candidates = unique([preferred, ...order]);
+  if (includeBinanceFallback && !candidates.includes('binance')) {
+    candidates.push('binance');
+  }
+  return candidates.filter(includeProvider);
+}
 
 async function httpGet(provider, path, params = {}) {
   const baseUrl = httpBaseUrl(provider);
@@ -266,94 +448,78 @@ async function httpGet(provider, path, params = {}) {
   return body;
 }
 
-function providerListForMethod(method) {
-  const order = parseProviderOrder();
-  const preferred = state.preferredByMethod.get(method);
-  const includeBinanceFallback = shouldIncludeBinanceFallback();
-
-  const chain = unique([preferred, ...order]);
-  if (includeBinanceFallback && !chain.includes('binance')) {
-    chain.push('binance');
-  }
-  return chain;
-}
-
 function shouldIncludeBinanceFallback() {
   const order = parseProviderOrder();
   return process.env.FUTURES_DATA_ENABLE_BINANCE_FALLBACK === '1' || order.includes('binance');
 }
-
-function markProviderBlocked(provider, method, err) {
-  if (provider === 'binance') return;
-  const status = err?.response?.status;
-  const body = JSON.stringify(err?.response?.data || {});
-  const message = `${err?.message || ''} ${body}`.toLowerCase();
-  const isBlocked = status === 403 || status === 451 || message.includes('block access from your country');
-
-  if (isBlocked) {
-    state.blockedProviders.add(provider);
-    logger.warn(`🛑 ${provider.toUpperCase()} blocked for ${method}. Falling through to next provider.`);
-  }
-
-  state.recentEvents.push({
-    ts: Date.now(),
-    provider,
-    method,
-    status: isBlocked ? 'blocked' : 'error',
-    message: err?.message || 'Unknown error',
-  });
-  if (state.recentEvents.length > 30) state.recentEvents = state.recentEvents.slice(-30);
-}
-
-function isMissingInstrumentError(provider, err) {
-  const status = err?.response?.status;
-  const body = JSON.stringify(err?.response?.data || {});
-  const message = `${err?.message || ''} ${body}`.toLowerCase();
-
-  if (message.includes('invalid symbol')) return true;
-  if (message.includes("instrument id, instrument id code, or spread id doesn't exist")) return true;
-  if (message.includes("doesn't exist") && message.includes('instrument')) return true;
-  if (message.includes('symbol does not exist')) return true;
-  if (message.includes('symbol not exist')) return true;
-
-  if (provider === 'okx' && (message.includes('51001') || message.includes('instrument id'))) return true;
-  if (provider === 'kucoin' && (message.includes('200003') || message.includes('invalid symbol'))) return true;
-  if (provider === 'bitget' && (message.includes('4000') || message.includes('symbol') && message.includes('not'))) return true;
-
-  return status === 404;
-}
-
 function maybeRememberPreferred(method, provider, value) {
   if (!isNonEmpty(value)) return;
   state.preferredByMethod.set(method, provider);
 }
 
-function recordSuccess(method, provider) {
-  state.recentEvents.push({
-    ts: Date.now(),
-    provider,
-    method,
-    status: 'ok',
-    message: 'Provider returned data',
-  });
-  if (state.recentEvents.length > 30) state.recentEvents = state.recentEvents.slice(-30);
+function selectProviders(method, symbol) {
+  const order = providerOrderForMethod(method);
+  const ranked = order
+    .filter((provider) => !isProviderBlockedNow(method, provider))
+    .filter((provider) => !isMissingSymbolCached(method, provider, symbol))
+    .map((provider, index) => ({
+      provider,
+      score: providerScore(method, provider),
+      index,
+    }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.index - b.index;
+    });
+  return ranked.map((item) => item.provider);
+}
+
+function providerMissingSymbolCount(method, provider) {
+  const stats = getProviderStats(method, provider);
+  return stats.missingSymbol || 0;
 }
 
 async function callProviderChain(method, invoker, options = {}) {
-  const providers = providerListForMethod(method).filter((provider) => !state.blockedProviders.has(provider));
+  const symbol = options.symbol ? String(options.symbol).toUpperCase() : null;
+  const providers = selectProviders(method, symbol);
   const errors = [];
 
   for (const provider of providers) {
+    const startedAt = Date.now();
     try {
       const result = await invoker(provider);
+      const latencyMs = Date.now() - startedAt;
+
       if (isNonEmpty(result)) {
         maybeRememberPreferred(method, provider, result);
-        recordSuccess(method, provider);
+        recordSuccess(method, provider, latencyMs);
         return result;
       }
+
+      if (symbol && options.emptyMeansMissing !== false) {
+        recordMissingSymbol(method, provider, symbol, latencyMs, 'Provider returned empty payload');
+        cacheMissingSymbol(method, provider, symbol);
+      }
     } catch (err) {
+      const latencyMs = Date.now() - startedAt;
       errors.push({ provider, err });
-      markProviderBlocked(provider, method, err);
+
+      if (isMissingMarketError(provider, err)) {
+        if (symbol) {
+          recordMissingSymbol(method, provider, symbol, latencyMs, err.message || 'missing market');
+          cacheMissingSymbol(method, provider, symbol);
+        }
+        continue;
+      }
+
+      if (isGeoBlockedError(err)) {
+        recordFailure(method, provider, err, latencyMs, 'blocked');
+        markCooldown(method, provider, err, 'blocked', getBlockedMs());
+        continue;
+      }
+
+      recordFailure(method, provider, err, latencyMs, 'error');
+      markCooldown(method, provider, err, 'degraded', getTransientCooldownMs());
       if (options.stopOnFatal && options.stopOnFatal(err, provider)) {
         throw err;
       }
@@ -399,6 +565,99 @@ async function okxRequest(path, params = {}) {
 
 async function kucoinRequest(path, params = {}) {
   return httpGet('kucoin', path, params);
+}
+
+async function hyperliquidRequest(body) {
+  const baseUrl = httpBaseUrl('hyperliquid');
+  if (!baseUrl) throw new Error('Provider hyperliquid has no base URL');
+
+  const response = await axios.post(`${baseUrl}/info`, body, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: DEFAULT_TIMEOUT,
+  });
+  return response.data;
+}
+
+function normalizeHyperliquidCoin(symbol) {
+  const sym = String(symbol || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!sym) return sym;
+
+  const lowPriceMap = {
+    PEPEUSDT: 'PEPE',
+    SHIBUSDT: 'SHIB',
+    FLOKIUSDT: 'FLOKI',
+    BONKUSDT: 'BONK',
+    LUNCUSDT: 'LUNC',
+    XECUSDT: 'XEC',
+    SATSUSDT: 'SATS',
+    RATSUSDT: 'RATS',
+  };
+
+  if (lowPriceMap[sym]) return lowPriceMap[sym];
+  if (sym.endsWith('USDT')) return sym.slice(0, -4);
+  if (sym.endsWith('USDC')) return sym.slice(0, -4);
+  if (sym.startsWith('1000')) return sym.slice(4);
+  return sym;
+}
+
+function normalizeHyperliquidSymbol(coin) {
+  const normalized = String(coin || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!normalized) return normalized;
+  return `${normalized}USDT`;
+}
+
+function hyperliquidMetaAndCtxs(payload) {
+  const data = unwrapData(payload);
+  if (Array.isArray(data) && data.length >= 2) {
+    return { meta: data[0] || {}, ctxs: Array.isArray(data[1]) ? data[1] : [] };
+  }
+  if (isObject(data) && Array.isArray(data.meta) && Array.isArray(data.ctxs)) {
+    return { meta: data.meta, ctxs: data.ctxs };
+  }
+  if (isObject(data) && Array.isArray(data.universe) && Array.isArray(data.assetCtxs)) {
+    return { meta: data, ctxs: data.assetCtxs };
+  }
+  return { meta: {}, ctxs: [] };
+}
+
+function normalizeHyperliquidCandleRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((row) => {
+      if (!isObject(row)) return null;
+      const openTime = Number(row.t ?? row.T ?? 0);
+      if (!openTime) return null;
+      return {
+        openTime,
+        open: toFloat(row.o ?? row.open, 0),
+        high: toFloat(row.h ?? row.high, 0),
+        low: toFloat(row.l ?? row.low, 0),
+        close: toFloat(row.c ?? row.close, 0),
+        volume: toFloat(row.v ?? row.volume, 0),
+        closeTime: Number(row.T ?? row.t ?? 0),
+        quoteVolume: toFloat(row.v ?? row.volume, 0),
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.openTime - b.openTime);
+}
+
+function hyperliquidUniverse(meta) {
+  return Array.isArray(meta?.universe) ? meta.universe : [];
+}
+
+function hyperliquidAssetCtxByCoin(meta, ctxs, coin) {
+  const target = String(coin || '').toUpperCase();
+  const universe = hyperliquidUniverse(meta);
+  const index = universe.findIndex((item) => String(item?.name || '').toUpperCase() === target);
+  if (index < 0) return null;
+  return { index, coin: universe[index].name || target, ctx: ctxs[index] || null, spec: universe[index] };
+}
+
+function hyperliquidFindSupportedCoin(meta, coin) {
+  const target = String(coin || '').toUpperCase();
+  const universe = hyperliquidUniverse(meta);
+  return universe.some((item) => String(item?.name || '').toUpperCase() === target);
 }
 
 const providers = {
@@ -736,6 +995,131 @@ const providers = {
       return binanceData.fetchSpotExchangeSymbols();
     },
   },
+  hyperliquid: {
+    async probe() {
+      const payload = await hyperliquidRequest({ type: 'allMids' });
+      return unwrapData(payload);
+    },
+    async fetchOHLCV(symbol, interval, limit = 100, options = {}) {
+      const metaPayload = await hyperliquidRequest({ type: 'metaAndAssetCtxs' });
+      const { meta } = hyperliquidMetaAndCtxs(metaPayload);
+      const coin = normalizeHyperliquidCoin(symbol);
+      if (!hyperliquidFindSupportedCoin(meta, coin)) {
+        throw new Error(`Hyperliquid market not found: ${symbol}`);
+      }
+
+      const payload = await hyperliquidRequest({
+        type: 'candleSnapshot',
+        req: {
+          coin,
+          interval: mapIntervalForProvider('hyperliquid', interval),
+          ...(options.startTime ? { startTime: options.startTime } : {}),
+          ...(options.endTime ? { endTime: options.endTime } : {}),
+        },
+      });
+      return normalizeHyperliquidCandleRows(Array.isArray(payload) ? payload.slice(-limit) : []);
+    },
+    async fetchTopPairs(limit = config.scanner.maxPairs) {
+      const payload = await hyperliquidRequest({ type: 'metaAndAssetCtxs' });
+      const { meta, ctxs } = hyperliquidMetaAndCtxs(payload);
+      const universe = hyperliquidUniverse(meta);
+
+      return universe
+        .map((item, index) => ({
+          coin: item?.name,
+          ctx: ctxs[index] || null,
+          spec: item,
+        }))
+        .filter((item) => item.coin && item.ctx)
+        .sort((a, b) => toFloat(b.ctx.dayNtlVlm ?? b.ctx.dayBaseVlm ?? 0, 0) - toFloat(a.ctx.dayNtlVlm ?? a.ctx.dayBaseVlm ?? 0, 0))
+        .slice(0, limit)
+        .map((item) => normalizeHyperliquidSymbol(item.coin));
+    },
+    async fetch24hTicker(symbol) {
+      const payload = await hyperliquidRequest({ type: 'metaAndAssetCtxs' });
+      const { meta, ctxs } = hyperliquidMetaAndCtxs(payload);
+      const coin = normalizeHyperliquidCoin(symbol);
+      const found = hyperliquidAssetCtxByCoin(meta, ctxs, coin);
+      if (!found || !found.ctx) {
+        throw new Error(`Hyperliquid market not found: ${symbol}`);
+      }
+      const ctx = found.ctx;
+      const midPx = toFloat(ctx.midPx ?? ctx.markPx ?? 0, 0);
+      const prevDayPx = toFloat(ctx.prevDayPx ?? 0, 0);
+      const priceChangePercent = prevDayPx > 0 ? ((midPx - prevDayPx) / prevDayPx) * 100 : 0;
+      return {
+        symbol: normalizeHyperliquidSymbol(found.coin),
+        priceChangePercent,
+        volume: toFloat(ctx.dayBaseVlm ?? 0, 0),
+        quoteVolume: toFloat(ctx.dayNtlVlm ?? 0, 0),
+        lastPrice: midPx,
+        fundingRate: toFloat(ctx.funding ?? 0, 0),
+        openInterest: toFloat(ctx.openInterest ?? 0, 0),
+      };
+    },
+    async fetchFundingRate(symbol) {
+      const payload = await hyperliquidRequest({ type: 'metaAndAssetCtxs' });
+      const { meta, ctxs } = hyperliquidMetaAndCtxs(payload);
+      const coin = normalizeHyperliquidCoin(symbol);
+      const found = hyperliquidAssetCtxByCoin(meta, ctxs, coin);
+      if (!found || !found.ctx) return 0;
+      return toFloat(found.ctx.funding ?? 0, 0);
+    },
+    async fetchOpenInterest(symbol) {
+      const payload = await hyperliquidRequest({ type: 'metaAndAssetCtxs' });
+      const { meta, ctxs } = hyperliquidMetaAndCtxs(payload);
+      const coin = normalizeHyperliquidCoin(symbol);
+      const found = hyperliquidAssetCtxByCoin(meta, ctxs, coin);
+      if (!found || !found.ctx) return null;
+      return {
+        symbol: normalizeHyperliquidSymbol(found.coin),
+        openInterest: toFloat(found.ctx.openInterest ?? 0, 0),
+      };
+    },
+    async fetchOpenInterestHistory() {
+      return [];
+    },
+    async fetchGlobalLongShortRatio() {
+      return [];
+    },
+    async fetchTopTraderLongShortRatio() {
+      return [];
+    },
+    async fetchOrderBookDepth(symbol) {
+      const coin = normalizeHyperliquidCoin(symbol);
+      const payload = await hyperliquidRequest({
+        type: 'l2Book',
+        coin,
+      });
+      const levels = Array.isArray(payload?.levels) ? payload.levels : [];
+      const bids = Array.isArray(levels[0]) ? levels[0].map((item) => [item.px, item.sz]) : [];
+      const asks = Array.isArray(levels[1]) ? levels[1].map((item) => [item.px, item.sz]) : [];
+      return normalizeOrderBook('hyperliquid', { bids, asks });
+    },
+    async fetchLiquidationOrders() {
+      return [];
+    },
+    async fetchExchangeSpecs() {
+      const payload = await hyperliquidRequest({ type: 'metaAndAssetCtxs' });
+      const { meta, ctxs } = hyperliquidMetaAndCtxs(payload);
+      const universe = hyperliquidUniverse(meta);
+      const specs = {};
+      universe.forEach((item, index) => {
+        if (!item?.name) return;
+        const coin = normalizeHyperliquidSymbol(item.name);
+        specs[coin] = {
+          symbol: coin,
+          stepSize: Math.pow(10, -(Number(item.szDecimals) || 0)) || 0.001,
+          precision: Number(item.szDecimals) || 3,
+          minNotional: toFloat(ctxs[index]?.dayNtlVlm ?? 5.0, 5.0) > 0 ? 5.0 : 5.0,
+        };
+      });
+      return specs;
+    },
+    async fetchSpotExchangeSymbols() {
+      return [];
+    },
+  },
   binance: {
     async probe() {
       return binanceData.fetchTopPairs(1);
@@ -780,27 +1164,35 @@ const providers = {
 };
 
 async function probeProvider(provider) {
-  if (state.probeCache.has(provider)) return state.probeCache.get(provider);
+  const cached = state.probeCache.get(provider);
+  if (cached && cached.ok && (Date.now() - cached.ts) < getTransientCooldownMs()) return true;
+  if (cached && !cached.ok && (Date.now() - cached.ts) < getTransientCooldownMs()) return false;
   const fn = providers[provider]?.probe;
   if (!fn) {
-    state.probeCache.set(provider, false);
+    state.probeCache.set(provider, { ok: false, ts: Date.now() });
     return false;
   }
 
   try {
     const result = await fn();
     const ok = isNonEmpty(result);
-    state.probeCache.set(provider, ok);
+    state.probeCache.set(provider, { ok, ts: Date.now() });
     return ok;
   } catch (err) {
-    state.probeCache.set(provider, false);
-    markProviderBlocked(provider, 'probe', err);
+    state.probeCache.set(provider, { ok: false, ts: Date.now() });
+    if (isGeoBlockedError(err)) {
+      recordFailure('probe', provider, err, 0, 'blocked');
+      markCooldown('probe', provider, err, 'blocked', getBlockedMs());
+    } else {
+      recordFailure('probe', provider, err, 0, 'degraded');
+      markCooldown('probe', provider, err, 'degraded', getTransientCooldownMs());
+    }
     return false;
   }
 }
 
 async function primePublicProviderChain() {
-  const order = parseProviderOrder();
+  const order = providerOrderForMethod('probe');
   for (const provider of order) {
     const ok = await probeProvider(provider);
     if (ok) {
@@ -809,22 +1201,38 @@ async function primePublicProviderChain() {
     }
   }
 
-  if (shouldIncludeBinanceFallback()) {
-    const ok = await probeProvider('binance');
-    if (ok) {
-      logger.info('🛰️ Futures public provider primed: BINANCE');
-      return 'binance';
-    }
-  }
-
   logger.warn('⚠️ No futures public provider responded during priming. Scanner will use live fallback calls.');
   return null;
 }
 
 function getProviderHealth() {
+  const methods = {};
+  for (const [method, methodStats] of state.methodStats.entries()) {
+    methods[method] = {};
+    for (const [provider, stats] of methodStats.entries()) {
+      methods[method][provider] = {
+        ...stats,
+        blocked: isProviderBlockedNow(method, provider),
+        blockedRemainingMs: Math.max((stats.blockedUntil || 0) - Date.now(), 0),
+        avgLatencyMs: stats.attempts > 0 ? stats.totalLatencyMs / stats.attempts : null,
+        score: providerScore(method, provider),
+      };
+    }
+  }
+
+  const activeBlockedProviders = new Set();
+  for (const [method, methodStats] of state.methodStats.entries()) {
+    for (const [provider, stats] of methodStats.entries()) {
+      if (stats.blockedUntil > Date.now()) {
+        activeBlockedProviders.add(provider);
+      }
+    }
+  }
+
   return {
-    blockedProviders: [...state.blockedProviders],
+    blockedProviders: [...activeBlockedProviders],
     preferredByMethod: Object.fromEntries(state.preferredByMethod.entries()),
+    methods,
     recentEvents: state.recentEvents.slice(-12).map((event) => ({
       ...event,
       time: new Date(event.ts).toISOString(),
@@ -834,6 +1242,7 @@ function getProviderHealth() {
 
 async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
   return callProviderChain('fetchOHLCV', async (provider) => providers[provider]?.fetchOHLCV?.(symbol, interval, limit, options), {
+    symbol,
     binanceArgs: [symbol, interval, limit, options],
   });
 }
@@ -846,52 +1255,22 @@ async function fetchTopPairs(limit = config.scanner.maxPairs) {
 }
 
 async function fetch24hTicker(symbol) {
-  const cacheKey = String(symbol || '').toUpperCase();
-  if (state.missingTickerSymbols?.has(cacheKey)) {
-    return null;
-  }
-
-  if (!state.missingTickerSymbols) {
-    state.missingTickerSymbols = new Set();
-  }
-
-  const providerNames = providerListForMethod('fetch24hTicker').filter((provider) => !state.blockedProviders.has(provider));
-  const errors = [];
-
-  for (const provider of providerNames) {
-    try {
-      const result = await providers[provider]?.fetch24hTicker?.(symbol);
-      if (isNonEmpty(result)) {
-        maybeRememberPreferred('fetch24hTicker', provider, result);
-        recordSuccess('fetch24hTicker', provider);
-        return result;
-      }
-    } catch (err) {
-      if (isMissingInstrumentError(provider, err)) {
-        continue;
-      }
-      errors.push({ provider, err });
-      markProviderBlocked(provider, 'fetch24hTicker', err);
-    }
-  }
-
-  if (errors.length) {
-    const detail = errors.map(({ provider, err }) => `${provider}: ${err.message}`).join(' | ');
-    logger.warn(`⚠️ Futures data chain exhausted for fetch24hTicker: ${detail}`);
-  }
-
-  state.missingTickerSymbols.add(cacheKey);
-  return null;
+  return callProviderChain('fetch24hTicker', async (provider) => providers[provider]?.fetch24hTicker?.(symbol), {
+    symbol,
+    binanceArgs: [symbol],
+  });
 }
 
 async function fetchFundingRate(symbol) {
   return callProviderChain('fetchFundingRate', async (provider) => providers[provider]?.fetchFundingRate?.(symbol), {
+    symbol,
     binanceArgs: [symbol],
   });
 }
 
 async function fetchOpenInterest(symbol) {
   return callProviderChain('fetchOpenInterest', async (provider) => providers[provider]?.fetchOpenInterest?.(symbol), {
+    symbol,
     binanceArgs: [symbol],
     objectFallback: null,
   });
@@ -899,6 +1278,7 @@ async function fetchOpenInterest(symbol) {
 
 async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
   return callProviderChain('fetchOpenInterestHistory', async (provider) => providers[provider]?.fetchOpenInterestHistory?.(symbol, period, limit), {
+    symbol,
     binanceArgs: [symbol, period, limit],
     emptyFallback: [],
     silentEmpty: true,
@@ -907,6 +1287,7 @@ async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
 
 async function fetchGlobalLongShortRatio(symbol, period = '1h', limit = 6) {
   return callProviderChain('fetchGlobalLongShortRatio', async (provider) => providers[provider]?.fetchGlobalLongShortRatio?.(symbol, period, limit), {
+    symbol,
     binanceArgs: [symbol, period, limit],
     emptyFallback: [],
     silentEmpty: true,
@@ -915,6 +1296,7 @@ async function fetchGlobalLongShortRatio(symbol, period = '1h', limit = 6) {
 
 async function fetchTopTraderLongShortRatio(symbol, period = '1h', limit = 6) {
   return callProviderChain('fetchTopTraderLongShortRatio', async (provider) => providers[provider]?.fetchTopTraderLongShortRatio?.(symbol, period, limit), {
+    symbol,
     binanceArgs: [symbol, period, limit],
     emptyFallback: [],
     silentEmpty: true,
@@ -923,6 +1305,7 @@ async function fetchTopTraderLongShortRatio(symbol, period = '1h', limit = 6) {
 
 async function fetchOrderBookDepth(symbol, limit = 20) {
   return callProviderChain('fetchOrderBookDepth', async (provider) => providers[provider]?.fetchOrderBookDepth?.(symbol, limit), {
+    symbol,
     binanceArgs: [symbol, limit],
     objectFallback: null,
     silentEmpty: true,
@@ -931,6 +1314,7 @@ async function fetchOrderBookDepth(symbol, limit = 20) {
 
 async function fetchLiquidationOrders(symbol, limit = 50) {
   return callProviderChain('fetchLiquidationOrders', async (provider) => providers[provider]?.fetchLiquidationOrders?.(symbol, limit), {
+    symbol,
     binanceArgs: [symbol, limit],
     emptyFallback: [],
     silentEmpty: true,

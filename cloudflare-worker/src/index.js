@@ -181,6 +181,8 @@ async function handleLog(env) {
   const errorSamples = Array.isArray(report.errors) ? report.errors.slice(0, 5) : [];
   const providerHealth = report.providerHealth || {};
   const providerEvents = Array.isArray(providerHealth.recentEvents) ? providerHealth.recentEvents.slice(-4) : [];
+  const preferredByMethod = providerHealth.preferredByMethod || {};
+  const methods = providerHealth.methods || {};
   const statusEmoji = report.status === 'ERROR' || report.status === 'GLOBAL_KILLSWITCH'
     ? '🚨'
     : report.errorCount > 0
@@ -235,6 +237,26 @@ async function handleLog(env) {
   if (providerHealth.blockedProviders?.length || providerEvents.length) {
     lines.push('');
     lines.push('**Provider Health**');
+    const methodNames = Object.keys(methods);
+    if (methodNames.length) {
+      const tickerHealth = methods.fetch24hTicker || methods.fetchOHLCV || methods.fetchExchangeSpecs || {};
+      const healthSummary = Object.entries(tickerHealth)
+        .slice(0, 4)
+        .map(([provider, stats]) => `${provider}:${stats.blocked ? 'blocked' : stats.lastOutcome || 'idle'}:${Math.round(stats.score || 0)}`)
+        .join(' | ');
+      if (healthSummary) {
+        lines.push(`• Health: \`${healthSummary}\``);
+      }
+    }
+    if (Object.keys(preferredByMethod).length) {
+      const preferredSummary = Object.entries(preferredByMethod)
+        .slice(0, 4)
+        .map(([method, provider]) => `${method}→${provider}`)
+        .join(' | ');
+      if (preferredSummary) {
+        lines.push(`• Preferred: \`${preferredSummary}\``);
+      }
+    }
     if (providerHealth.blockedProviders?.length) {
       lines.push(`• Blocked: \`${providerHealth.blockedProviders.join(', ')}\``);
     }

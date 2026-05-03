@@ -165,28 +165,8 @@ function markPublicBybitBlocked(err, path) {
   }
 }
 
-function shouldUseBinanceFallback() {
-  return publicBybitBlocked;
-}
-
 function shouldUseBybitPrimary() {
   return !publicBybitBlocked && !DISABLE_PUBLIC_BYBIT;
-}
-
-async function withPublicFallback(path, fetchBybit, fetchBinance) {
-  if (shouldUseBinanceFallback()) {
-    return fetchBinance();
-  }
-
-  try {
-    return await fetchBybit();
-  } catch (err) {
-    if (isBybitGeoBlockedError(err)) {
-      markPublicBybitBlocked(err, path);
-      return fetchBinance();
-    }
-    throw err;
-  }
 }
 
 function isTransientBybitUrlError(err) {
