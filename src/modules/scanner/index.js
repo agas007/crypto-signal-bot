@@ -508,18 +508,6 @@ async function runScanCycle() {
     }
   }
 
-  // ─── Auto Dashboard Update ───
-  if (process.env.SKIP_DASHBOARD === 'true') {
-    logger.info('📊 Dashboard auto-send skipped (SKIP_DASHBOARD=true).');
-  } else {
-    try {
-      const { generateAndSendDashboard } = require('../chart/dashboard');
-      await generateAndSendDashboard();
-    } catch (err) {
-      logger.error('Dashboard auto-update failed:', err.message);
-    }
-  }
-
   scanReport.status = sentCount > 0
     ? 'SIGNALS_SENT'
     : scanReport.watchlistCount > 0
