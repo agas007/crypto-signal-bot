@@ -28,7 +28,7 @@ const config = {
   },
 
   bybit: {
-    baseUrl:   process.env.BYBIT_BASE_URL   || 'https://api.bybit.com',
+    baseUrl:   process.env.BYBIT_BASE_URL   || 'https://api.bytick.com',
     apiKey:    process.env.BYBIT_API_KEY,
     apiSecret: process.env.BYBIT_API_SECRET,
   },

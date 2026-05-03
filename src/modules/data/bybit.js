@@ -16,7 +16,7 @@ const sleep = require('../../utils/sleep');
 const binanceData = require('./binance');
 const futuresRouter = require('./futures_router');
 
-const DEFAULT_BYBIT_BASE_URLS = ['https://api.bybit.id', 'https://api.bytick.com', 'https://api.bybit.com'];
+const DEFAULT_BYBIT_BASE_URLS = ['https://api.bytick.com', 'https://api.bybit.id', 'https://api.bybit.com'];
 const BASE_URLS = (() => {
   const rawList = process.env.BYBIT_BASE_URLS || process.env.BYBIT_BASE_URL || DEFAULT_BYBIT_BASE_URLS.join(',');
   return rawList
