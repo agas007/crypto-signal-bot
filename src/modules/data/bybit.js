@@ -16,13 +16,22 @@ const sleep = require('../../utils/sleep');
 const binanceData = require('./binance');
 const futuresRouter = require('./futures_router');
 
-const BASE_URL = process.env.BYBIT_BASE_URL || 'https://api.bybit.com';
+const DEFAULT_BYBIT_BASE_URLS = ['https://api.bybit.id', 'https://api.bytick.com', 'https://api.bybit.com'];
+const BASE_URLS = (() => {
+  const rawList = process.env.BYBIT_BASE_URLS || process.env.BYBIT_BASE_URL || DEFAULT_BYBIT_BASE_URLS.join(',');
+  return rawList
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((item) => item.replace(/\/+$/, ''));
+})();
 const API_KEY = process.env.BYBIT_API_KEY || config.bybit?.apiKey;
 const API_SECRET = process.env.BYBIT_API_SECRET || config.bybit?.apiSecret;
 const DISABLE_PUBLIC_BYBIT = process.env.BYBIT_DISABLE_PUBLIC === '1';
 
 let publicBybitBlocked = DISABLE_PUBLIC_BYBIT;
 let publicBybitBlockLogged = false;
+const loggedBybitErrors = new Set();
 
 // ─── Interval Mapping: Binance format → Bybit format ────────────────────────
 const INTERVAL_MAP = {
@@ -53,6 +62,89 @@ function toFuturesSymbol(symbol) {
   return SYMBOL_MAP[sym] || sym;
 }
 
+function normalizeBybitKlineRow(row) {
+  if (!Array.isArray(row)) return null;
+  return {
+    openTime: Number(row[0]),
+    open: parseFloat(row[1]),
+    high: parseFloat(row[2]),
+    low: parseFloat(row[3]),
+    close: parseFloat(row[4]),
+    volume: parseFloat(row[5]),
+    turnover: parseFloat(row[6]),
+  };
+}
+
+function normalizeBybitTicker(item, symbol) {
+  if (!item) return null;
+  return {
+    symbol: item.symbol || toFuturesSymbol(symbol),
+    priceChangePercent: parseFloat(item.price24hPcnt || item.priceChangePercent || 0),
+    volume: parseFloat(item.volume24h || item.volume || 0),
+    quoteVolume: parseFloat(item.turnover24h || item.quoteVolume || 0),
+    lastPrice: parseFloat(item.lastPrice || item.last || 0),
+    fundingRate: parseFloat(item.fundingRate || item.fundingRatePct || item.fundingRatePercentage || 0),
+    openInterest: parseFloat(item.openInterest || item.oi || 0),
+  };
+}
+
+async function fetchBybitPublicOHLCV(symbol, interval, limit = 100, options = {}) {
+  const intervalCode = toBybitInterval(interval);
+  const result = await bybitGet('/v5/market/kline', {
+    category: 'linear',
+    symbol: toFuturesSymbol(symbol),
+    interval: intervalCode,
+    limit,
+    ...(options.startTime ? { start: Math.floor(options.startTime / 1000) } : {}),
+    ...(options.endTime ? { end: Math.floor(options.endTime / 1000) } : {}),
+  });
+
+  const rows = Array.isArray(result?.list) ? result.list : [];
+  return rows
+    .map(normalizeBybitKlineRow)
+    .filter(Boolean)
+    .sort((a, b) => a.openTime - b.openTime);
+}
+
+async function fetchBybitPublicTopPairs(limit = config.scanner.maxPairs) {
+  const result = await bybitGet('/v5/market/tickers', {
+    category: 'linear',
+  });
+  const rows = Array.isArray(result?.list) ? result.list : [];
+  return rows
+    .filter((item) => item?.symbol && item.symbol.endsWith('USDT'))
+    .sort((a, b) => parseFloat(b.turnover24h || b.volume24h || 0) - parseFloat(a.turnover24h || a.volume24h || 0))
+    .slice(0, limit)
+    .map((item) => item.symbol);
+}
+
+async function fetchBybitPublicTicker(symbol) {
+  const result = await bybitGet('/v5/market/tickers', {
+    category: 'linear',
+    symbol: toFuturesSymbol(symbol),
+  });
+  const item = Array.isArray(result?.list) ? result.list[0] : null;
+  return normalizeBybitTicker(item, symbol);
+}
+
+async function fetchBybitPublicExchangeSpecs() {
+  const result = await bybitGet('/v5/market/instruments-info', {
+    category: 'linear',
+  });
+  const rows = Array.isArray(result?.list) ? result.list : [];
+  const specs = {};
+  for (const row of rows) {
+    if (!row?.symbol) continue;
+    specs[row.symbol] = {
+      symbol: row.symbol,
+      stepSize: parseFloat(row.lotSizeFilter?.qtyStep || row.lotSizeFilter?.minOrderQty || 0.001) || 0.001,
+      precision: Number.parseInt(row.priceFilter?.tickSize ? String(row.priceFilter.tickSize).split('.')[1]?.length || '3' : '3', 10) || 3,
+      minNotional: parseFloat(row.lotSizeFilter?.minNotionalValue || row.minNotional || 5.0) || 5.0,
+    };
+  }
+  return specs;
+}
+
 function isBybitGeoBlockedError(err) {
   const status = err?.response?.status;
   const payload = err?.response?.data;
@@ -77,6 +169,10 @@ function shouldUseBinanceFallback() {
   return publicBybitBlocked;
 }
 
+function shouldUseBybitPrimary() {
+  return !publicBybitBlocked && !DISABLE_PUBLIC_BYBIT;
+}
+
 async function withPublicFallback(path, fetchBybit, fetchBinance) {
   if (shouldUseBinanceFallback()) {
     return fetchBinance();
@@ -93,6 +189,61 @@ async function withPublicFallback(path, fetchBybit, fetchBinance) {
   }
 }
 
+function isTransientBybitUrlError(err) {
+  if (!err) return false;
+  if (isBybitGeoBlockedError(err)) return true;
+  const status = err?.response?.status;
+  return !status || status >= 500 || status === 403 || status === 451;
+}
+
+function logBybitOnce(kind, baseUrl, path, err) {
+  const key = `${kind}:${baseUrl}:${path}:${err?.response?.status || err?.code || err?.message || 'unknown'}`;
+  if (loggedBybitErrors.has(key)) return;
+  loggedBybitErrors.add(key);
+  if (loggedBybitErrors.size > 20) {
+    const first = loggedBybitErrors.values().next().value;
+    if (first) loggedBybitErrors.delete(first);
+  }
+
+  const status = err?.response?.status;
+  const payload = err?.response?.data;
+  const detail = payload ? JSON.stringify(payload) : err?.message;
+  logger.warn(`[Bybit] ${kind} failed on ${baseUrl}${path}${status ? ` (${status})` : ''}: ${detail}`);
+}
+
+async function requestBybitAcrossBases(kind, path, params = {}, signer = null) {
+  const errors = [];
+
+  for (const baseUrl of BASE_URLS) {
+    try {
+      const response = await axios.get(`${baseUrl}${path}`, {
+        params,
+        headers: signer ? signer() : undefined,
+        timeout: 15_000,
+      });
+      const data = response.data;
+      if (data.retCode !== 0) {
+        throw new Error(`Bybit API error ${data.retCode}: ${data.retMsg}`);
+      }
+      return data.result;
+    } catch (err) {
+      errors.push(err);
+      if (isTransientBybitUrlError(err)) {
+        if (isBybitGeoBlockedError(err)) {
+          markPublicBybitBlocked(err, path);
+        }
+        logBybitOnce(kind, baseUrl, path, err);
+        continue;
+      }
+      throw err;
+    }
+  }
+
+  const lastErr = errors[errors.length - 1];
+  if (lastErr) throw lastErr;
+  throw new Error(`Bybit request failed for ${path}`);
+}
+
 // ─── Request helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -100,15 +251,7 @@ async function withPublicFallback(path, fetchBybit, fetchBinance) {
  */
 async function bybitGet(path, params = {}) {
   try {
-    const response = await axios.get(`${BASE_URL}${path}`, {
-      params,
-      timeout: 15_000,
-    });
-    const data = response.data;
-    if (data.retCode !== 0) {
-      throw new Error(`Bybit API error ${data.retCode}: ${data.retMsg}`);
-    }
-    return data.result;
+    return await requestBybitAcrossBases('Public API', path, params);
   } catch (err) {
     if (isBybitGeoBlockedError(err)) {
       throw err;
@@ -141,21 +284,12 @@ async function bybitGetSigned(path, params = {}) {
   const sign = crypto.createHmac('sha256', API_SECRET).update(preSign).digest('hex');
 
   try {
-    const response = await axios.get(`${BASE_URL}${path}`, {
-      params,
-      headers: {
-        'X-BAPI-API-KEY': API_KEY,
-        'X-BAPI-SIGN': sign,
-        'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-RECV-WINDOW': recvWindow,
-      },
-      timeout: 15_000,
-    });
-    const data = response.data;
-    if (data.retCode !== 0) {
-      throw new Error(`Bybit API error ${data.retCode}: ${data.retMsg}`);
-    }
-    return data.result;
+    return await requestBybitAcrossBases('Private API', path, params, () => ({
+      'X-BAPI-API-KEY': API_KEY,
+      'X-BAPI-SIGN': sign,
+      'X-BAPI-TIMESTAMP': timestamp,
+      'X-BAPI-RECV-WINDOW': recvWindow,
+    }));
   } catch (err) {
     if (isBybitGeoBlockedError(err)) {
       throw err;
@@ -176,7 +310,15 @@ async function bybitGetSigned(path, params = {}) {
  * Bybit returns newest-first → reversed to oldest-first (matching Binance behavior).
  */
 async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
-  return futuresRouter.fetchOHLCV(symbol, interval, limit, options);
+  if (!shouldUseBybitPrimary()) {
+    return futuresRouter.fetchOHLCV(symbol, interval, limit, options);
+  }
+  try {
+    return await fetchBybitPublicOHLCV(symbol, interval, limit, options);
+  } catch (err) {
+    logger.warn(`⚠️ Bybit primary fetchOHLCV failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+    return futuresRouter.fetchOHLCV(symbol, interval, limit, options);
+  }
 }
 
 /**
@@ -197,20 +339,45 @@ async function fetchMultiTimeframe(symbol) {
  * Fetch top USDT perpetual pairs sorted by 24h turnover.
  */
 async function fetchTopPairs(limit = config.scanner.maxPairs) {
-  return futuresRouter.fetchTopPairs(limit);
+  if (!shouldUseBybitPrimary()) {
+    return futuresRouter.fetchTopPairs(limit);
+  }
+  try {
+    return await fetchBybitPublicTopPairs(limit);
+  } catch (err) {
+    logger.warn(`⚠️ Bybit primary fetchTopPairs failed: ${err.message}. Falling back to alt providers.`);
+    return futuresRouter.fetchTopPairs(limit);
+  }
 }
 
 /**
  * Fetch 24h ticker stats for a single symbol.
  */
 async function fetch24hTicker(symbol) {
-  return futuresRouter.fetch24hTicker(symbol);
+  if (!shouldUseBybitPrimary()) {
+    return futuresRouter.fetch24hTicker(symbol);
+  }
+  try {
+    return await fetchBybitPublicTicker(symbol);
+  } catch (err) {
+    logger.warn(`⚠️ Bybit primary fetch24hTicker failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+    return futuresRouter.fetch24hTicker(symbol);
+  }
 }
 
 /**
  * Fetch current funding rate for a linear perpetual symbol.
  */
 async function fetchFundingRate(symbol) {
+  if (!shouldUseBybitPrimary()) {
+    return futuresRouter.fetchFundingRate(symbol);
+  }
+  try {
+    const ticker = await fetchBybitPublicTicker(symbol);
+    if (ticker && Number.isFinite(ticker.fundingRate)) return ticker.fundingRate;
+  } catch (err) {
+    logger.warn(`⚠️ Bybit primary fetchFundingRate failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+  }
   return futuresRouter.fetchFundingRate(symbol);
 }
 
@@ -218,13 +385,53 @@ async function fetchFundingRate(symbol) {
  * Fetch current Open Interest.
  */
 async function fetchOpenInterest(symbol) {
-  return futuresRouter.fetchOpenInterest(symbol);
+  if (!shouldUseBybitPrimary()) {
+    return futuresRouter.fetchOpenInterest(symbol);
+  }
+  try {
+    const result = await bybitGet('/v5/market/open-interest', {
+      category: 'linear',
+      symbol: toFuturesSymbol(symbol),
+    });
+    const item = Array.isArray(result?.list) ? result.list[0] : result?.list?.[0] || result;
+    if (!item) return null;
+    return {
+      symbol: item.symbol || toFuturesSymbol(symbol),
+      openInterest: parseFloat(item.openInterest || item.oi || item.value || 0),
+    };
+  } catch (err) {
+    logger.warn(`⚠️ Bybit primary fetchOpenInterest failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+    return futuresRouter.fetchOpenInterest(symbol);
+  }
 }
 
 /**
  * Fetch historical Open Interest (oldest-first).
  */
 async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
+  if (!shouldUseBybitPrimary()) {
+    return futuresRouter.fetchOpenInterestHistory(symbol, period, limit);
+  }
+  try {
+    const result = await bybitGet('/v5/market/open-interest', {
+      category: 'linear',
+      symbol: toFuturesSymbol(symbol),
+      intervalTime: period,
+      limit,
+    });
+    const rows = Array.isArray(result?.list) ? result.list : [];
+    if (rows.length) {
+      return rows
+        .map((item) => ({
+          timestamp: parseInt(item.timestamp || item.ts || item.time || 0, 10),
+          sumOpenInterest: parseFloat(item.openInterest || item.oi || item.value || 0),
+          sumOpenInterestValue: parseFloat(item.openInterestValue || item.value || 0),
+        }))
+        .filter((row) => row.timestamp > 0);
+    }
+  } catch (err) {
+    logger.warn(`⚠️ Bybit primary fetchOpenInterestHistory failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+  }
   return futuresRouter.fetchOpenInterestHistory(symbol, period, limit);
 }
 
@@ -263,7 +470,15 @@ async function fetchLiquidationOrders(symbol, limit = 50) {
  * Fetch exchange/instrument specs (LOT_SIZE, precision) for all linear symbols.
  */
 async function fetchExchangeSpecs() {
-  return futuresRouter.fetchExchangeSpecs();
+  if (!shouldUseBybitPrimary()) {
+    return futuresRouter.fetchExchangeSpecs();
+  }
+  try {
+    return await fetchBybitPublicExchangeSpecs();
+  } catch (err) {
+    logger.warn(`⚠️ Bybit primary fetchExchangeSpecs failed: ${err.message}. Falling back to alt providers.`);
+    return futuresRouter.fetchExchangeSpecs();
+  }
 }
 
 /**
