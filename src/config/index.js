@@ -95,11 +95,16 @@ if (!hasDiscord && !hasTelegram) {
   required.push(['discord.signalWebhookUrl OR telegram.botToken+chatId', null]);
 }
 
-for (const [name, value] of required) {
-  if (!value) {
-    console.error(`❌ [Config] Missing required env var: ${name}`);
-    process.exit(1);
+const validationErrors = required
+  .filter(([, value]) => !value)
+  .map(([name]) => `Missing required env var: ${name}`);
+
+if (validationErrors.length > 0) {
+  for (const message of validationErrors) {
+    console.error(`❌ [Config] ${message}`);
   }
 }
+
+config.validationErrors = validationErrors;
 
 module.exports = config;

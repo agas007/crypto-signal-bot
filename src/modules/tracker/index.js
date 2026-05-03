@@ -15,6 +15,7 @@ const R = {
 };
 
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
+const IS_SERVERLESS = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME);
 const STORAGE_PATH = path.join(DATA_DIR, 'active_signals.json');
 const LESSONS_PATH = path.join(DATA_DIR, 'history_lessons.json');
 const HISTORY_PATH = path.join(DATA_DIR, 'trade_history.json');
@@ -121,6 +122,11 @@ class SignalTracker {
   }
 
   _save() {
+    if (IS_SERVERLESS) {
+      if (redisEnabled()) setState(R.signals, this.signals).catch(e => logger.error('[Redis] save signals:', e.message));
+      return;
+    }
+
     try {
       fs.writeFileSync(STORAGE_PATH, JSON.stringify(this.signals, null, 2));
     } catch (err) { logger.error('Failed to save signals:', err.message); }
@@ -128,6 +134,11 @@ class SignalTracker {
   }
 
   _saveLessons() {
+    if (IS_SERVERLESS) {
+      if (redisEnabled()) setState(R.lessons, this.lessons).catch(e => logger.error('[Redis] save lessons:', e.message));
+      return;
+    }
+
     try {
       // Keep only last 15 lessons to keep AI prompts focused
       this.lessons = this.lessons.slice(-15);
@@ -137,6 +148,11 @@ class SignalTracker {
   }
 
   _saveHistory() {
+    if (IS_SERVERLESS) {
+      if (redisEnabled()) setState(R.history, this.history.slice(-100)).catch(e => logger.error('[Redis] save history:', e.message));
+      return;
+    }
+
     try {
       // Keep performance history (e.g. last 100 trades for performance monitoring)
       const trimmed = this.history.slice(-100);
@@ -415,6 +431,11 @@ class SignalTracker {
    */
   saveWatchlist(list) {
     this.latestWatchlist = list || [];
+    if (IS_SERVERLESS) {
+      if (redisEnabled()) setState(R.watchlist, this.latestWatchlist).catch(e => logger.error('[Redis] save watchlist:', e.message));
+      return;
+    }
+
     try {
       fs.writeFileSync(WATCHLIST_PATH, JSON.stringify(this.latestWatchlist, null, 2));
     } catch (err) {
@@ -428,6 +449,10 @@ class SignalTracker {
 
   saveBinanceSnapshot(snapshot) {
     this.latestBinanceSnapshot = snapshot || null;
+    if (IS_SERVERLESS) {
+      return;
+    }
+
     try {
       fs.writeFileSync(BINANCE_SNAPSHOT_PATH, JSON.stringify(this.latestBinanceSnapshot, null, 2));
     } catch (err) {
@@ -448,6 +473,11 @@ class SignalTracker {
       ...(this.dashboardState || { lastAutoDashboardSentAt: 0 }),
       ...nextState,
     };
+    if (IS_SERVERLESS) {
+      if (redisEnabled()) setState(R.dashboard, this.dashboardState).catch(e => logger.error('[Redis] save dashboard:', e.message));
+      return;
+    }
+
     try {
       fs.writeFileSync(DASHBOARD_STATE_PATH, JSON.stringify(this.dashboardState, null, 2));
     } catch (err) {
@@ -458,6 +488,11 @@ class SignalTracker {
 
   saveScanReport(report) {
     this.latestScanReport = report || null;
+    if (IS_SERVERLESS) {
+      if (redisEnabled()) setState(R.scanReport, this.latestScanReport).catch(e => logger.error('[Redis] save scan report:', e.message));
+      return;
+    }
+
     try {
       fs.writeFileSync(SCAN_REPORT_PATH, JSON.stringify(this.latestScanReport, null, 2));
     } catch (err) {

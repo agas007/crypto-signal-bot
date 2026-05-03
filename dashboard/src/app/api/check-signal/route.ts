@@ -18,17 +18,36 @@ function readSecret(req: Request) {
   return url.searchParams.get('secret')?.trim() || '';
 }
 
+function getMissingRuntimeEnv() {
+  const missing = [];
+
+  if (!process.env.OPENROUTER_API_KEY) missing.push('OPENROUTER_API_KEY');
+  if (!process.env.DISCORD_WEBHOOK_URL && !process.env.DISCORD_SIGNAL_WEBHOOK_URL) {
+    missing.push('DISCORD_WEBHOOK_URL');
+  }
+  if (!process.env.UPSTASH_REDIS_REST_URL) missing.push('UPSTASH_REDIS_REST_URL');
+  if (!process.env.UPSTASH_REDIS_REST_TOKEN) missing.push('UPSTASH_REDIS_REST_TOKEN');
+  if (!process.env.CRON_SECRET) missing.push('CRON_SECRET');
+
+  return missing;
+}
+
 export async function GET(req: Request) {
   const headers = { 'Cache-Control': 'no-store, max-age=0' };
 
-  const expectedSecret = process.env.CRON_SECRET;
-  if (!expectedSecret) {
+  const missingEnv = getMissingRuntimeEnv();
+  if (missingEnv.length > 0) {
     return Response.json(
-      { ok: false, error: 'CRON_SECRET is not configured' },
-      { status: 500, headers }
+      {
+        ok: false,
+        error: 'Missing required environment variables',
+        missingEnv,
+      },
+      { status: 503, headers }
     );
   }
 
+  const expectedSecret = process.env.CRON_SECRET;
   const providedSecret = readSecret(req);
   if (!providedSecret || providedSecret !== expectedSecret) {
     return Response.json(
