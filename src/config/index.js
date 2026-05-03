@@ -1,8 +1,3 @@
-const path = require('path');
-const envPath = path.resolve(__dirname, '../../.env');
-require('dotenv').config({ path: envPath });
-
-
 const config = {
   binance: {
     baseUrl: process.env.BINANCE_BASE_URL || 'https://api.binance.com',

@@ -1,8 +1,8 @@
-const axios = require('axios');
 const crypto = require('crypto');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
+const http = require('../../utils/http_client');
 
  const FALLBACK_ENDPOINTS = [
   'https://data-api.binance.vision',
@@ -80,7 +80,7 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
 
   // Use simple request for futures if it's the target, or fallback chain for public spot
   try {
-    const response = await axios.get(`${actualBaseUrl}${path}`, {
+    const response = await http.get(`${actualBaseUrl}${path}`, {
       params: queryParams,
       headers,
       timeout: 15_000, // Slightly longer timeout for production stability
@@ -126,7 +126,7 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
         for (const baseUrl of fUrls) {
             if (baseUrl === actualBaseUrl) continue;
             try {
-                const response = await axios.get(`${baseUrl}${path}`, {
+                const response = await http.get(`${baseUrl}${path}`, {
                     params: queryParams,
                     headers,
                     timeout: 15_000,
@@ -157,7 +157,7 @@ async function getWithFallback(path, params = {}, isSigned = false, isFutures = 
     for (const baseUrl of uniqueUrls) {
       if (baseUrl === actualBaseUrl) continue;
       try {
-        const response = await axios.get(`${baseUrl}${path}`, {
+        const response = await http.get(`${baseUrl}${path}`, {
           params: queryParams,
           headers,
           timeout: 10_000,

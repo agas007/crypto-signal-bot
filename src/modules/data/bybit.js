@@ -8,11 +8,11 @@
  *   BYBIT_API_SECRET - required only for private endpoints
  */
 
-const axios = require('axios');
 const crypto = require('crypto');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
+const http = require('../../utils/http_client');
 const binanceData = require('./binance');
 const futuresRouter = require('./futures_router');
 
@@ -205,7 +205,7 @@ async function requestBybitAcrossBases(kind, path, params = {}, signer = null) {
 
   for (const baseUrl of BASE_URLS) {
     try {
-      const response = await axios.get(`${baseUrl}${path}`, {
+      const response = await http.get(`${baseUrl}${path}`, {
         params,
         headers: signer ? signer() : undefined,
         timeout: 15_000,

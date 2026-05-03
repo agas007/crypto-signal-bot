@@ -10,7 +10,6 @@ const { applyFilters } = require('../filter');
 const { evaluateSignal, calculateRiskReward } = require('../strategy');
 const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../../utils/discord');
-const { generateChartImage } = require('../chart');
 const tracker = require('../tracker');
 const { claimSignalDedupe, getSignalCandleTime, releaseSignalDedupe } = require('../../utils/signal_dedupe');
 const { logAudit, initAudit } = require('../../utils/audit');
@@ -456,16 +455,6 @@ async function runScanCycle() {
       }
       tracker.track(refined);
       sentCount++;
-
-      // ─── 2. Queue Chart Generation (Sequential to save RAM) ───
-      try {
-          const chartPath = await generateChartImage(candidate.symbol, candidate.candles, refined);
-          if (chartPath) {
-              await sendSignal({ ...refined, isChartUpdate: true }, chartPath);
-          }
-      } catch (e) {
-          logger.error(`Chart delivery failed for ${candidate.symbol}:`, e.message);
-      }
 
     } catch (err) {
       logger.error(`AI validation failed for ${candidate.symbol}:`, err.message);

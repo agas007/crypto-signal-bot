@@ -50,68 +50,57 @@ function getUpstashClient() {
   if (upstashClient) return upstashClient;
   if (!hasUpstashEnv()) return null;
 
-  try {
-    // Prefer the official Upstash client when available.
-    const { Redis } = require('@upstash/redis');
-    upstashClient = new Redis({
-      url: REDIS_URL,
-      token: REDIS_TOKEN,
-    });
-    return upstashClient;
-  } catch (err) {
-    logger.warn(`[Dedupe] @upstash/redis unavailable, using REST fallback: ${err.message}`);
-    upstashClient = {
-      async set(key, value, opts = {}) {
-        const args = ['SET', key, value];
-        if (opts.nx) args.push('NX');
-        if (opts.ex) args.push('EX', String(opts.ex));
+  upstashClient = {
+    async set(key, value, opts = {}) {
+      const args = ['SET', key, value];
+      if (opts.nx) args.push('NX');
+      if (opts.ex) args.push('EX', String(opts.ex));
 
-        const res = await fetch(REDIS_URL, {
-          method: 'POST',
-          cache: 'no-store',
-          headers: {
-            Authorization: `Bearer ${REDIS_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(args),
-        });
+      const res = await fetch(REDIS_URL, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          Authorization: `Bearer ${REDIS_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(args),
+      });
 
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`Upstash REST ${res.status}: ${text}`);
-        }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Upstash REST ${res.status}: ${text}`);
+      }
 
-        const data = await res.json();
-        if (data?.error) {
-          throw new Error(`Upstash error: ${data.error}`);
-        }
-        return data?.result ?? null;
-      },
-      async del(key) {
-        const res = await fetch(REDIS_URL, {
-          method: 'POST',
-          cache: 'no-store',
-          headers: {
-            Authorization: `Bearer ${REDIS_TOKEN}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(['DEL', key]),
-        });
+      const data = await res.json();
+      if (data?.error) {
+        throw new Error(`Upstash error: ${data.error}`);
+      }
+      return data?.result ?? null;
+    },
+    async del(key) {
+      const res = await fetch(REDIS_URL, {
+        method: 'POST',
+        cache: 'no-store',
+        headers: {
+          Authorization: `Bearer ${REDIS_TOKEN}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(['DEL', key]),
+      });
 
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`Upstash REST ${res.status}: ${text}`);
-        }
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`Upstash REST ${res.status}: ${text}`);
+      }
 
-        const data = await res.json();
-        if (data?.error) {
-          throw new Error(`Upstash error: ${data.error}`);
-        }
-        return data?.result ?? 0;
-      },
-    };
-    return upstashClient;
-  }
+      const data = await res.json();
+      if (data?.error) {
+        throw new Error(`Upstash error: ${data.error}`);
+      }
+      return data?.result ?? 0;
+    },
+  };
+  return upstashClient;
 }
 
 async function claimSignalDedupe(signal, options = {}) {

@@ -1,9 +1,9 @@
-const axios = require('axios');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const tracker = require('../tracker');
+const http = require('../../utils/http_client');
 
-const client = axios.create({
+const client = http.create({
   baseURL: config.openRouter.baseUrl,
   timeout: 60_000,
   headers: {

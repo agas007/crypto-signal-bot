@@ -1,7 +1,7 @@
-const axios = require('axios');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const binanceData = require('./binance');
+const http = require('../../utils/http_client');
 
 const DEFAULT_PROVIDER_ORDER = ['bitget', 'okx', 'kucoin'];
 const DEFAULT_TIMEOUT = 15_000;
@@ -418,7 +418,7 @@ async function httpGet(provider, path, params = {}) {
   const baseUrl = httpBaseUrl(provider);
   if (!baseUrl) throw new Error(`Provider ${provider} has no base URL`);
 
-  const response = await axios.get(`${baseUrl}${path}`, {
+  const response = await http.get(`${baseUrl}${path}`, {
     params,
     timeout: DEFAULT_TIMEOUT,
   });
@@ -571,7 +571,7 @@ async function hyperliquidRequest(body) {
   const baseUrl = httpBaseUrl('hyperliquid');
   if (!baseUrl) throw new Error('Provider hyperliquid has no base URL');
 
-  const response = await axios.post(`${baseUrl}/info`, body, {
+  const response = await http.post(`${baseUrl}/info`, body, {
     headers: { 'Content-Type': 'application/json' },
     timeout: DEFAULT_TIMEOUT,
   });
