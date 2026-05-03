@@ -492,9 +492,25 @@ async function fetchSpotExchangeSymbols() {
 
 /**
  * Fetch USDT balance from Bybit Unified account.
- * Returns 0 if no API key configured — scanner will use ACCOUNT_BALANCE env var.
+ * Preference order:
+ *   1) Binance Futures balance when Binance API creds are available
+ *   2) Bybit Unified balance
+ *   3) 0 so scanner can fall back to ACCOUNT_BALANCE env var
  */
 async function fetchFuturesBalance() {
+  if (process.env.BINANCE_API_KEY && process.env.BINANCE_API_SECRET) {
+    try {
+      const binanceBalance = await binanceData.fetchFuturesBalance();
+      if (Number.isFinite(binanceBalance) && binanceBalance > 0) {
+        logger.info(`💰 Binance Futures Balance: $${binanceBalance.toFixed(2)} USDT`);
+        return binanceBalance;
+      }
+      logger.warn('⚠️ Binance balance returned 0, trying Bybit fallback...');
+    } catch (err) {
+      logger.warn(`⚠️ Binance balance fetch failed, trying Bybit fallback: ${err.message}`);
+    }
+  }
+
   if (!API_KEY || !API_SECRET) {
     logger.warn('⚠️ No Bybit API key — using ACCOUNT_BALANCE env var for position sizing.');
     return 0;
@@ -506,6 +522,9 @@ async function fetchFuturesBalance() {
   try {
     const result = await bybitGetSigned('/v5/account/wallet-balance', { accountType: 'UNIFIED' });
     const usdtCoin = result?.list?.[0]?.coin?.find(c => c.coin === 'USDT');
+    if (usdtCoin) {
+      logger.info(`💰 Bybit Unified Balance: $${parseFloat(usdtCoin.walletBalance).toFixed(2)} USDT`);
+    }
     return usdtCoin ? parseFloat(usdtCoin.walletBalance) : 0;
   } catch (err) {
     if (isBybitGeoBlockedError(err)) {
