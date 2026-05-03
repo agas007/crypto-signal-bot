@@ -1,6 +1,6 @@
 # Crypto Signal Bot
 
-Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama tetap dipertahankan. Repo ini sekarang punya jalur serverless untuk satu kali scan per request, cocok dipanggil cron eksternal seperti `cron-job.org`.
+Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama tetap dipertahankan. Repo ini sekarang punya jalur serverless untuk satu kali scan per request, cocok dipanggil cron eksternal seperti `cron-job.org`, plus **Discord slash commands** serverless untuk kontrol dan status.
 
 ## Deteksi Tech Stack
 
@@ -11,6 +11,7 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 - Entry point legacy: `server.js`
 - Entry point CLI one-shot: `src/run_once.js`
 - Entry point serverless: `dashboard/src/app/api/check-signal/route.ts`
+- Discord interaction endpoint: `dashboard/src/app/api/discord/route.ts`
 - Scheduler lama GitHub Actions: `.github/workflows/cron.yml` sudah dihapus
 - Strategy: `src/modules/strategy/index.js`
 - Signal generator / orchestrator: `src/modules/scanner/index.js`
@@ -30,6 +31,7 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 - Endpoint menjalankan scan **sekali saja** lalu selesai dalam satu HTTP request.
 - Redis Upstash dipakai untuk dedupe signal baru.
 - Discord alert dikirim via **Discord Webhook**.
+- Discord slash commands jalan via `POST /api/discord`.
 
 ### Alur
 
@@ -44,7 +46,9 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 ## File Penting
 
 - `dashboard/src/app/api/check-signal/route.ts` - serverless endpoint
+- `dashboard/src/app/api/discord/route.ts` - Discord interaction endpoint
 - `src/services/run_signal_check.js` - wrapper one-shot reusable
+- `src/services/discord_commands.js` - shared slash command definitions/handlers
 - `src/modules/scanner/index.js` - core scan logic
 - `src/modules/strategy/index.js` - strategy existing
 - `src/utils/discord.js` - Discord webhook formatter/sender
@@ -61,6 +65,10 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 | `UPSTASH_REDIS_REST_URL` | URL REST Upstash Redis |
 | `UPSTASH_REDIS_REST_TOKEN` | Token Upstash Redis |
 | `OPENROUTER_API_KEY` | AI validator / refinement |
+| `DISCORD_PUBLIC_KEY` | Public key Discord app untuk verifikasi interaction |
+| `DISCORD_APPLICATION_ID` | Application ID Discord untuk register command |
+| `DISCORD_BOT_TOKEN` | Bot token untuk register slash command |
+| `DISCORD_GUILD_ID` | Opsional, buat register command cepat ke guild test |
 
 ### Existing env yang tetap dipakai
 
@@ -84,6 +92,24 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 |---|---|
 | `ENABLE_LEGACY_SCANNER=1` | Mengaktifkan runtime long-running lokal lama |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Hanya untuk mode legacy lama |
+
+## Discord Slash Commands
+
+Command yang tersedia:
+
+- `/status` - bot health, scan status, dan runtime info
+- `/scan-now` - trigger scan sekali, hasilnya dikirim ke channel lewat webhook
+- `/active` - list active trades
+- `/watchlist` - latest watchlist
+- `/performance` - cached performance summary
+- `/last-signal` - signal terakhir
+- `/health` - environment/service health
+- `/help` - daftar command
+
+Catatan:
+
+- `/scan-now` itu fire-and-forget. Command ini memicu scan baru, tapi hasil final tetap dikirim lewat alert webhook, bukan balasan command yang lama.
+- `/performance` pakai cached snapshot yang sudah tersimpan di Redis, jadi aman buat serverless dan cepat.
 
 ## Install
 
@@ -111,15 +137,24 @@ node src/run_once.js
 
 Repo ini paling cocok dipisah per target:
 
-1. **Dashboard Next.js**: deploy folder `dashboard/` sebagai project Vercel terpisah dan expose `app/api/check-signal/route.ts`
+1. **Dashboard Next.js**: deploy folder `dashboard/` sebagai project Vercel terpisah dan expose `app/api/check-signal/route.ts` serta `app/api/discord/route.ts`
 2. **Root Node app**: tetap dipakai hanya untuk legacy/local runtime kalau memang dibutuhkan
 
 Langkah endpoint:
 
 1. Import repo ke Vercel
 2. Set env vars di atas
-3. Pastikan `CRON_SECRET`, Redis, OpenRouter, dan Discord webhook terisi
+3. Pastikan `CRON_SECRET`, Redis, OpenRouter, Discord webhook, `DISCORD_PUBLIC_KEY`, dan `DISCORD_APPLICATION_ID` terisi
 4. Deploy
+5. Di Discord Developer Portal, set **Interactions Endpoint URL** ke:
+   - `https://<dashboard-vercel-domain>/api/discord`
+6. Register slash commands:
+   - pakai guild dulu untuk testing cepat:
+     ```bash
+     cd dashboard
+     DISCORD_APPLICATION_ID=... DISCORD_BOT_TOKEN=... DISCORD_GUILD_ID=... npm run discord:register
+     ```
+   - kalau sudah final, hapus `DISCORD_GUILD_ID` supaya register global
 
 Kalau hanya butuh endpoint cron, deploy `dashboard/` sudah cukup.
 
@@ -129,7 +164,7 @@ Kalau hanya butuh endpoint cron, deploy `dashboard/` sudah cukup.
 2. URL:
    - `https://<dashboard-vercel-domain>/api/check-signal`
 3. Method:
-   - `GET` atau `POST`
+   - `GET`
 4. Header:
    - `Authorization: Bearer <CRON_SECRET>`
 5. Schedule:
@@ -173,6 +208,7 @@ curl "https://<domain>/api/check-signal?secret=$CRON_SECRET"
 2. Request dengan secret valid dan tanpa signal harus tetap `200` dengan JSON valid
 3. Kalau signal baru muncul, Discord harus menerima 1 pesan
 4. Request ulang untuk candle yang sama harus kena dedupe Redis
+5. Untuk test slash command, kirim `/status` atau `/help` di Discord setelah command registration berhasil
 
 ## Catatan Arsitektur
 
@@ -182,3 +218,5 @@ curl "https://<domain>/api/check-signal?secret=$CRON_SECRET"
 - TTL dedupe:
   - 7 hari
 - Discord sekarang menggunakan webhook, bukan bot process yang harus online 24/7.
+- Discord slash commands jalan lewat endpoint serverless, bukan Discord Gateway.
+- Discord channel juga bisa menerima scan summary penting, daily summary 1x sehari, health ping saat scan kosong, dan alert fallback provider bila data source lagi bermasalah.

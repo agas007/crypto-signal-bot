@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "discord:register": "node scripts/register-discord-commands.js"
   },
   "dependencies": {
     "next": "^16.2.4",

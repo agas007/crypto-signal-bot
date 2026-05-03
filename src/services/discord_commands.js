@@ -1,0 +1,355 @@
+const crypto = require('crypto');
+const tracker = require('../modules/tracker');
+const binancePerformance = require('../modules/tracker/binance_performance');
+const { runSignalCheck } = require('./run_signal_check');
+const { formatJakartaTime, getNextJakartaReset } = require('../utils/time');
+const { isEnabled: isRedisEnabled } = require('../utils/redis');
+
+const COMMANDS = [
+  {
+    name: 'status',
+    description: 'Show bot health, scan status, and runtime info',
+    type: 1,
+  },
+  {
+    name: 'scan-now',
+    description: 'Trigger a fresh one-shot scan',
+    type: 1,
+  },
+  {
+    name: 'active',
+    description: 'List currently active trades',
+    type: 1,
+  },
+  {
+    name: 'watchlist',
+    description: 'Show the latest watchlist',
+    type: 1,
+  },
+  {
+    name: 'performance',
+    description: 'Show cached performance summary',
+    type: 1,
+    options: [
+      {
+        name: 'period',
+        description: 'Time range for cached summary',
+        type: 3,
+        required: false,
+        choices: [
+          { name: 'daily', value: 'daily' },
+          { name: 'weekly', value: 'weekly' },
+          { name: 'monthly', value: 'monthly' },
+          { name: 'all', value: 'all' },
+        ],
+      },
+      {
+        name: 'market',
+        description: 'Market scope',
+        type: 3,
+        required: false,
+        choices: [
+          { name: 'spot', value: 'spot' },
+          { name: 'futures', value: 'futures' },
+          { name: 'combined', value: 'combined' },
+        ],
+      },
+    ],
+  },
+  {
+    name: 'last-signal',
+    description: 'Show the most recent signal or trade',
+    type: 1,
+  },
+  {
+    name: 'health',
+    description: 'Show environment and service health',
+    type: 1,
+  },
+  {
+    name: 'help',
+    description: 'Show available commands',
+    type: 1,
+  },
+];
+
+function truncate(text, max = 1800) {
+  const value = String(text || '');
+  if (value.length <= max) return value;
+  return `${value.slice(0, max - 3)}...`;
+}
+
+function minutesAgoLabel(timestamp) {
+  if (!timestamp) return 'unknown';
+  const diff = Date.now() - Number(timestamp);
+  if (!Number.isFinite(diff) || diff < 0) return 'unknown';
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return '<1m';
+  if (mins < 60) return `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem > 0 ? `${hrs}h ${rem}m` : `${hrs}h`;
+}
+
+function formatSignalLine(signal) {
+  if (!signal) return 'Tidak ada signal terakhir.';
+  const side = signal.bias || signal.side || 'UNKNOWN';
+  const score = signal.score != null ? `score ${signal.score}` : 'no score';
+  const entry = signal.entry != null ? `entry ${signal.entry}` : 'entry n/a';
+  const tp = signal.take_profit != null ? `TP ${signal.take_profit}` : 'TP n/a';
+  const sl = signal.stop_loss != null ? `SL ${signal.stop_loss}` : 'SL n/a';
+  const at = signal.signalAt || signal.entryAt || signal.timestamp || signal.closedAt || null;
+  return `• \`${signal.symbol || 'PAIR'}\` (${side}) | ${score}\n  ${entry} | ${tp} | ${sl}\n  updated ${minutesAgoLabel(at)} ago`;
+}
+
+async function hydrateTracker() {
+  await tracker.syncFromRedis().catch(() => {});
+  return tracker;
+}
+
+function buildStatusResponse() {
+  const scanReport = tracker.getScanReport ? tracker.getScanReport() : null;
+  const stats = tracker.getStats ? tracker.getStats() : { global: { total: 0, active: 0, winRate: '0.00%' } };
+  const dashboardState = tracker.getDashboardState ? tracker.getDashboardState() : { lastAutoDashboardSentAt: 0 };
+  const lastScanAt = scanReport?.finishedAt || scanReport?.startedAt || null;
+  const scanAge = lastScanAt ? minutesAgoLabel(lastScanAt) : 'unknown';
+  const resetTime = getNextJakartaReset();
+
+  const lines = [
+    '🟢 **Bot Status**',
+    '',
+    `• Active Trades: ${stats.global?.active || 0}`,
+    `• SL Hits Today: ${tracker.getGlobalSLCountToday ? `${tracker.getGlobalSLCountToday()}/3` : 'n/a'}`,
+    `• Total History: ${stats.global?.total || 0} trades`,
+    `• Scan: cron-job.org → Vercel /api/check-signal`,
+    `• Alert: Discord Webhook`,
+    `• Redis: ${isRedisEnabled() ? 'enabled' : 'disabled'}`,
+    `• Last Scan: ${scanReport?.status || 'unknown'} (${scanAge} ago)`,
+    `• Reset: ${formatJakartaTime(new Date(resetTime), 'short')} WIB`,
+    `• Dashboard Auto: ${dashboardState.lastAutoDashboardSentAt ? `${minutesAgoLabel(dashboardState.lastAutoDashboardSentAt)} ago` : 'never'}`,
+  ];
+
+  if (scanReport?.errors?.length) {
+    lines.push('', `• Last Errors: ${truncate(scanReport.errors.slice(0, 2).join(' | '), 220)}`);
+  }
+
+  return lines.join('\n');
+}
+
+function buildActiveResponse() {
+  const actives = (tracker.getAllActive ? tracker.getAllActive() : [])
+    .slice()
+    .sort((a, b) => (b.entryAt || b.signalAt || 0) - (a.entryAt || a.signalAt || 0));
+
+  if (actives.length === 0) {
+    return 'Tidak ada active trades sekarang.';
+  }
+
+  const lines = ['🟢 **Active Trades**', ''];
+  for (const trade of actives.slice(0, 10)) {
+    const age = minutesAgoLabel(trade.entryAt || trade.signalAt || trade.timestamp);
+    lines.push(
+      `• \`${trade.symbol}\` (${trade.bias || 'n/a'}) | entry ${trade.entry ?? 'n/a'} | TP ${trade.take_profit ?? 'n/a'} | SL ${trade.stop_loss ?? 'n/a'} | age ${age}`
+    );
+  }
+  return lines.join('\n');
+}
+
+function buildWatchlistResponse() {
+  const items = tracker.getWatchlist ? tracker.getWatchlist() : [];
+  if (!items || items.length === 0) {
+    return 'Watchlist kosong.';
+  }
+
+  const lines = ['📋 **Watchlist**', ''];
+  for (const item of items.slice(0, 10)) {
+    lines.push(`• \`${item.symbol || 'PAIR'}\` | score ${item.score ?? 'n/a'} | ${item.bias || item.quality || 'n/a'}${item.reason ? ` | ${truncate(item.reason, 90)}` : ''}`);
+  }
+  return lines.join('\n');
+}
+
+function buildPerformanceResponse(period = 'all', market = 'combined') {
+  const snapshot = tracker.getBinanceSnapshot ? tracker.getBinanceSnapshot() : null;
+  const history = tracker.history || [];
+  const completed = history.filter((t) => t.status === 'COMPLETED' || t.close_reason);
+  const wins = completed.filter((t) => t.close_reason === 'TP_HIT').length;
+  const losses = completed.filter((t) => t.close_reason === 'SL_HIT').length;
+  const total = completed.length;
+  const winRate = total > 0 ? ((wins / total) * 100).toFixed(2) : '0.00';
+
+  const lines = [
+    `📊 **Performance** (${period}/${market})`,
+    '',
+    `• Trades: ${snapshot?.tradesCount ?? total}`,
+    `• Win Rate: ${snapshot?.winRate ?? `${winRate}%`}`,
+    `• Wins: ${snapshot?.wins ?? wins}`,
+    `• Losses: ${snapshot?.losses ?? losses}`,
+  ];
+
+  if (snapshot?.generatedAt) {
+    lines.push(`• Cached Snapshot: ${snapshot.period || 'n/a'}/${snapshot.market || 'n/a'} @ ${formatJakartaTime(new Date(snapshot.generatedAt), 'short')} WIB`);
+  } else {
+    lines.push('• Cached Snapshot: belum ada');
+  }
+
+  if (snapshot?.latestTrade) {
+    const t = snapshot.latestTrade;
+    lines.push('', 'Latest trade:');
+    lines.push(
+      `• \`${t.symbol || 'PAIR'}\` (${t.market || 'n/a'}) | ${t.close_reason || 'n/a'} | PnL ${t.pnl || 'n/a'}`
+    );
+  } else if (completed[0]) {
+    const t = completed[0];
+    lines.push('', 'Latest completed trade:');
+    lines.push(
+      `• \`${t.symbol || 'PAIR'}\` (${t.bias || 'n/a'}) | ${t.close_reason || 'n/a'} | exit ${t.exit_price || 'n/a'}`
+    );
+  }
+
+  const ledger = snapshot?.tradeLog?.slice(0, 5) || [];
+  if (ledger.length > 0) {
+    lines.push('', 'Recent ledger:');
+    for (const t of ledger) {
+      lines.push(`• \`${t.symbol || 'PAIR'}\` (${t.market || 'n/a'}) | ${t.close_reason || 'n/a'} | ${t.pnl || 'n/a'} USDT`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function buildLastSignalResponse() {
+  const actives = tracker.getAllActive ? tracker.getAllActive() : [];
+  const latestActive = actives.slice().sort((a, b) => (b.entryAt || b.signalAt || 0) - (a.entryAt || a.signalAt || 0))[0];
+  const latestHistory = tracker.history?.[0] || null;
+  const chosen = latestActive || latestHistory;
+
+  const lines = ['🚨 **Last Signal**', ''];
+  lines.push(formatSignalLine(chosen));
+  return lines.join('\n');
+}
+
+function buildHealthResponse() {
+  const scanReport = tracker.getScanReport ? tracker.getScanReport() : null;
+  const parts = [
+    '🩺 **Health**',
+    '',
+    `• Runtime: ${process.env.VERCEL ? 'Vercel' : 'local'}`,
+    `• Region: ${process.env.VERCEL_REGION || process.env.AWS_REGION || 'unknown'}`,
+    `• Discord Webhook: ${(process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL) ? 'set' : 'missing'}`,
+    `• Discord Public Key: ${process.env.DISCORD_PUBLIC_KEY ? 'set' : 'missing'}`,
+    `• Cron Secret: ${process.env.CRON_SECRET ? 'set' : 'missing'}`,
+    `• Redis: ${isRedisEnabled() ? 'enabled' : 'disabled'}`,
+    `• Scan Report: ${scanReport?.status || 'none'}`,
+    `• Last Scan Duration: ${scanReport?.durationMs ? `${Math.round(scanReport.durationMs / 1000)}s` : 'n/a'}`,
+    `• Active Signals: ${(tracker.getAllActive ? tracker.getAllActive().length : 0)}`,
+  ];
+
+  return parts.join('\n');
+}
+
+function buildHelpResponse() {
+  const lines = [
+    '🤖 **Discord Commands**',
+    '',
+    '• `/status` - bot health dan status scan',
+    '• `/scan-now` - trigger scan sekali',
+    '• `/active` - list active trades',
+    '• `/watchlist` - latest watchlist',
+    '• `/performance` - cached performance summary',
+    '• `/last-signal` - signal terakhir',
+    '• `/health` - environment/service health',
+    '• `/help` - list command',
+    '',
+    'Scan hasilnya akan dikirim lewat Discord webhook yang sama.',
+  ];
+
+  return lines.join('\n');
+}
+
+function buildInteractionResponse(content, options = {}) {
+  return {
+    type: 4,
+    data: {
+      content: truncate(content, options.maxChars || 1800),
+      flags: options.ephemeral ? 64 : 0,
+      allowed_mentions: { parse: [] },
+    },
+  };
+}
+
+async function handleInteraction(interaction, context = {}) {
+  const commandName = String(interaction?.data?.name || '').toLowerCase();
+  const options = Array.isArray(interaction?.data?.options) ? interaction.data.options : [];
+  const getOption = (name) => options.find((option) => option.name === name)?.value;
+
+  if (commandName === 'scan-now') {
+    void runSignalCheck().catch((err) => {
+      const logger = context.logger || console;
+      logger.error?.(`[discord/scan-now] runSignalCheck failed: ${err.message}`);
+    });
+
+    return buildInteractionResponse(
+      '⏳ Scan dimulai. Hasil alert akan muncul di channel Discord lewat webhook biasa.',
+      { ephemeral: true }
+    );
+  }
+
+  if (commandName === 'performance') {
+    return buildInteractionResponse(
+      buildPerformanceResponse(getOption('period') || 'all', getOption('market') || 'combined'),
+      { ephemeral: true, maxChars: 1900 }
+    );
+  }
+
+  if (commandName === 'status') return buildInteractionResponse(buildStatusResponse(), { ephemeral: true });
+  if (commandName === 'active') return buildInteractionResponse(buildActiveResponse(), { ephemeral: true });
+  if (commandName === 'watchlist') return buildInteractionResponse(buildWatchlistResponse(), { ephemeral: true });
+  if (commandName === 'last-signal') return buildInteractionResponse(buildLastSignalResponse(), { ephemeral: true });
+  if (commandName === 'health') return buildInteractionResponse(buildHealthResponse(), { ephemeral: true });
+  if (commandName === 'help') return buildInteractionResponse(buildHelpResponse(), { ephemeral: true });
+
+  return buildInteractionResponse(`Unknown command: ${commandName || '(empty)'}`, { ephemeral: true });
+}
+
+function verifyDiscordRequest({ signature, timestamp, body, publicKeyHex }) {
+  if (!signature || !timestamp || !publicKeyHex) return false;
+
+  try {
+    const publicKey = crypto.createPublicKey({
+      key: Buffer.concat([
+        Buffer.from('302a300506032b6570032100', 'hex'),
+        Buffer.from(publicKeyHex, 'hex'),
+      ]),
+      format: 'der',
+      type: 'spki',
+    });
+
+    return crypto.verify(
+      null,
+      Buffer.from(timestamp + body),
+      publicKey,
+      Buffer.from(signature, 'hex')
+    );
+  } catch (err) {
+    return false;
+  }
+}
+
+function getDiscordCommandDefinitions() {
+  return COMMANDS;
+}
+
+module.exports = {
+  buildActiveResponse,
+  buildHelpResponse,
+  buildHealthResponse,
+  buildInteractionResponse,
+  buildLastSignalResponse,
+  buildPerformanceResponse,
+  buildStatusResponse,
+  buildWatchlistResponse,
+  getDiscordCommandDefinitions,
+  handleInteraction,
+  hydrateTracker,
+  verifyDiscordRequest,
+};

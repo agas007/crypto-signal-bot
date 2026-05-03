@@ -2,6 +2,7 @@ const logger = require('../utils/logger');
 const tracker = require('../modules/tracker');
 const { initAudit } = require('../utils/audit');
 const { runScanCycle } = require('../modules/scanner');
+const { maybeSendDiscordNotifications } = require('./discord_notifications');
 
 async function runSignalCheck() {
   const startedAt = Date.now();
@@ -38,6 +39,9 @@ async function runSignalCheck() {
   }
 
   const report = tracker.getScanReport();
+  await maybeSendDiscordNotifications(report).catch((err) => {
+    logger.warn(`[runSignalCheck] discord notifications skipped: ${err.message}`);
+  });
   const finishedAt = Date.now();
 
   return {
