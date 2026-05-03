@@ -266,6 +266,26 @@ function pickKeyLevel(currentPrice, candidates, side) {
   return pool[0];
 }
 
+function getPatternScoreWeight(patternName) {
+  switch (patternName) {
+    case 'ascending_triangle':
+    case 'descending_triangle':
+      return 20;
+    case 'symmetric_triangle':
+      return 18;
+    case 'falling_wedge':
+    case 'rising_wedge':
+      return 18;
+    case 'ascending_channel':
+    case 'descending_channel':
+      return 10;
+    case 'consolidation':
+      return 6;
+    default:
+      return 0;
+  }
+}
+
 /**
  * Evaluate a symbol across multiple timeframes with Weighted Scoring v4.5.1.
  * Core edge comes from trend, support/resistance, structure, retest, and R:R.
@@ -279,6 +299,7 @@ function evaluateSignal(symbol, data, options = {}) {
   // ─── 1. Technical Analysis ──────────────────────────────
   const d1Trend = analyzeTrend(D1, emaParams);
   const h4SR = findSupportResistance(H4, config.indicators.swingLookback);
+  const h4Pattern = h4SR.pattern || { detected: false, breakout: false, breakoutDirection: null };
   const h4Trend = analyzeTrend(H4, emaParams);
   const h1Trend = analyzeTrend(H1, emaParams);
   const m15Trend = M15 ? analyzeTrend(M15, emaParams) : null;
@@ -309,15 +330,30 @@ function evaluateSignal(symbol, data, options = {}) {
     { value: h4SR.trend?.support?.currentValue, touches: h4SR.trend?.support?.touches || 0, source: 'trend_support' },
     { value: h4SR.wick.support, touches: h4SR.wick.supportTouches || 0, source: 'wick_support' },
     { value: h4SR.body.support, touches: h4SR.body.supportTouches || 0, source: 'body_support' },
+    { value: h4Pattern.lower?.currentValue, touches: h4Pattern.lower?.touches || 0, source: 'pattern_lower' },
   ], 'support');
   const resistanceLevel = pickKeyLevel(h4SR.currentPrice, [
     { value: h4SR.trend?.resistance?.currentValue, touches: h4SR.trend?.resistance?.touches || 0, source: 'trend_resistance' },
     { value: h4SR.wick.resistance, touches: h4SR.wick.resistanceTouches || 0, source: 'wick_resistance' },
     { value: h4SR.body.resistance, touches: h4SR.body.resistanceTouches || 0, source: 'body_resistance' },
+    { value: h4Pattern.upper?.currentValue, touches: h4Pattern.upper?.touches || 0, source: 'pattern_upper' },
   ], 'resistance');
 
-  const breakoutBias = d1Trend.direction === 'bullish' ? 'LONG' : 'SHORT';
-  const breakoutLevel = breakoutBias === 'LONG' ? supportLevel.value : resistanceLevel.value;
+  const breakoutBias = h4Pattern.breakoutDirection === 'bullish'
+    ? 'LONG'
+    : h4Pattern.breakoutDirection === 'bearish'
+      ? 'SHORT'
+      : d1Trend.direction === 'bullish'
+        ? 'LONG'
+        : 'SHORT';
+  const breakoutLevel =
+    h4Pattern.breakout && h4Pattern.breakoutDirection === 'bullish' && Number.isFinite(h4Pattern.upper?.currentValue)
+      ? h4Pattern.upper.currentValue
+      : h4Pattern.breakout && h4Pattern.breakoutDirection === 'bearish' && Number.isFinite(h4Pattern.lower?.currentValue)
+        ? h4Pattern.lower.currentValue
+        : breakoutBias === 'LONG'
+          ? supportLevel.value
+          : resistanceLevel.value;
   const retestStatus = detectRetest(H1, breakoutLevel, breakoutBias);
 
   const distToSupport = supportLevel.value && supportLevel.value < h4SR.currentPrice
@@ -383,6 +419,29 @@ function evaluateSignal(symbol, data, options = {}) {
       shortScore += 12;
       shortReasons.push(`H1 narrow-range breakout ke bawah setelah compression (+12)`);
       tags.push('COMPRESSION BREAKOUT DOWN');
+    }
+  }
+
+  if (h4Pattern.detected) {
+    tags.push(h4Pattern.name.toUpperCase());
+    warnings.push(`ℹ️ H4 pattern: ${h4Pattern.name} (${(h4Pattern.gapPct * 100).toFixed(2)}% gap, contraction ${(h4Pattern.contractionRatio * 100).toFixed(0)}%).`);
+
+    if (h4Pattern.breakout) {
+      if (h4Pattern.breakoutDirection === 'bullish') {
+        longScore += 15;
+        longReasons.push(`H4 ${h4Pattern.name} bullish breakout (+15)`);
+        tags.push('PATTERN BREAKOUT UP');
+      } else if (h4Pattern.breakoutDirection === 'bearish') {
+        shortScore += 15;
+        shortReasons.push(`H4 ${h4Pattern.name} bearish breakout (+15)`);
+        tags.push('PATTERN BREAKOUT DOWN');
+      }
+    } else if (h4Pattern.direction === 'bullish') {
+      longScore += 5;
+      longReasons.push(`H4 ${h4Pattern.name} bullish bias (+5)`);
+    } else if (h4Pattern.direction === 'bearish') {
+      shortScore += 5;
+      shortReasons.push(`H4 ${h4Pattern.name} bearish bias (+5)`);
     }
   }
 
@@ -574,13 +633,19 @@ function evaluateSignal(symbol, data, options = {}) {
       : h1Compression.breakout && h1Compression.direction === 'bearish' && Number.isFinite(h1Compression.low)
         ? { type: 'bearish_bos', level: h1Compression.low }
         : null;
+  const patternBreakoutContext =
+    h4Pattern.breakout && h4Pattern.breakoutDirection === 'bullish' && Number.isFinite(h4Pattern.upper?.currentValue)
+      ? { type: 'bullish_bos', level: h4Pattern.upper.currentValue }
+      : h4Pattern.breakout && h4Pattern.breakoutDirection === 'bearish' && Number.isFinite(h4Pattern.lower?.currentValue)
+        ? { type: 'bearish_bos', level: h4Pattern.lower.currentValue }
+        : null;
   const structuralBreakoutContext =
     bias === 'LONG' && h1Structure.bosType === 'bullish_bos' && Number.isFinite(h1Structure.lastSwingHigh)
       ? { type: 'bullish_bos', level: h1Structure.lastSwingHigh }
       : bias === 'SHORT' && h1Structure.bosType === 'bearish_bos' && Number.isFinite(h1Structure.lastSwingLow)
         ? { type: 'bearish_bos', level: h1Structure.lastSwingLow }
         : null;
-  const breakoutContext = compressionBreakoutContext || structuralBreakoutContext;
+  const breakoutContext = patternBreakoutContext || compressionBreakoutContext || structuralBreakoutContext;
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR, { 
     atr,
     accountBalance: options.accountBalance || config.strategy.accountBalance,
@@ -631,7 +696,7 @@ function evaluateSignal(symbol, data, options = {}) {
       warnings,
       tags: [...tags, 'STANDBY_SETUP'],
       analysis: {
-        d1Trend, h4SR, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
+        d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
       },
       riskReward,
       isStrict: false,
@@ -701,7 +766,7 @@ function evaluateSignal(symbol, data, options = {}) {
     warnings,
     tags,
     analysis: {
-      d1Trend, h4SR, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
+      d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
     },
     riskReward,
     isStrict,

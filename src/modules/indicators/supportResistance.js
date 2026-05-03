@@ -82,6 +82,175 @@ function buildTrendline(points, currentIndex, side) {
   };
 }
 
+function detectChartPattern(highPoints, lowPoints, currentIndex, currentPrice, options = {}) {
+  const recentCount = options.recentCount || 5;
+  const breakoutBufferPct = options.breakoutBufferPct || 0.0015;
+  const minContraction = options.minContraction || 0.9;
+  const flatSlopePct = options.flatSlopePct || 0.0015;
+
+  const highs = Array.isArray(highPoints) ? highPoints.slice(-recentCount) : [];
+  const lows = Array.isArray(lowPoints) ? lowPoints.slice(-recentCount) : [];
+
+  if (highs.length < 2 || lows.length < 2) {
+    return {
+      detected: false,
+      name: 'none',
+      direction: 'neutral',
+      breakout: false,
+      breakoutDirection: null,
+      currentUpper: null,
+      currentLower: null,
+      gapPct: 0,
+      contractionRatio: 1,
+      upper: null,
+      lower: null,
+      reason: 'Insufficient swing points',
+      strength: 'none',
+    };
+  }
+
+  const upperFit = linearRegression(highs);
+  const lowerFit = linearRegression(lows);
+  if (!upperFit || !lowerFit) {
+    return {
+      detected: false,
+      name: 'none',
+      direction: 'neutral',
+      breakout: false,
+      breakoutDirection: null,
+      currentUpper: null,
+      currentLower: null,
+      gapPct: 0,
+      contractionRatio: 1,
+      upper: null,
+      lower: null,
+      reason: 'Unable to fit trendlines',
+      strength: 'none',
+    };
+  }
+
+  const upperNow = (upperFit.slope * currentIndex) + upperFit.intercept;
+  const lowerNow = (lowerFit.slope * currentIndex) + lowerFit.intercept;
+  const firstIndex = Math.min(highs[0].index, lows[0].index);
+  const upperThen = (upperFit.slope * firstIndex) + upperFit.intercept;
+  const lowerThen = (lowerFit.slope * firstIndex) + lowerFit.intercept;
+  const widthNow = upperNow - lowerNow;
+  const widthThen = upperThen - lowerThen;
+  const contractionRatio = widthThen > 0 ? widthNow / widthThen : 1;
+  const gapPct = currentPrice > 0 ? widthNow / currentPrice : 0;
+
+  if (!Number.isFinite(upperNow) || !Number.isFinite(lowerNow) || widthNow <= 0) {
+    return {
+      detected: false,
+      name: 'none',
+      direction: 'neutral',
+      breakout: false,
+      breakoutDirection: null,
+      currentUpper: upperNow,
+      currentLower: lowerNow,
+      gapPct,
+      contractionRatio,
+      upper: null,
+      lower: null,
+      reason: 'Invalid channel geometry',
+      strength: 'none',
+    };
+  }
+
+  const upperSlopePct = currentPrice > 0 ? upperFit.slope / currentPrice : 0;
+  const lowerSlopePct = currentPrice > 0 ? lowerFit.slope / currentPrice : 0;
+  const upperFlat = Math.abs(upperSlopePct) <= flatSlopePct;
+  const lowerFlat = Math.abs(lowerSlopePct) <= flatSlopePct;
+  const compressed = contractionRatio <= minContraction;
+  const breakoutUp = currentPrice > upperNow * (1 + breakoutBufferPct);
+  const breakoutDown = currentPrice < lowerNow * (1 - breakoutBufferPct);
+
+  let name = 'range';
+  let direction = 'neutral';
+
+  if (upperFit.slope < 0 && lowerFit.slope > 0 && compressed) {
+    name = 'symmetric_triangle';
+    direction = 'bullish';
+  } else if (upperFlat && lowerFit.slope > 0 && compressed) {
+    name = 'ascending_triangle';
+    direction = 'bullish';
+  } else if (lowerFlat && upperFit.slope < 0 && compressed) {
+    name = 'descending_triangle';
+    direction = 'bearish';
+  } else if (upperFit.slope > 0 && lowerFit.slope > 0 && upperFit.slope > lowerFit.slope && compressed) {
+    name = 'rising_wedge';
+    direction = 'bearish';
+  } else if (upperFit.slope < 0 && lowerFit.slope < 0 && upperFit.slope < lowerFit.slope && compressed) {
+    name = 'falling_wedge';
+    direction = 'bullish';
+  } else if (upperFit.slope > 0 && lowerFit.slope > 0) {
+    name = 'ascending_channel';
+    direction = 'bullish';
+  } else if (upperFit.slope < 0 && lowerFit.slope < 0) {
+    name = 'descending_channel';
+    direction = 'bearish';
+  } else if (compressed) {
+    name = 'consolidation';
+    direction = 'neutral';
+  }
+
+  const breakoutDirection = breakoutUp ? 'bullish' : breakoutDown ? 'bearish' : null;
+  const detected = name !== 'range' || breakoutUp || breakoutDown;
+  const strength = highs.length >= 4 && lows.length >= 4 ? 'major' : highs.length >= 3 && lows.length >= 3 ? 'confirmed' : 'fresh';
+
+  let reason = `${name} detected`;
+  if (breakoutUp) reason = `${name} with bullish breakout above upper trendline`;
+  if (breakoutDown) reason = `${name} with bearish breakout below lower trendline`;
+
+  return {
+    detected,
+    name,
+    direction: breakoutDirection || direction,
+    breakout: Boolean(breakoutDirection),
+    breakoutDirection,
+    currentUpper: upperNow,
+    currentLower: lowerNow,
+    gapPct,
+    contractionRatio,
+    upper: {
+      slope: upperFit.slope,
+      intercept: upperFit.intercept,
+      direction: upperFit.slope > 0 ? 'up' : upperFit.slope < 0 ? 'down' : 'flat',
+      strength: highs.length >= 4 ? 'major' : highs.length >= 3 ? 'confirmed' : 'fresh',
+      touches: highs.length,
+      currentValue: upperNow,
+      fitErrorPct: (() => {
+        let total = 0;
+        for (const p of highs) {
+          const projected = (upperFit.slope * p.index) + upperFit.intercept;
+          total += Math.abs(p.price - projected) / p.price;
+        }
+        return total / highs.length;
+      })(),
+      points: highs,
+    },
+    lower: {
+      slope: lowerFit.slope,
+      intercept: lowerFit.intercept,
+      direction: lowerFit.slope > 0 ? 'up' : lowerFit.slope < 0 ? 'down' : 'flat',
+      strength: lows.length >= 4 ? 'major' : lows.length >= 3 ? 'confirmed' : 'fresh',
+      touches: lows.length,
+      currentValue: lowerNow,
+      fitErrorPct: (() => {
+        let total = 0;
+        for (const p of lows) {
+          const projected = (lowerFit.slope * p.index) + lowerFit.intercept;
+          total += Math.abs(p.price - projected) / p.price;
+        }
+        return total / lows.length;
+      })(),
+      points: lows,
+    },
+    reason,
+    strength,
+  };
+}
+
 function findSupportResistance(candles, lookback = 20) {
   const swingWidth = 3; 
   const wickHighs = [];
@@ -167,6 +336,7 @@ function findSupportResistance(candles, lookback = 20) {
   const nearestBodyResistance = findNearest(resistanceBody, 'RESISTANCE');
   const trendSupport = buildTrendline(wickLows, candles.length - 1, 'support');
   const trendResistance = buildTrendline(wickHighs, candles.length - 1, 'resistance');
+  const pattern = detectChartPattern(wickHighs, wickLows, candles.length - 1, currentPrice);
 
   return {
     currentPrice,
@@ -190,6 +360,7 @@ function findSupportResistance(candles, lookback = 20) {
       support: trendSupport,
       resistance: trendResistance,
     },
+    pattern,
     levels: {
       wickSupports: supportWick,
       wickResistances: resistanceWick,
