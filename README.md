@@ -183,7 +183,7 @@ Set ini di Vercel project `dashboard/`:
 - `CRON_SECRET` - cukup satu kali, dipakai oleh cron-job.org dan `/scan-now`
 - `CHECK_SIGNAL_URL` - URL public endpoint scan, contoh:
   - `https://crypto-signal-bot-blush.vercel.app/api/check-signal`
-- `SCAN_TRIGGER_TIMEOUT_MS` - batas tunggu trigger Discord sebelum request dibatalkan, default `15000`
+- `SCAN_TRIGGER_TIMEOUT_MS` - batas tunggu trigger Discord sebelum request dibatalkan, default `60000`
 
 Kalau `CHECK_SIGNAL_URL` tidak diisi, command akan coba pakai `VERCEL_PROJECT_PRODUCTION_URL` atau `VERCEL_URL`.
 

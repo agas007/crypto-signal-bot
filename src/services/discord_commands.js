@@ -54,7 +54,7 @@ function getCheckSignalUrl() {
 
 async function triggerRemoteScan(options = {}) {
   const timeoutMs = Number(
-    options.timeoutMs ?? process.env.SCAN_TRIGGER_TIMEOUT_MS ?? 15000
+    options.timeoutMs ?? process.env.SCAN_TRIGGER_TIMEOUT_MS ?? 60000
   );
   const targetUrl = getCheckSignalUrl();
   const cronSecret = process.env.CRON_SECRET || process.env.CHECK_SIGNAL_SECRET;
