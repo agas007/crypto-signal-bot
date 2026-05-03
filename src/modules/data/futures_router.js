@@ -305,6 +305,24 @@ function markProviderBlocked(provider, method, err) {
   if (state.recentEvents.length > 30) state.recentEvents = state.recentEvents.slice(-30);
 }
 
+function isMissingInstrumentError(provider, err) {
+  const status = err?.response?.status;
+  const body = JSON.stringify(err?.response?.data || {});
+  const message = `${err?.message || ''} ${body}`.toLowerCase();
+
+  if (message.includes('invalid symbol')) return true;
+  if (message.includes("instrument id, instrument id code, or spread id doesn't exist")) return true;
+  if (message.includes("doesn't exist") && message.includes('instrument')) return true;
+  if (message.includes('symbol does not exist')) return true;
+  if (message.includes('symbol not exist')) return true;
+
+  if (provider === 'okx' && (message.includes('51001') || message.includes('instrument id'))) return true;
+  if (provider === 'kucoin' && (message.includes('200003') || message.includes('invalid symbol'))) return true;
+  if (provider === 'bitget' && (message.includes('4000') || message.includes('symbol') && message.includes('not'))) return true;
+
+  return status === 404;
+}
+
 function maybeRememberPreferred(method, provider, value) {
   if (!isNonEmpty(value)) return;
   state.preferredByMethod.set(method, provider);
@@ -828,10 +846,42 @@ async function fetchTopPairs(limit = config.scanner.maxPairs) {
 }
 
 async function fetch24hTicker(symbol) {
-  return callProviderChain('fetch24hTicker', async (provider) => providers[provider]?.fetch24hTicker?.(symbol), {
-    binanceArgs: [symbol],
-    objectFallback: null,
-  });
+  const cacheKey = String(symbol || '').toUpperCase();
+  if (state.missingTickerSymbols?.has(cacheKey)) {
+    return null;
+  }
+
+  if (!state.missingTickerSymbols) {
+    state.missingTickerSymbols = new Set();
+  }
+
+  const providerNames = providerListForMethod('fetch24hTicker').filter((provider) => !state.blockedProviders.has(provider));
+  const errors = [];
+
+  for (const provider of providerNames) {
+    try {
+      const result = await providers[provider]?.fetch24hTicker?.(symbol);
+      if (isNonEmpty(result)) {
+        maybeRememberPreferred('fetch24hTicker', provider, result);
+        recordSuccess('fetch24hTicker', provider);
+        return result;
+      }
+    } catch (err) {
+      if (isMissingInstrumentError(provider, err)) {
+        continue;
+      }
+      errors.push({ provider, err });
+      markProviderBlocked(provider, 'fetch24hTicker', err);
+    }
+  }
+
+  if (errors.length) {
+    const detail = errors.map(({ provider, err }) => `${provider}: ${err.message}`).join(' | ');
+    logger.warn(`⚠️ Futures data chain exhausted for fetch24hTicker: ${detail}`);
+  }
+
+  state.missingTickerSymbols.add(cacheKey);
+  return null;
 }
 
 async function fetchFundingRate(symbol) {

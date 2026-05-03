@@ -148,8 +148,7 @@ async function runScanCycle() {
       // Quick filter: fetch ticker first (cheap API call)
       const ticker = await fetch24hTicker(symbol);
       if (!ticker) {
-        errors++;
-        pushScanError(`Ticker unavailable for ${symbol}`);
+        scanReport.checks.tickerUnavailable = (scanReport.checks.tickerUnavailable || 0) + 1;
         continue;
       }
 
