@@ -108,7 +108,7 @@ async function runScanCycle() {
     let btcTrend = 'NEUTRAL';
     try {
         const btcCandles = await fetchOHLCV('BTCUSDT', config.timeframes.D1, 50);
-        if (btcCandles.length > 0) {
+        if (Array.isArray(btcCandles) && btcCandles.length > 0) {
             const trend = analyzeTrend(btcCandles);
             btcTrend = trend.direction;
             logger.info(`🌐 Market Regime: BTC D1 is ${btcTrend}`);
@@ -155,7 +155,7 @@ async function runScanCycle() {
       // Fetch D1 candles for trend check (only D1 for pre-filter)
       const d1Candles = await fetchOHLCV(symbol, config.timeframes.D1, 50);
 
-      if (!d1Candles.length) {
+      if (!Array.isArray(d1Candles) || d1Candles.length === 0) {
         errors++;
         pushScanError(`No D1 candles for ${symbol}`);
         continue;
@@ -662,7 +662,9 @@ async function checkActiveTrades() {
         const startTime = (trade.entryAt || trade.signalAt || Date.now());
         const ageHours = Math.ceil((Date.now() - startTime) / (3600 * 1000));
         const historyCandles = await fetchOHLCV(trade.symbol, '1h', ageHours + 1, { startTime });
-        const summary = historyCandles.map(c => `H:${c.high}/L:${c.low}/C:${c.close}`).join(' | ');
+        const summary = Array.isArray(historyCandles)
+          ? historyCandles.map(c => `H:${c.high}/L:${c.low}/C:${c.close}`).join(' | ')
+          : '';
 
         const lesson = await analyzePostMortem(trade, hitPrice, hit, summary);
         
