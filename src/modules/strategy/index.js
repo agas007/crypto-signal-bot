@@ -3,126 +3,8 @@ const logger = require('../../utils/logger');
 const { 
   analyzeTrend, calculateStochastic, findSupportResistance,
   analyzeStructure, detectAtSpike, detectRetest,
-  detectEma1321, detectStochCross, detectDivergence, detectOrderBlocks
+  detectCompression, detectEma1321, detectStochCross, detectOrderBlocks
 } = require('../indicators');
-
-// ═══════════════════════════════════════════════════════════════════
-// MARKET MICROSTRUCTURE ANALYZER
-// Interprets all off-chart Binance data into scored signals
-// ═══════════════════════════════════════════════════════════════════
-
-/**
- * Analyze all market microstructure data fetched from Binance.
- * Returns scored observations (longBonus, shortBonus) + labels.
- *
- * @param {object} micro
- * @param {object|null} micro.oi         fetchOpenInterest result
- * @param {Array}       micro.oiHistory  fetchOpenInterestHistory result
- * @param {Array}       micro.crowdRatio fetchGlobalLongShortRatio result
- * @param {Array}       micro.topRatio   fetchTopTraderLongShortRatio result
- * @param {object|null} micro.orderBook  fetchOrderBookDepth result
- * @param {Array}       micro.liquidations fetchLiquidationOrders result
- * @param {number}      currentPrice
- * @returns {{ longBonus: number, shortBonus: number, tags: string[], reasons: { long: string[], short: string[] }, raw: object }}
- */
-function analyzeMicrostructure(micro = {}, currentPrice = 0) {
-  const {
-    oi = null,
-    oiHistory = [],
-    crowdRatio = [],
-    topRatio = [],
-    orderBook = null,
-    liquidations = [],
-  } = micro;
-
-  let longBonus = 0;
-  let shortBonus = 0;
-  const tags = [];
-  const reasons = { long: [], short: [] };
-  const raw = {};
-
-  // ─── 1. Open Interest Trend (Rising OI = conviction, Falling OI = exhaustion) ───
-  if (oiHistory.length >= 3) {
-    const oldest = oiHistory[0].sumOpenInterest;
-    const latest = oiHistory[oiHistory.length - 1].sumOpenInterest;
-    const oiChangePct = ((latest - oldest) / oldest) * 100;
-    raw.oiChangePct = oiChangePct;
-
-    if (oiChangePct > 5) {
-      // Rising OI: market is adding positions — follow the trend
-      longBonus += 8;
-      shortBonus += 8;
-      tags.push(`OI ↑ +${oiChangePct.toFixed(1)}%`);
-      reasons.long.push(`Open Interest naik ${oiChangePct.toFixed(1)}% — posisi baru terbuka, konfirmasi trend`);
-      reasons.short.push(`Open Interest naik ${oiChangePct.toFixed(1)}% — konfirmasi dorongan sell`);
-    } else if (oiChangePct < -5) {
-      // Falling OI: positions closing — potential exhaustion/reversal
-      longBonus -= 5;
-      shortBonus -= 5;
-      tags.push(`OI ↓ ${oiChangePct.toFixed(1)}%`);
-      reasons.long.push(`⚠️ Open Interest turun ${Math.abs(oiChangePct).toFixed(1)}% — posisi ditutup, trend bisa melemah`);
-      reasons.short.push(`⚠️ Open Interest turun ${Math.abs(oiChangePct).toFixed(1)}% — trend bisa melemah`);
-    }
-  }
-
-  // ─── 2. Retail Crowd Ratio (Contrarian Indicator) ───
-  // When retail is 70%+ Long → bearish signal (trapped longs)
-  // When retail is 70%+ Short → bullish signal (trapped shorts / short squeeze)
-  if (crowdRatio.length > 0) {
-    const latest = crowdRatio[crowdRatio.length - 1];
-    const longPct = latest.longAccount * 100;
-    const shortPct = latest.shortAccount * 100;
-    raw.crowdLongPct = longPct;
-    raw.crowdShortPct = shortPct;
-
-    if (longPct >= 70) {
-      // Crowd heavily long → bearish contrarian
-      shortBonus += 12;
-      longBonus -= 8;
-      tags.push(`CROWD ${longPct.toFixed(0)}% LONG`);
-      reasons.short.push(`Retail crowd ${longPct.toFixed(0)}% Long — contrarian SHORT signal (trapped longs)`);
-    } else if (longPct >= 60) {
-      shortBonus += 6;
-      tags.push(`CROWD ${longPct.toFixed(0)}% LONG`);
-      reasons.short.push(`Retail crowd condong Long (${longPct.toFixed(0)}%) — mild bearish sentiment`);
-    } else if (shortPct >= 70) {
-      // Crowd heavily short → bullish contrarian
-      longBonus += 12;
-      shortBonus -= 8;
-      tags.push(`CROWD ${shortPct.toFixed(0)}% SHORT`);
-      reasons.long.push(`Retail crowd ${shortPct.toFixed(0)}% Short — contrarian LONG signal (short squeeze risk)`);
-    } else if (shortPct >= 60) {
-      longBonus += 6;
-      tags.push(`CROWD ${shortPct.toFixed(0)}% SHORT`);
-      reasons.long.push(`Retail crowd condong Short (${shortPct.toFixed(0)}%) — mild bullish sentiment`);
-    }
-  }
-
-  // ─── 3. Order Book Depth Imbalance (L2 Data) ───
-  if (orderBook) {
-    const { imbalance, bias: obBias, bidVolume, askVolume } = orderBook;
-    raw.obImbalance = imbalance;
-    raw.obBias = obBias;
-
-    if (obBias === 'BUY' && imbalance > 0.2) {
-      longBonus += 10;
-      tags.push(`ORDER BOOK BID WALL`);
-      reasons.long.push(`Order book imbalance ${(imbalance*100).toFixed(0)}% favor Bids — bullish pressure`);
-    } else if (obBias === 'BUY') {
-      longBonus += 5;
-      reasons.long.push(`Order book sedikit favor bids (${(imbalance*100).toFixed(0)}%)`);
-    } else if (obBias === 'SELL' && Math.abs(imbalance) > 0.2) {
-      shortBonus += 10;
-      tags.push(`ORDER BOOK ASK WALL`);
-      reasons.short.push(`Order book imbalance ${(Math.abs(imbalance)*100).toFixed(0)}% favor Asks — bearish pressure`);
-    } else if (obBias === 'SELL') {
-      shortBonus += 5;
-      reasons.short.push(`Order book sedikit favor asks (${(Math.abs(imbalance)*100).toFixed(0)}%)`);
-    }
-  }
-
-  return { longBonus, shortBonus, tags, reasons, raw };
-}
 
 /**
  * Round quantity to the nearest step size to fulfill LOT_SIZE requirement.
@@ -162,7 +44,6 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = 4.0)
  * @returns {{ entry: number, sl: number, tp: number, rr: number }}
  */
 function calculateRiskReward(bias, currentPrice, levels, options = {}) {
-  const MIN_RR = config.strategy.minRrRatio;
   const baseMaxSl = config.strategy.maxSlAllowed || 0.08;
   const MAX_SL_ALLOWED = options.atr ? Math.min(baseMaxSl, (options.atr * 2) / currentPrice) : baseMaxSl;
   
@@ -197,8 +78,12 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
 
   if (bias === 'LONG') {
     // [CONSERVATIVE] SL at Wick Support, TP at Body Resistance
+    const trendSupport = levels?.trend?.support?.currentValue;
+    const trendResistance = levels?.trend?.resistance?.currentValue;
     const wickSupport = (levels && levels.wick) ? levels.wick.support : (typeof levels === 'number' ? levels : 0);
     const bodyResistance = (levels && levels.body) ? levels.body.resistance : (typeof options.resistance === 'number' ? options.resistance : Infinity);
+    const supportAnchor = Number.isFinite(trendSupport) && trendSupport > 0 ? trendSupport : wickSupport;
+    const resistanceAnchor = Number.isFinite(trendResistance) && trendResistance > entry ? trendResistance : bodyResistance;
     const hasBullishBosAnchor =
       breakoutContext &&
       breakoutContext.type === 'bullish_bos' &&
@@ -210,11 +95,11 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // instead of the much older support far below the move.
     const technicalSl = hasBullishBosAnchor
       ? breakoutContext.level * 0.997
-      : wickSupport * 0.998;
+      : supportAnchor * 0.998;
     sl = options.sl || (hasBullishBosAnchor ? technicalSl : Math.min(technicalSl, entry - atrDist));
     
     // Realistic TP: Use Body Resistance, if none (ATH/Discovery), project 4x ATR instead of forced RR
-    tp = options.tp || (bodyResistance !== Infinity ? bodyResistance * 0.998 : entry + (options.atr * 4));
+    tp = options.tp || (resistanceAnchor !== Infinity ? resistanceAnchor * 0.998 : entry + (options.atr * 4));
     
     const slDistPercent = (entry - sl) / entry;
     // Skip technical rejection if manual/AI levels are provided
@@ -275,8 +160,12 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     return { entry, sl, tp, rr, isScaled: scaled, positionSize: { risk: (Math.abs(entry - sl) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
   } else {
     // [CONSERVATIVE] SL at Wick Resistance, TP at Body Support
+    const trendSupport = levels?.trend?.support?.currentValue;
+    const trendResistance = levels?.trend?.resistance?.currentValue;
     const wickResistance = (levels && levels.wick) ? levels.wick.resistance : (typeof options.resistance === 'number' ? options.resistance : Infinity);
     const bodySupport = (levels && levels.body) ? levels.body.support : (typeof levels === 'number' ? levels : 0);
+    const resistanceAnchor = Number.isFinite(trendResistance) && trendResistance > entry ? trendResistance : wickResistance;
+    const supportAnchor = Number.isFinite(trendSupport) && trendSupport > 0 && trendSupport < entry ? trendSupport : bodySupport;
     const hasBearishBosAnchor =
       breakoutContext &&
       breakoutContext.type === 'bearish_bos' &&
@@ -286,11 +175,11 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // Symmetric rule for bearish breakdowns: keep the stop just above the broken support.
     const technicalSl = hasBearishBosAnchor
       ? breakoutContext.level * 1.003
-      : (wickResistance !== Infinity ? wickResistance * 1.002 : entry * 1.02);
+      : (resistanceAnchor !== Infinity ? resistanceAnchor * 1.002 : entry * 1.02);
     sl = options.sl || (hasBearishBosAnchor ? technicalSl : Math.max(technicalSl, entry + atrDist));
     
     // Realistic TP: Use Body Support, if none (Discovery), project 4x ATR downward
-    tp = options.tp || (bodySupport > 0 ? bodySupport * 1.002 : Math.max(entry - (options.atr * 4), 0));
+    tp = options.tp || (supportAnchor > 0 ? supportAnchor * 1.002 : Math.max(entry - (options.atr * 4), 0));
     
     const slDistPercent = (sl - entry) / entry;
     const minSlDistance = hasBearishBosAnchor
@@ -347,15 +236,43 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
   }
 }
 
+function pickKeyLevel(currentPrice, candidates, side) {
+  const normalized = (candidates || [])
+    .filter((item) => Number.isFinite(item?.value) && item.value > 0)
+    .map((item) => ({
+      ...item,
+      distancePct: currentPrice > 0 ? Math.abs(currentPrice - item.value) / currentPrice : Infinity,
+      sideMatch: side === 'support' ? item.value < currentPrice : item.value > currentPrice,
+    }));
+
+  const sideMatched = normalized.filter((item) => item.sideMatch);
+  const pool = sideMatched.length > 0 ? sideMatched : normalized;
+
+  if (!pool.length) {
+    return {
+      value: side === 'support' ? 0 : Infinity,
+      touches: 0,
+      source: 'none',
+      distancePct: Infinity,
+      sideMatch: false,
+    };
+  }
+
+  pool.sort((a, b) => {
+    if (a.distancePct !== b.distancePct) return a.distancePct - b.distancePct;
+    return (b.touches || 0) - (a.touches || 0);
+  });
+
+  return pool[0];
+}
+
 /**
  * Evaluate a symbol across multiple timeframes with Weighted Scoring v4.5.1.
- * Total Pts: 100 (Trend 30, Structure 20, Indicators 15, Micro 10, Retest 15, RR 10)
- * Includes MTA (M15 timing) and Candlestick Patterns.
+ * Core edge comes from trend, support/resistance, structure, retest, and R:R.
  */
 function evaluateSignal(symbol, data, options = {}) {
   const { D1, H4, H1, M15 } = data;
   const fundingRate = options.fundingRate || 0;
-  const micro = options.micro || {};
   const emaParams = config.indicators.ema;
   const stochParams = config.indicators.stochastic;
 
@@ -372,6 +289,13 @@ function evaluateSignal(symbol, data, options = {}) {
   const h4Stoch = calculateStochastic(H4, stochParams);
   const h1StochCross = detectStochCross(h1Stoch.kSeries, h1Stoch.dSeries);
   const h1Spike = detectAtSpike(H1, 14);
+  const h1Compression = detectCompression(H1, {
+    recentWindow: 12,
+    compareWindow: 12,
+    maxRangePct: 0.05,
+    minContraction: 0.82,
+    breakoutBufferPct: 0.0015,
+  });
   const ema1321 = detectEma1321(H1);
   const h1OB = detectOrderBlocks(H1, { impulseMultiplier: 1.8, proximityPct: 0.025 });
   const h4OB = detectOrderBlocks(H4, { impulseMultiplier: 1.8, proximityPct: 0.03 });
@@ -381,15 +305,30 @@ function evaluateSignal(symbol, data, options = {}) {
   const h1Engulfing = detectEngulfing(H1);
   const h1Pin = detectPinBar(H1);
 
+  const supportLevel = pickKeyLevel(h4SR.currentPrice, [
+    { value: h4SR.trend?.support?.currentValue, touches: h4SR.trend?.support?.touches || 0, source: 'trend_support' },
+    { value: h4SR.wick.support, touches: h4SR.wick.supportTouches || 0, source: 'wick_support' },
+    { value: h4SR.body.support, touches: h4SR.body.supportTouches || 0, source: 'body_support' },
+  ], 'support');
+  const resistanceLevel = pickKeyLevel(h4SR.currentPrice, [
+    { value: h4SR.trend?.resistance?.currentValue, touches: h4SR.trend?.resistance?.touches || 0, source: 'trend_resistance' },
+    { value: h4SR.wick.resistance, touches: h4SR.wick.resistanceTouches || 0, source: 'wick_resistance' },
+    { value: h4SR.body.resistance, touches: h4SR.body.resistanceTouches || 0, source: 'body_resistance' },
+  ], 'resistance');
+
   const breakoutBias = d1Trend.direction === 'bullish' ? 'LONG' : 'SHORT';
-  const breakoutLevel = breakoutBias === 'LONG' ? h4SR.wick.support : h4SR.wick.resistance;
+  const breakoutLevel = breakoutBias === 'LONG' ? supportLevel.value : resistanceLevel.value;
   const retestStatus = detectRetest(H1, breakoutLevel, breakoutBias);
 
-  const distToWickSupport = h4SR.wick.support ? ((h4SR.currentPrice - h4SR.wick.support) / h4SR.currentPrice) * 100 : Infinity;
-  const distToWickResistance = h4SR.wick.resistance !== Infinity ? ((h4SR.wick.resistance - h4SR.currentPrice) / h4SR.currentPrice) * 100 : Infinity;
-  const pricePosition = classifyPricePosition(distToWickSupport, distToWickResistance);
-  const supportTouches = h4SR.wick.supportTouches || 0;
-  const resistanceTouches = h4SR.wick.resistanceTouches || 0;
+  const distToSupport = supportLevel.value && supportLevel.value < h4SR.currentPrice
+    ? ((h4SR.currentPrice - supportLevel.value) / h4SR.currentPrice) * 100
+    : Infinity;
+  const distToResistance = resistanceLevel.value !== Infinity && resistanceLevel.value > h4SR.currentPrice
+    ? ((resistanceLevel.value - h4SR.currentPrice) / h4SR.currentPrice) * 100
+    : Infinity;
+  const pricePosition = classifyPricePosition(distToSupport, distToResistance);
+  const supportTouches = supportLevel.touches || 0;
+  const resistanceTouches = resistanceLevel.touches || 0;
 
   const atr = h1Spike.atr;
   const atrPercent = (atr / h4SR.currentPrice) * 100;
@@ -427,6 +366,23 @@ function evaluateSignal(symbol, data, options = {}) {
     } else if (m15Trend.direction === 'bearish') {
       shortScore += 5;
       shortReasons.push(`M15 timing confirmation (bearish) (+5)`);
+    }
+  }
+
+  if (h1Compression.compressed) {
+    tags.push('NARROW RANGE');
+    warnings.push(`ℹ️ H1 range lagi sempit (${(h1Compression.rangePct * 100).toFixed(2)}%). Tunggu break yang valid, bukan entry di tengah compression.`);
+  }
+
+  if (h1Compression.breakout) {
+    if (h1Compression.direction === 'bullish') {
+      longScore += 12;
+      longReasons.push(`H1 narrow-range breakout ke atas setelah compression (+12)`);
+      tags.push('COMPRESSION BREAKOUT UP');
+    } else if (h1Compression.direction === 'bearish') {
+      shortScore += 12;
+      shortReasons.push(`H1 narrow-range breakout ke bawah setelah compression (+12)`);
+      tags.push('COMPRESSION BREAKOUT DOWN');
     }
   }
 
@@ -581,17 +537,9 @@ function evaluateSignal(symbol, data, options = {}) {
         ? 'LONG'
         : null;
   const standbyTouches = standbyBias === 'SHORT' ? resistanceTouches : standbyBias === 'LONG' ? supportTouches : 0;
-  const standbyLevel = standbyBias === 'SHORT' ? h4SR.wick.support : standbyBias === 'LONG' ? h4SR.wick.resistance : null;
+  const standbyLevel = standbyBias === 'SHORT' ? supportLevel.value : standbyBias === 'LONG' ? resistanceLevel.value : null;
 
-  // ─── CATEGORY 4: Micro Structure (Max: 10 pts) ───
-  const microResult = analyzeMicrostructure(micro, h4SR.currentPrice);
-  longScore += Math.min(10, microResult.longBonus);
-  shortScore += Math.min(10, microResult.shortBonus);
-  longReasons.push(...microResult.reasons.long.map(r => `${r} (Micro)`));
-  shortReasons.push(...microResult.reasons.short.map(r => `${r} (Micro)`));
-  tags.push(...microResult.tags);
-
-  // ─── CATEGORY 5: Breakout & Retest (Max: 15 pts) ───
+  // ─── CATEGORY 4: Breakout & Retest (Max: 15 pts) ───
   if (retestStatus === 'CONFIRMED') {
     if (breakoutBias === 'LONG') {
       longScore += 15;
@@ -618,14 +566,21 @@ function evaluateSignal(symbol, data, options = {}) {
     }
   }
 
-  // ─── CATEGORY 6: R:R & Risk (Max: 10 pts) ───
+  // ─── CATEGORY 5: R:R & Risk (Max: 10 pts) ───
   const bias = longScore > shortScore ? 'LONG' : 'SHORT';
-  const breakoutContext =
+  const compressionBreakoutContext =
+    h1Compression.breakout && h1Compression.direction === 'bullish' && Number.isFinite(h1Compression.high)
+      ? { type: 'bullish_bos', level: h1Compression.high }
+      : h1Compression.breakout && h1Compression.direction === 'bearish' && Number.isFinite(h1Compression.low)
+        ? { type: 'bearish_bos', level: h1Compression.low }
+        : null;
+  const structuralBreakoutContext =
     bias === 'LONG' && h1Structure.bosType === 'bullish_bos' && Number.isFinite(h1Structure.lastSwingHigh)
       ? { type: 'bullish_bos', level: h1Structure.lastSwingHigh }
       : bias === 'SHORT' && h1Structure.bosType === 'bearish_bos' && Number.isFinite(h1Structure.lastSwingLow)
         ? { type: 'bearish_bos', level: h1Structure.lastSwingLow }
         : null;
+  const breakoutContext = compressionBreakoutContext || structuralBreakoutContext;
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR, { 
     atr,
     accountBalance: options.accountBalance || config.strategy.accountBalance,
@@ -676,14 +631,13 @@ function evaluateSignal(symbol, data, options = {}) {
       warnings,
       tags: [...tags, 'STANDBY_SETUP'],
       analysis: {
-        d1Trend, h4SR, h4Trend, h1Trend, m15Trend, h1Structure, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
+        d1Trend, h4SR, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
       },
       riskReward,
       isStrict: false,
       lowConfidence: true,
       fundingRate: (fundingRate * 100).toFixed(4) + '%',
       trading_type: 'MONITORING',
-      microstructure: microResult.raw,
       standbyOnly: true,
       standbyReason,
       standbyContext: {
@@ -719,7 +673,7 @@ function evaluateSignal(symbol, data, options = {}) {
   }
 
   // ─── VERTICAL ENTRY ───────────────────────────────────────
-  const distFromLvl = bias === 'LONG' ? distToWickSupport : distToWickResistance;
+  const distFromLvl = bias === 'LONG' ? distToSupport : distToResistance;
   if (distFromLvl > 5.0) {
     finalScore -= 10;
     tags.push('VERTICAL ENTRY');
@@ -747,15 +701,14 @@ function evaluateSignal(symbol, data, options = {}) {
     warnings,
     tags,
     analysis: {
-      d1Trend, h4SR, h4Trend, h1Trend, m15Trend, h1Structure, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
+      d1Trend, h4SR, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
     },
     riskReward,
     isStrict,
     lowConfidence: !isStrict,
     fundingRate: (fundingRate * 100).toFixed(4) + '%',
     trading_type: tradingType,
-    microstructure: microResult.raw,
   };
 }
 
-module.exports = { evaluateSignal, classifyPricePosition, calculateRiskReward, analyzeMicrostructure };
+module.exports = { evaluateSignal, classifyPricePosition, calculateRiskReward };

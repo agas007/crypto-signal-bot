@@ -20,6 +20,68 @@
  *   distToResistance: number
  * }}
  */
+function linearRegression(points) {
+  const n = points.length;
+  if (n < 2) return null;
+
+  let sumX = 0;
+  let sumY = 0;
+  let sumXY = 0;
+  let sumXX = 0;
+
+  for (const p of points) {
+    sumX += p.index;
+    sumY += p.price;
+    sumXY += p.index * p.price;
+    sumXX += p.index * p.index;
+  }
+
+  const denom = (n * sumXX) - (sumX * sumX);
+  if (denom === 0) return null;
+
+  const slope = ((n * sumXY) - (sumX * sumY)) / denom;
+  const intercept = (sumY - slope * sumX) / n;
+  return { slope, intercept };
+}
+
+function buildTrendline(points, currentIndex, side) {
+  if (!Array.isArray(points) || points.length < 2) return null;
+
+  const recent = points.slice(-Math.min(points.length, 5));
+  const fit = linearRegression(recent);
+  if (!fit) return null;
+
+  const { slope, intercept } = fit;
+  const currentValue = slope * currentIndex + intercept;
+  const firstValue = slope * recent[0].index + intercept;
+  const lastValue = slope * recent[recent.length - 1].index + intercept;
+
+  let fitErrorPct = 0;
+  for (const p of recent) {
+    const projected = slope * p.index + intercept;
+    fitErrorPct += Math.abs(p.price - projected) / p.price;
+  }
+  fitErrorPct /= recent.length;
+
+  const direction = slope > 0 ? 'up' : slope < 0 ? 'down' : 'flat';
+  const strength = recent.length >= 4 ? 'major' : recent.length >= 3 ? 'confirmed' : 'fresh';
+
+  return {
+    side,
+    slope,
+    intercept,
+    direction,
+    strength,
+    touches: recent.length,
+    currentValue,
+    firstValue,
+    lastValue,
+    fitErrorPct,
+    active: true,
+    points: recent,
+  };
+}
+
 function findSupportResistance(candles, lookback = 20) {
   const swingWidth = 3; 
   const wickHighs = [];
@@ -49,23 +111,23 @@ function findSupportResistance(candles, lookback = 20) {
       if (currentBodyMin >= prevBodyMin || currentBodyMin >= nextBodyMin) isBodyLow = false;
     }
 
-    if (isWickHigh) wickHighs.push(candles[i].high);
-    if (isWickLow) wickLows.push(candles[i].low);
-    if (isBodyHigh) bodyHighs.push(currentBodyMax);
-    if (isBodyLow) bodyLows.push(currentBodyMin);
+    if (isWickHigh) wickHighs.push({ index: i, price: candles[i].high });
+    if (isWickLow) wickLows.push({ index: i, price: candles[i].low });
+    if (isBodyHigh) bodyHighs.push({ index: i, price: currentBodyMax });
+    if (isBodyLow) bodyLows.push({ index: i, price: currentBodyMin });
   }
 
   const currentPrice = candles[candles.length - 1].close;
 
   const clusterLevels = (levels, mode) => {
     if (!levels.length) return [];
-    const sorted = [...levels].sort((a, b) => a - b);
+    const sorted = [...levels].sort((a, b) => a.price - b.price);
     const clusters = [[sorted[0]]];
 
     for (let i = 1; i < sorted.length; i++) {
       const lastCluster = clusters[clusters.length - 1];
-      const clusterMean = lastCluster.reduce((s, v) => s + v, 0) / lastCluster.length;
-      if (Math.abs(sorted[i] - clusterMean) / clusterMean < 0.005) {
+      const clusterMean = lastCluster.reduce((s, v) => s + v.price, 0) / lastCluster.length;
+      if (Math.abs(sorted[i].price - clusterMean) / clusterMean < 0.005) {
         lastCluster.push(sorted[i]);
       } else {
         clusters.push([sorted[i]]);
@@ -74,14 +136,15 @@ function findSupportResistance(candles, lookback = 20) {
 
     return clusters.map((c) => {
         let price;
-        if (mode === 'MIN') price = Math.min(...c);
-        else if (mode === 'MAX') price = Math.max(...c);
-        else price = c.reduce((s, v) => s + v, 0) / c.length;
+        if (mode === 'MIN') price = Math.min(...c.map((v) => v.price));
+        else if (mode === 'MAX') price = Math.max(...c.map((v) => v.price));
+        else price = c.reduce((s, v) => s + v.price, 0) / c.length;
 
         return {
           price,
           touches: c.length,
           strength: c.length >= 4 ? 'major' : c.length >= 2 ? 'confirmed' : 'fresh',
+          points: c,
         };
     });
   };
@@ -102,6 +165,8 @@ function findSupportResistance(candles, lookback = 20) {
   const nearestWickResistance = findNearest(resistanceWick, 'RESISTANCE');
   const nearestBodySupport = findNearest(supportBody, 'SUPPORT');
   const nearestBodyResistance = findNearest(resistanceBody, 'RESISTANCE');
+  const trendSupport = buildTrendline(wickLows, candles.length - 1, 'support');
+  const trendResistance = buildTrendline(wickHighs, candles.length - 1, 'resistance');
 
   return {
     currentPrice,
@@ -120,6 +185,10 @@ function findSupportResistance(candles, lookback = 20) {
         resistance: nearestBodyResistance ? nearestBodyResistance.price : Infinity,
         resistanceTouches: nearestBodyResistance ? nearestBodyResistance.touches : 0,
         resistanceStrength: nearestBodyResistance ? nearestBodyResistance.strength : 'none',
+    },
+    trend: {
+      support: trendSupport,
+      resistance: trendResistance,
     },
     levels: {
       wickSupports: supportWick,

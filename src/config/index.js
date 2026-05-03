@@ -33,6 +33,13 @@ const config = {
     apiSecret: process.env.BYBIT_API_SECRET,
   },
 
+  futuresData: {
+    providerOrder: process.env.FUTURES_DATA_PROVIDER_ORDER || 'bitget,okx,kucoin,binance',
+    bitgetBaseUrl: process.env.BITGET_BASE_URL || 'https://api.bitget.com',
+    okxBaseUrl: process.env.OKX_BASE_URL || 'https://www.okx.com',
+    kucoinBaseUrl: process.env.KUCOIN_BASE_URL || 'https://api-futures.kucoin.com',
+  },
+
   scanner: {
     intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 3_600_000, // 1 hour
     topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 5,

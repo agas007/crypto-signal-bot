@@ -2,10 +2,8 @@ const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
 const { 
-  fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, fetchFundingRate, 
-  fetchFuturesBalance, fetchOHLCV, fetchExchangeSpecs, toFuturesSymbol,
-  fetchOpenInterest, fetchOpenInterestHistory, fetchGlobalLongShortRatio,
-  fetchTopTraderLongShortRatio, fetchOrderBookDepth, fetchLiquidationOrders,
+  fetchTopPairs, fetchMultiTimeframe, fetch24hTicker, 
+  fetchFuturesBalance, fetchOHLCV, fetchExchangeSpecs, primePublicProviderChain, toFuturesSymbol,
 } = require('../data/bybit');
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
@@ -46,6 +44,7 @@ async function runScanCycle() {
 
   // ─── 0. Fetch Real Balance & Exchange Specs ───
   // We fetch specs to ensure Lot Size (Step size) and Min Notional compliance
+  await primePublicProviderChain();
   const [balance, exchangeSpecs] = await Promise.all([
       fetchFuturesBalance(),
       fetchExchangeSpecs()
@@ -116,10 +115,7 @@ async function runScanCycle() {
       }
 
       // Fetch D1 candles for trend check (only D1 for pre-filter)
-      const d1Candles = await (async () => {
-        const { fetchOHLCV } = require('../data/bybit');
-        return fetchOHLCV(symbol, config.timeframes.D1, 50);
-      })();
+      const d1Candles = await fetchOHLCV(symbol, config.timeframes.D1, 50);
 
       if (!d1Candles.length) {
         errors++;
@@ -142,56 +138,21 @@ async function runScanCycle() {
         continue;
       }
 
-      // Passed filter → fetch multi-TF data + Funding Rate
+      // Passed filter → fetch multi-TF data for support/resistance + structure
       logger.info(`📊 ${symbol} passed pre-filters, fetching multi-TF data...`);
-      logAudit(symbol, 'PRE-FILTER', 'PASSED', 0, 'Liquid & Volatile');
+      logAudit(symbol, 'PRE-FILTER', 'PASSED', 0, 'Trend / support / resistance confirmed');
       const mtfData = await fetchMultiTimeframe(symbol);
-      const fundingRate = await fetchFundingRate(symbol);
       
       if (!mtfData) {
         errors++;
         continue;
       }
 
-      // ─── Market Microstructure Data (fetched in parallel, non-blocking) ───
-      logger.info(`🔬 ${symbol} fetching market microstructure data...`);
-      const [oiRes, oiHistRes, crowdRes, obRes] = await Promise.allSettled([
-        fetchOpenInterest(symbol),
-        fetchOpenInterestHistory(symbol, '1h', 12),
-        fetchGlobalLongShortRatio(symbol, '1h', 6),
-        fetchOrderBookDepth(symbol, 20),
-      ]);
-
-      const micro = {
-        oi:           oiRes.status === 'fulfilled'   ? oiRes.value   : null,
-        oiHistory:    oiHistRes.status === 'fulfilled' ? oiHistRes.value : [],
-        crowdRatio:   crowdRes.status === 'fulfilled' ? crowdRes.value : [],
-        orderBook:    obRes.status === 'fulfilled'   ? obRes.value   : null,
-        // Removed TopTrader & Liquidations as per request
-        topRatio:     [],
-        liquidations: [],
-      };
-
-      // Cleaner micro summary for audit log
-      const oiChg = micro.oiHistory.length >= 2
-        ? (((micro.oiHistory.at(-1).sumOpenInterest - micro.oiHistory[0].sumOpenInterest) / micro.oiHistory[0].sumOpenInterest) * 100).toFixed(1)
-        : null;
-      const crowdLatest = micro.crowdRatio.at(-1);
-      
-      let microLog = `🔬 Micro[${symbol}]: `;
-      if (oiChg !== null) microLog += `OI Δ${oiChg}% | `;
-      if (crowdLatest) microLog += `Crowd L/S: ${(crowdLatest.longAccount*100).toFixed(0)}/${(crowdLatest.shortAccount*100).toFixed(0)}% | `;
-      if (micro.orderBook) microLog += `OB: ${micro.orderBook.bias} (${(micro.orderBook.imbalance*100).toFixed(0)}%) | `;
-      
-      if (microLog.length > 20) logger.info(microLog);
-
       // Run strategy evaluation (includes hard kill-switches + R:R check)
       const futuresSym = toFuturesSymbol(symbol);
       const specs = exchangeSpecs[futuresSym] || { stepSize: 0.001, minNotional: 5.0 };
 
       const result = evaluateSignal(symbol, mtfData, { 
-          fundingRate,
-          micro,           // <-- full microstructure context
           accountBalance: effectiveBalance,
           stepSize: specs.stepSize,
           minNotional: specs.minNotional,

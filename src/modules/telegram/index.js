@@ -101,7 +101,7 @@ async function initTelegram() {
     const axios = require('axios');
 
     try {
-        await bot.sendMessage(chatId, '🛰️ *Testing connectivity to Binance...* ⏳', { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, '🛰️ *Testing connectivity to futures data providers...* ⏳', { parse_mode: 'Markdown' });
         
         let ipInfo = 'Unknown';
         try {
@@ -119,9 +119,9 @@ async function initTelegram() {
             `✅ *Connectivity:* Stable\n` +
             `⚡ *Latency:* \`${latency}ms\`\n` +
             `📍 *Outbound IP:* \`${ipInfo}\` (Singapore Cluster)\n\n` +
-            `💰 *Binance Balance:* \`${balance > 0 ? '$' + balance.toFixed(2) : 'No Permission / 0.00'}\`\n` +
-            `📊 *Market Access:* \`${pairs.length > 0 ? 'OK' : 'FAIL'}\`\n\n` +
-            `_Bot is successfully communicating with Binance API._`;
+            `💰 *Futures Balance:* \`${balance > 0 ? '$' + balance.toFixed(2) : 'No Permission / 0.00'}\`\n` +
+            `📊 *Provider Chain:* \`${pairs.length > 0 ? 'OK' : 'FAIL'}\`\n\n` +
+            `_Bot is successfully communicating with the configured futures market-data chain._`;
 
         await bot.sendMessage(chatId, msgText, { parse_mode: 'Markdown' });
     } catch (err) {
@@ -200,7 +200,7 @@ async function initTelegram() {
         [period, market] = [market, period]; // swap
     }
 
-    bot.sendMessage(msg.chat.id, `⌛ *Fetching Binance ${market.toUpperCase()} data...*\n_Analyzing trades and calling AI Coach..._`, { parse_mode: 'Markdown' });
+    bot.sendMessage(msg.chat.id, `⌛ *Fetching ${market.toUpperCase()} performance data...*\n_Analyzing trades and calling AI Coach..._`, { parse_mode: 'Markdown' });
 
     try {
       const stats = await binancePerformance.getPerformance(period, market);
@@ -253,7 +253,7 @@ async function initTelegram() {
                      `🎯 *Win Rate:* \`${stats.winRate}\`\n` +
                      `✅ *Wins:* ${stats.wins} | 🚨 *Losses:* ${stats.losses}\n\n` +
                      `🧠 *AI PERFORMANCE COACH:* \n${sanitizedAiReview}\n\n` +
-                     `_Note: Datasync is real-time via Binance API._`;
+                     `_Note: Datasync is real-time via the configured exchange API._`;
 
       bot.sendMessage(msg.chat.id, report, { parse_mode: 'Markdown' }).catch(err => {
           logger.error('Telegram Markdown Error (Retrying plain text):', err.message);
@@ -261,7 +261,7 @@ async function initTelegram() {
           bot.sendMessage(msg.chat.id, plainReport);
       });
     } catch (err) {
-      logger.error('Failed to generate Binance performance:', err.stack);
+      logger.error('Failed to generate performance report:', err.stack);
       bot.sendMessage(msg.chat.id, '❌ *Failed to fetch performance data.* \n\nCheck if your API keys are correct and your VPS is in a supported region (avoid US/UK). Error: ' + err.message, { parse_mode: 'Markdown' });
     }
   });

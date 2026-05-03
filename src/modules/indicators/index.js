@@ -2,7 +2,7 @@ const { analyzeTrend, classifyStrength, detectEma1321 } = require('./trend');
 const { calculateStochastic, detectStochCross, detectDivergence } = require('./stochastic');
 const { findSupportResistance } = require('./supportResistance');
 const { analyzeStructure, findSwingPoints } = require('./structure');
-const { calculateATR, detectAtSpike } = require('./volatility');
+const { calculateATR, detectAtSpike, detectCompression } = require('./volatility');
 const { detectRetest } = require('./retest');
 const { detectOrderBlocks } = require('./orderBlock');
 
@@ -22,6 +22,7 @@ module.exports = {
   // Other
   calculateATR,
   detectAtSpike,
+  detectCompression,
   detectRetest,
   // Order Block
   detectOrderBlocks,
