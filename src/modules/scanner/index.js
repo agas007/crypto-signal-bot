@@ -12,6 +12,7 @@ const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../../utils/discord');
 const { generateChartImage } = require('../chart');
 const tracker = require('../tracker');
+const { claimSignalDedupe, getSignalCandleTime, releaseSignalDedupe } = require('../../utils/signal_dedupe');
 const { logAudit, initAudit } = require('../../utils/audit');
 
 /**
@@ -364,22 +365,29 @@ async function runScanCycle() {
       }
 
       // ─── Live Confirmation Engine ───
-      // Cek ulang kondisi harga beberapa saat sebelum dikirim (Anti-Fakeout)
-      logger.info(`⏳ [Live Confirmation] Memantau pergerakan harga ${candidate.symbol} selama 3 menit...`);
-      
-      await sleep(3 * 60 * 1000); // Wait 3 minutes
-
+      // Serverless mode skips the 3m wait to keep the request bounded.
+      const skipLiveConfirmation = process.env.SKIP_LIVE_CONFIRMATION === '1';
       const latestTicker = await fetch24hTicker(candidate.symbol);
       const currentPriceLive = latestTicker ? parseFloat(latestTicker.lastPrice) : refined.entry;
-      
-      // Hitung slippage/pergeseran dari entry AI
-      const slippage = Math.abs(currentPriceLive - refined.entry) / refined.entry;
-      
-      // FIX: 0.5% dalam 3 menit adalah volatilitas abnormal (news/fakeout). Reject!
-      if (slippage > 0.005) {
-          logger.warn(`🚫 [Live Confirmation Failed] ${candidate.symbol} price slipped ${(slippage*100).toFixed(2)}% during 3m window.`);
-          logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED', refined.confidence, `Price slipped ${(slippage*100).toFixed(1)}% in 3 mins.`);
-          continue;
+
+      if (!skipLiveConfirmation) {
+        // Cek ulang kondisi harga beberapa saat sebelum dikirim (Anti-Fakeout)
+        logger.info(`⏳ [Live Confirmation] Memantau pergerakan harga ${candidate.symbol} selama 3 menit...`);
+
+        await sleep(3 * 60 * 1000); // Wait 3 minutes
+
+        const recheckTicker = await fetch24hTicker(candidate.symbol);
+        const recheckPrice = recheckTicker ? parseFloat(recheckTicker.lastPrice) : refined.entry;
+
+        // Hitung slippage/pergeseran dari entry AI
+        const slippage = Math.abs(recheckPrice - refined.entry) / refined.entry;
+
+        // FIX: 0.5% dalam 3 menit adalah volatilitas abnormal (news/fakeout). Reject!
+        if (slippage > 0.005) {
+            logger.warn(`🚫 [Live Confirmation Failed] ${candidate.symbol} price slipped ${(slippage*100).toFixed(2)}% during 3m window.`);
+            logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED', refined.confidence, `Price slipped ${(slippage*100).toFixed(1)}% in 3 mins.`);
+            continue;
+        }
       }
 
       // FIX 1: Refresh data entry karena candle H1 sudah 'stale', apalagi setelah kena delay 3 menit Live Confirm
@@ -412,10 +420,40 @@ async function runScanCycle() {
       refined.stop_loss = freshRR.sl;
       refined.take_profit = freshRR.tp;
 
+      const signalTimeframe = config.timeframes.H1 || '1h';
+      const signalCandleTime = getSignalCandleTime({
+        ...refined,
+        candles: refined.candles || candidate.candles,
+      });
+      const signalForDedupe = {
+        ...refined,
+        timeframe: refined.timeframe || signalTimeframe,
+        candleTime: signalCandleTime,
+        candles: refined.candles || candidate.candles,
+      };
+      const dedupeKeyResult = await claimSignalDedupe(signalForDedupe, { ttlSeconds: 7 * 24 * 60 * 60 });
+
+      if (dedupeKeyResult.ok && dedupeKeyResult.deduped) {
+        logger.info(`♻️ ${candidate.symbol}: duplicate signal on same candle, skipping Discord send.`);
+        logAudit(candidate.symbol, 'AI', 'SKIPPED', refined.confidence, 'Duplicate signal for same candle.');
+        continue;
+      }
+
+      if (!dedupeKeyResult.ok) {
+        logger.warn(`⚠️ ${candidate.symbol}: dedupe unavailable (${dedupeKeyResult.reason || 'unknown'}), sending signal without Redis guard.`);
+      }
+
       // ─── 1. Send Text Instan ───
       logAudit(candidate.symbol, 'AI', 'APPROVED', refined.confidence, `${isUpdate ? 'Update signal sent' : 'Fresh signal sent'} to Telegram.`);
       refined.freshness = Math.round((Date.now() - startTime) / 1000);
-      await sendSignal(refined, null); 
+      refined.timeframe = refined.timeframe || signalTimeframe;
+      refined.candleTime = signalCandleTime;
+      const delivered = await sendSignal(refined, null); 
+      if (!delivered) {
+        await releaseSignalDedupe(dedupeKeyResult.key).catch(() => {});
+        logger.warn(`⚠️ ${candidate.symbol}: Discord delivery failed, dedupe key released for retry.`);
+        continue;
+      }
       tracker.track(refined);
       sentCount++;
 

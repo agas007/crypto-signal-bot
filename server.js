@@ -3,6 +3,7 @@ const next = require('next');
 const logger = require('./src/utils/logger');
 const { startScanner } = require('./src/modules/scanner');
 const { initTelegram } = require('./src/modules/telegram');
+const enableLegacyScanner = process.env.ENABLE_LEGACY_SCANNER === '1';
 
 // Configure Next.js
 const dev = process.env.NODE_ENV !== 'production';
@@ -39,14 +40,18 @@ app.prepare().then(() => {
       console.log('✅ Dashboard directory found.');
     }
 
-    // Start Bot Backend Services safely in the background
-    try {
-      console.log('🤖 Initializing Telegram & Scanner...');
-      await initTelegram();
-      startScanner();
-      console.log('✅ Background services (Telegram & Scanner) are now active.');
-    } catch (err) {
-      console.error('❌ ERROR: Failed to start background services:', err);
+    if (enableLegacyScanner) {
+      // Start Bot Backend Services safely in the background
+      try {
+        console.log('🤖 Initializing Telegram & Scanner...');
+        await initTelegram();
+        startScanner();
+        console.log('✅ Background services (Telegram & Scanner) are now active.');
+      } catch (err) {
+        console.error('❌ ERROR: Failed to start background services:', err);
+      }
+    } else {
+      console.log('🟦 Legacy scanner disabled. Use /api/check-signal for one-shot serverless runs.');
     }
 
     // Graceful Shutdown for Railway

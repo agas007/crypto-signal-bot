@@ -2,15 +2,15 @@
  * Discord Webhook sender — replaces Telegram sendSignal/sendStatus.
  *
  * Env vars required:
- *   DISCORD_SIGNAL_WEBHOOK_URL  - for trade signals (can be same as status)
+ *   DISCORD_WEBHOOK_URL or DISCORD_SIGNAL_WEBHOOK_URL - for trade signals (can be same as status)
  *   DISCORD_STATUS_WEBHOOK_URL  - for status/info messages (optional, falls back to SIGNAL)
  */
 
 const fs = require('fs');
 const logger = require('./logger');
 
-const SIGNAL_WEBHOOK = process.env.DISCORD_SIGNAL_WEBHOOK_URL;
-const STATUS_WEBHOOK = process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL;
+const SIGNAL_WEBHOOK = process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL;
+const STATUS_WEBHOOK = process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -150,7 +150,7 @@ async function sendSignal(signal, imagePath = null) {
           content: `📊 **Chart Confirmation: ${signal.symbol}** — sinyal sudah masuk, ini chart pendukungnya.`,
         }, imagePath);
       }
-      return;
+      return true;
     }
 
     const embed = buildSignalEmbed(signal);
@@ -170,6 +170,7 @@ async function sendSignal(signal, imagePath = null) {
     }
 
     logger.info(`📨 Signal sent to Discord: ${signal.symbol}`);
+    return true;
   } catch (err) {
     logger.error(`[Discord] sendSignal(${signal.symbol}) failed: ${err.message}`);
     // Fallback: plain text
@@ -177,7 +178,9 @@ async function sendSignal(signal, imagePath = null) {
       await postWebhook(STATUS_WEBHOOK, {
         content: `🚨 **${signal.symbol} ${signal.bias}** | Entry: \`${signal.entry}\` | TP: \`${signal.take_profit}\` | SL: \`${signal.stop_loss}\``,
       });
+      return true;
     } catch (_) { /* ignore */ }
+    return false;
   }
 }
 

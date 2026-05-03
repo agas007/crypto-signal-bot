@@ -23,8 +23,9 @@ const config = {
   },
 
   discord: {
-    signalWebhookUrl: process.env.DISCORD_SIGNAL_WEBHOOK_URL,
-    statusWebhookUrl: process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
+    webhookUrl: process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
+    signalWebhookUrl: process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
+    statusWebhookUrl: process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
   },
 
   bybit: {
@@ -93,7 +94,7 @@ const required = [
 ];
 
 // Discord webhook is required UNLESS Telegram is configured (backward compat)
-const hasDiscord   = !!config.discord.signalWebhookUrl;
+const hasDiscord   = !!(config.discord.webhookUrl || config.discord.signalWebhookUrl);
 const hasTelegram  = !!(config.telegram.botToken && config.telegram.chatId);
 if (!hasDiscord && !hasTelegram) {
   required.push(['discord.signalWebhookUrl OR telegram.botToken+chatId', null]);

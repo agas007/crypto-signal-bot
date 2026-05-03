@@ -1,153 +1,184 @@
-# 🤖 Crypto Signal Bot
+# Crypto Signal Bot
 
-A modular crypto trading signal bot that scans Binance pairs, applies multi-timeframe technical analysis, refines signals with AI (OpenRouter), and delivers them to Telegram.
+Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama tetap dipertahankan. Repo ini sekarang punya jalur serverless untuk satu kali scan per request, cocok dipanggil cron eksternal seperti `cron-job.org`.
 
-## Architecture
+## Deteksi Tech Stack
 
-```
-Binance API → Data Module → Filter → Strategy → AI Refinement → Telegram
-                 │              │        │            │
-              OHLCV D1       Volume    EMA Cross   OpenRouter
-              OHLCV H4       ATR %     Stochastic  JSON Output
-              OHLCV M15      Trend     S/R Levels
-```
+- Runtime utama: **Node.js / JavaScript**
+- Web layer: **Express** di root `server.js`
+- Dashboard: **Next.js App Router** di `dashboard/`
+- Package manager: **npm**
+- Entry point legacy: `server.js`
+- Entry point CLI one-shot: `src/run_once.js`
+- Entry point serverless: `dashboard/src/app/api/check-signal/route.ts`
+- Scheduler lama GitHub Actions: `.github/workflows/cron.yml` sudah dihapus
+- Strategy: `src/modules/strategy/index.js`
+- Signal generator / orchestrator: `src/modules/scanner/index.js`
+- Discord notifier: `src/utils/discord.js`
 
-## Project Structure
+## Arsitektur Baru
 
-```
-crypto-signal-bot/
-├── .env.example            # Environment template
-├── package.json
-├── README.md
-└── src/
-    ├── index.js             # Entry point
-    ├── config/
-    │   └── index.js         # Centralized config + validation
-    ├── modules/
-    │   ├── data/
-    │   │   └── binance.js   # OHLCV, ticker, top pairs
-    │   ├── indicators/
-    │   │   ├── index.js     # Barrel export
-    │   │   ├── trend.js     # EMA crossover + HH/LL
-    │   │   ├── stochastic.js# %K / %D oscillator
-    │   │   └── supportResistance.js  # Swing H/L with clustering
-    │   ├── strategy/
-    │   │   └── index.js     # Multi-TF signal scoring
-    │   ├── ai/
-    │   │   └── openrouter.js# AI refinement with strict JSON
-    │   ├── filter/
-    │   │   └── index.js     # Volume, ATR, trend pre-filter
-    │   ├── scanner/
-    │   │   └── index.js     # Orchestrator loop
-    │   └── telegram/
-    │       └── index.js     # Message formatting + send
-    └── utils/
-        ├── logger.js        # Leveled logging
-        └── sleep.js         # Rate limit helper
-```
+### Lama
 
-## Setup
+- GitHub Actions menjalankan scanner tiap jam.
+- Process legacy bisa hidup lama dengan `setInterval`.
+- Discord dikirim dari proses background yang selalu aktif.
 
-### 1. Install dependencies
+### Baru
+
+- `cron-job.org` memanggil endpoint `GET /api/check-signal` setiap 1 jam.
+- Endpoint menjalankan scan **sekali saja** lalu selesai dalam satu HTTP request.
+- Redis Upstash dipakai untuk dedupe signal baru.
+- Discord alert dikirim via **Discord Webhook**.
+
+### Alur
+
+1. Cron hit `/api/check-signal`
+2. Endpoint validasi `CRON_SECRET`
+3. Config existing diload
+4. Scanner jalan sekali
+5. Signal yang lolos dicek ke Upstash Redis
+6. Kalau signal belum pernah dikirim untuk candle itu, alert dikirim ke Discord
+7. JSON status dikembalikan ke caller
+
+## File Penting
+
+- `dashboard/src/app/api/check-signal/route.ts` - serverless endpoint
+- `src/services/run_signal_check.js` - wrapper one-shot reusable
+- `src/modules/scanner/index.js` - core scan logic
+- `src/modules/strategy/index.js` - strategy existing
+- `src/utils/discord.js` - Discord webhook formatter/sender
+- `src/utils/signal_dedupe.js` - Upstash dedupe helper
+
+## Environment Variables
+
+### Wajib untuk endpoint
+
+| Variable | Kegunaan |
+|---|---|
+| `CRON_SECRET` | Secret untuk validasi request cron |
+| `DISCORD_WEBHOOK_URL` | Webhook Discord utama |
+| `UPSTASH_REDIS_REST_URL` | URL REST Upstash Redis |
+| `UPSTASH_REDIS_REST_TOKEN` | Token Upstash Redis |
+| `OPENROUTER_API_KEY` | AI validator / refinement |
+
+### Existing env yang tetap dipakai
+
+| Variable | Kegunaan |
+|---|---|
+| `OPENROUTER_MODEL` | Model OpenRouter |
+| `BYBIT_API_KEY` / `BYBIT_API_SECRET` | Private balance/trade data bila dipakai |
+| `BYBIT_BASE_URLS` / `BYBIT_BASE_URL` | Fallback Bybit |
+| `FUTURES_DATA_PROVIDER_ORDER` | Urutan provider market data futures |
+| `FUTURES_DATA_ENABLE_HYPERLIQUID` | Toggle provider |
+| `FUTURES_DATA_ENABLE_BINANCE_FALLBACK` | Fallback Binance futures |
+| `ACCOUNT_BALANCE` | Basis risk existing |
+| `MIN_RR_RATIO` | Minimum risk/reward existing |
+| `MAX_PAIRS` | Batas pair scan existing |
+| `SCAN_INTERVAL_MS` | Tetap ada sebagai config, tapi tidak dipakai untuk scheduler serverless |
+| `LOG_LEVEL` | Level log |
+
+### Legacy runtime optional
+
+| Variable | Kegunaan |
+|---|---|
+| `ENABLE_LEGACY_SCANNER=1` | Mengaktifkan runtime long-running lokal lama |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Hanya untuk mode legacy lama |
+
+## Install
 
 ```bash
-cd crypto-signal-bot
 npm install
 ```
 
-### 2. Configure environment
+## Jalankan Lokal
+
+### Legacy web runtime
 
 ```bash
-cp .env.example .env
-```
-
-Edit `.env` with your credentials:
-
-| Variable | Description |
-|---|---|
-| `BINANCE_BASE_URL` | Binance API base URL (default: `https://api.binance.com`) |
-| `OPENROUTER_API_KEY` | Your OpenRouter API key |
-| `OPENROUTER_MODEL` | AI model to use (default: `google/gemini-3-flash-preview`) |
-| `TELEGRAM_BOT_TOKEN` | Telegram bot token from [@BotFather](https://t.me/BotFather) |
-| `TELEGRAM_CHAT_ID` | Target chat/group ID |
-| `SCAN_INTERVAL_MS` | Scan interval in ms (default: `900000` = 15 min) |
-| `TOP_SIGNALS_TO_AI` | Max signals to send to AI per cycle (default: `3`) |
-| `MAX_PAIRS` | Max pairs to scan (default: `30`) |
-| `LOG_LEVEL` | Logging level: `error`, `warn`, `info`, `debug` |
-
-### 3. Run
-
-```bash
-# Production
 npm start
-
-# Development (auto-restart on changes)
-npm run dev
 ```
 
-## Signal Flow
+Default sekarang legacy scanner tidak jalan. Set `ENABLE_LEGACY_SCANNER=1` kalau memang mau mode lama yang persistent.
 
-1. **Fetch** top 30 USDT pairs from Binance by 24h volume
-2. **Filter** out pairs with low volume, low volatility, or no clear trend
-3. **Analyze** each passing pair across D1, H4, M15 timeframes:
-   - D1: Overall trend direction (EMA crossover)
-   - H4: Support/resistance proximity + Stochastic
-   - M15: Entry confirmation trend
-4. **Score** candidates (0–100) based on how many conditions align
-5. **Send top 3** to OpenRouter AI for refined entry/SL/TP
-6. **Deliver** high-confidence signals (≥60%) to Telegram
+### One-shot manual
 
-## Strategy Rules
-
-### LONG Setup (score 100 = all 4 conditions met)
-| Condition | Timeframe | Weight |
-|---|---|---|
-| Bullish trend | D1 | 25 |
-| Near support | H4 | 25 |
-| Stochastic oversold | H4 | 25 |
-| Bullish confirmation | M15 | 25 |
-
-### SHORT Setup
-| Condition | Timeframe | Weight |
-|---|---|---|
-| Bearish trend | D1 | 25 |
-| Near resistance | H4 | 25 |
-| Stochastic overbought | H4 | 25 |
-| Bearish confirmation | M15 | 25 |
-
-Minimum score of **75** (3/4 conditions) required to become a candidate.
-
-## Telegram Output
-
-```
-🚨 TRADE SIGNAL
-
-🟢 BTCUSDT
-━━━━━━━━━━━━━━━━━━━
-
-📊 Bias: LONG
-🎯 Confidence: 75% ████████░░
-
-💰 Entry: 67500.00
-🛑 Stop Loss: 66800.00
-✅ Take Profit: 69600.00
-📐 R:R Ratio: 3.00
-
-💬 Reason:
-D1 bullish with strong EMA crossover...
-
-⏰ Mon, 30 Mar 2026 14:00:00 GMT
-━━━━━━━━━━━━━━━━━━━
-⚠️ Not financial advice. DYOR.
+```bash
+node src/run_once.js
 ```
 
-## Extending
+## Deploy ke Vercel
 
-- **Add indicators**: Create a new file in `src/modules/indicators/`, export from `index.js`
-- **Add strategy rules**: Modify scoring logic in `src/modules/strategy/index.js`
-- **Change AI model**: Update `OPENROUTER_MODEL` in `.env`
-- **Add exchanges**: Create new data module following `binance.js` pattern
+Repo ini paling cocok dipisah per target:
 
-## License
+1. **Dashboard Next.js**: deploy folder `dashboard/` sebagai project Vercel terpisah dan expose `app/api/check-signal/route.ts`
+2. **Root Node app**: tetap dipakai hanya untuk legacy/local runtime kalau memang dibutuhkan
 
-MIT
+Langkah endpoint:
+
+1. Import repo ke Vercel
+2. Set env vars di atas
+3. Pastikan `CRON_SECRET`, Redis, OpenRouter, dan Discord webhook terisi
+4. Deploy
+
+Kalau hanya butuh endpoint cron, deploy `dashboard/` sudah cukup.
+
+## Setup cron-job.org
+
+1. Buat job baru di cron-job.org
+2. URL:
+   - `https://<dashboard-vercel-domain>/api/check-signal`
+3. Method:
+   - `GET` atau `POST`
+4. Header:
+   - `Authorization: Bearer <CRON_SECRET>`
+5. Schedule:
+   - `5 * * * *`
+
+Kenapa `5 * * * *`:
+
+- Candle 1H sudah close dulu sebelum dicek
+- Mengurangi risiko baca candle yang belum final
+
+## Contoh Request Manual
+
+```bash
+curl -X GET "https://<domain>/api/check-signal" \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+Atau pakai query param:
+
+```bash
+curl "https://<domain>/api/check-signal?secret=$CRON_SECRET"
+```
+
+## Contoh Response
+
+```json
+{
+  "ok": true,
+  "status": "SIGNALS_SENT",
+  "signalCount": 1,
+  "durationMs": 12345,
+  "report": {
+    "status": "SIGNALS_SENT"
+  }
+}
+```
+
+## Test Manual
+
+1. Request tanpa secret harus `401`
+2. Request dengan secret valid dan tanpa signal harus tetap `200` dengan JSON valid
+3. Kalau signal baru muncul, Discord harus menerima 1 pesan
+4. Request ulang untuk candle yang sama harus kena dedupe Redis
+
+## Catatan Arsitektur
+
+- Trading strategy, indikator, TP/SL, risk management, pair/watchlist, dan format signal existing tidak diubah kecuali kebutuhan transport.
+- Dedupe key:
+  - `signal:{symbol}:{timeframe}:{side}:{candleTime}`
+- TTL dedupe:
+  - 7 hari
+- Discord sekarang menggunakan webhook, bukan bot process yang harus online 24/7.
