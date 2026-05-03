@@ -176,13 +176,14 @@ Kalau hanya butuh endpoint cron, deploy `dashboard/` sudah cukup.
 
 ## Setup /scan-now
 
-`/scan-now` tidak menjalankan scanner langsung di interaction handler. Command ini hanya menembak endpoint check-signal yang sama dengan cron.
+`/scan-now` tidak menjalankan scanner langsung di interaction handler. Command ini hanya menembak endpoint check-signal yang sama dengan cron, lalu balas cepat bahwa request sudah masuk antrian.
 
 Set ini di Vercel project `dashboard/`:
 
 - `CRON_SECRET` - cukup satu kali, dipakai oleh cron-job.org dan `/scan-now`
 - `CHECK_SIGNAL_URL` - URL public endpoint scan, contoh:
   - `https://crypto-signal-bot-blush.vercel.app/api/check-signal`
+- `SCAN_TRIGGER_TIMEOUT_MS` - batas tunggu trigger Discord sebelum request dibatalkan, default `15000`
 
 Kalau `CHECK_SIGNAL_URL` tidak diisi, command akan coba pakai `VERCEL_PROJECT_PRODUCTION_URL` atau `VERCEL_URL`.
 

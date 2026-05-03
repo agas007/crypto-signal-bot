@@ -52,7 +52,10 @@ function getCheckSignalUrl() {
   return `${normalized.replace(/\/+$/, '')}/api/check-signal`;
 }
 
-async function triggerRemoteScan() {
+async function triggerRemoteScan(options = {}) {
+  const timeoutMs = Number(
+    options.timeoutMs ?? process.env.SCAN_TRIGGER_TIMEOUT_MS ?? 15000
+  );
   const targetUrl = getCheckSignalUrl();
   const cronSecret = process.env.CRON_SECRET || process.env.CHECK_SIGNAL_SECRET;
 
@@ -68,8 +71,9 @@ async function triggerRemoteScan() {
   url.searchParams.set('secret', cronSecret);
 
   const controller = new AbortController();
-  const timeoutMs = Number(process.env.SCAN_TRIGGER_TIMEOUT_MS || 2500);
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutId = Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
 
   try {
     const res = await fetch(url.toString(), {
@@ -90,7 +94,7 @@ async function triggerRemoteScan() {
       body: text,
     };
   } finally {
-    clearTimeout(timeoutId);
+    if (timeoutId) clearTimeout(timeoutId);
   }
 }
 
@@ -311,17 +315,22 @@ async function handleInteraction(interaction, context = {}) {
   if (commandName === 'scan-now') {
     const logger = context.logger || console;
     try {
-      const result = await triggerRemoteScan();
-      const summary = result.ok
-        ? `✅ Scan request sent (${result.status})`
-        : `⚠️ Scan request returned ${result.status}`;
-
-      const extra = result.ok
-        ? 'Hasil alert akan muncul di channel Discord lewat webhook biasa.'
-        : `Response: ${truncate(result.body || '(empty)', 500)}`;
+      void triggerRemoteScan()
+        .then((result) => {
+          const summary = result.ok
+            ? `✅ Scan request sent (${result.status})`
+            : `⚠️ Scan request returned ${result.status}`;
+          logger.info?.(`[discord/scan-now] ${summary}`);
+          if (!result.ok) {
+            logger.warn?.(`[discord/scan-now] Response: ${truncate(result.body || '(empty)', 500)}`);
+          }
+        })
+        .catch((err) => {
+          logger.error?.(`[discord/scan-now] triggerRemoteScan failed: ${err.message}`);
+        });
 
       return buildInteractionResponse(
-        `${summary}\n${extra}`,
+        '✅ Scan request queued. Hasil final akan muncul lewat webhook.',
         { ephemeral: true }
       );
     } catch (err) {

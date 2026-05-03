@@ -117,6 +117,7 @@ async function maybeSendDiscordNotifications(report) {
 
   const dashboardState = tracker.getDashboardState ? tracker.getDashboardState() : {};
   const todayKey = getJakartaDateKey();
+  const lastSummaryDate = dashboardState.lastDailySummaryDate || '';
   const summaryFingerprint = [
     report.status || 'UNKNOWN',
     report.signalCount || 0,
@@ -149,7 +150,6 @@ async function maybeSendDiscordNotifications(report) {
     }
   }
 
-  const lastSummaryDate = dashboardState.lastDailySummaryDate || '';
   if (lastSummaryDate !== todayKey) {
     await sendStatus(buildDailySummary(report));
     tracker.setDashboardState({
