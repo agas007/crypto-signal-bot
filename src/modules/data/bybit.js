@@ -13,10 +13,15 @@ const crypto = require('crypto');
 const config = require('../../config');
 const logger = require('../../utils/logger');
 const sleep = require('../../utils/sleep');
+const binanceData = require('./binance');
 
 const BASE_URL = process.env.BYBIT_BASE_URL || 'https://api.bybit.com';
 const API_KEY = process.env.BYBIT_API_KEY || config.bybit?.apiKey;
 const API_SECRET = process.env.BYBIT_API_SECRET || config.bybit?.apiSecret;
+const DISABLE_PUBLIC_BYBIT = process.env.BYBIT_DISABLE_PUBLIC === '1';
+
+let publicBybitBlocked = DISABLE_PUBLIC_BYBIT;
+let publicBybitBlockLogged = false;
 
 // ─── Interval Mapping: Binance format → Bybit format ────────────────────────
 const INTERVAL_MAP = {
@@ -47,6 +52,46 @@ function toFuturesSymbol(symbol) {
   return SYMBOL_MAP[sym] || sym;
 }
 
+function isBybitGeoBlockedError(err) {
+  const status = err?.response?.status;
+  const payload = err?.response?.data;
+  const body = typeof payload === 'string' ? payload : JSON.stringify(payload || {});
+  const message = `${err?.message || ''} ${body}`.toLowerCase();
+
+  return status === 403 || status === 451 || message.includes('block access from your country');
+}
+
+function markPublicBybitBlocked(err, path) {
+  publicBybitBlocked = true;
+  if (!publicBybitBlockLogged) {
+    publicBybitBlockLogged = true;
+    const status = err?.response?.status || 'N/A';
+    logger.warn(
+      `🛑 Bybit public endpoints blocked (${status}) on ${path}. Falling back to Binance market data for public requests.`
+    );
+  }
+}
+
+function shouldUseBinanceFallback() {
+  return publicBybitBlocked;
+}
+
+async function withPublicFallback(path, fetchBybit, fetchBinance) {
+  if (shouldUseBinanceFallback()) {
+    return fetchBinance();
+  }
+
+  try {
+    return await fetchBybit();
+  } catch (err) {
+    if (isBybitGeoBlockedError(err)) {
+      markPublicBybitBlocked(err, path);
+      return fetchBinance();
+    }
+    throw err;
+  }
+}
+
 // ─── Request helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -64,6 +109,9 @@ async function bybitGet(path, params = {}) {
     }
     return data.result;
   } catch (err) {
+    if (isBybitGeoBlockedError(err)) {
+      throw err;
+    }
     if (err.response) {
       logger.error(`❌ Bybit API Error (${path}): ${err.response.status} ${JSON.stringify(err.response.data)}`);
     } else {
@@ -108,6 +156,9 @@ async function bybitGetSigned(path, params = {}) {
     }
     return data.result;
   } catch (err) {
+    if (isBybitGeoBlockedError(err)) {
+      throw err;
+    }
     if (err.response) {
       logger.error(`❌ Bybit Private API Error (${path}): ${err.response.status} ${JSON.stringify(err.response.data)}`);
     } else {
@@ -124,7 +175,7 @@ async function bybitGetSigned(path, params = {}) {
  * Bybit returns newest-first → reversed to oldest-first (matching Binance behavior).
  */
 async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
-  try {
+  return withPublicFallback('/v5/market/kline', async () => {
     const futuresSymbol = toFuturesSymbol(symbol);
     const bybitInterval = toBybitInterval(interval);
     const params = { category: 'linear', symbol: futuresSymbol, interval: bybitInterval, limit };
@@ -163,10 +214,7 @@ async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
       low: parseFloat(c[3]), close: parseFloat(c[4]), volume: parseFloat(c[5]),
       closeTime: parseInt(c[0]) + 60000, quoteVolume: parseFloat(c[6] || 0),
     }));
-  } catch (err) {
-    logger.error(`❌ Failed to fetch ${symbol} ${interval}:`, err.message);
-    return [];
-  }
+  }, () => binanceData.fetchOHLCV(symbol, interval, limit, options));
 }
 
 /**
@@ -187,7 +235,7 @@ async function fetchMultiTimeframe(symbol) {
  * Fetch top USDT perpetual pairs sorted by 24h turnover.
  */
 async function fetchTopPairs(limit = config.scanner.maxPairs) {
-  try {
+  return withPublicFallback('/v5/market/tickers', async () => {
     const result = await bybitGet('/v5/market/tickers', { category: 'linear' });
     if (!result?.list) return [];
 
@@ -196,17 +244,14 @@ async function fetchTopPairs(limit = config.scanner.maxPairs) {
       .sort((a, b) => parseFloat(b.turnover24h) - parseFloat(a.turnover24h))
       .slice(0, limit)
       .map(t => t.symbol);
-  } catch (err) {
-    logger.error('Failed to fetch top pairs:', err.message);
-    return [];
-  }
+  }, () => binanceData.fetchTopPairs(limit));
 }
 
 /**
  * Fetch 24h ticker stats for a single symbol.
  */
 async function fetch24hTicker(symbol) {
-  try {
+  return withPublicFallback('/v5/market/tickers', async () => {
     const futuresSymbol = toFuturesSymbol(symbol);
     const result = await bybitGet('/v5/market/tickers', { category: 'linear', symbol: futuresSymbol });
     const t = result?.list?.[0];
@@ -218,32 +263,26 @@ async function fetch24hTicker(symbol) {
       quoteVolume:        parseFloat(t.turnover24h),
       lastPrice:          parseFloat(t.lastPrice),
     };
-  } catch (err) {
-    logger.error(`Failed to fetch ticker for ${symbol}:`, err.message);
-    return null;
-  }
+  }, () => binanceData.fetch24hTicker(symbol));
 }
 
 /**
  * Fetch current funding rate for a linear perpetual symbol.
  */
 async function fetchFundingRate(symbol) {
-  try {
+  return withPublicFallback('/v5/market/tickers', async () => {
     const futuresSymbol = toFuturesSymbol(symbol);
     const result = await bybitGet('/v5/market/tickers', { category: 'linear', symbol: futuresSymbol });
     const t = result?.list?.[0];
     return t ? parseFloat(t.fundingRate) : 0;
-  } catch (err) {
-    logger.debug(`fetchFundingRate(${symbol}): ${err.message}`);
-    return null;
-  }
+  }, () => binanceData.fetchFundingRate(symbol));
 }
 
 /**
  * Fetch current Open Interest.
  */
 async function fetchOpenInterest(symbol) {
-  try {
+  return withPublicFallback('/v5/market/open-interest', async () => {
     const futuresSymbol = toFuturesSymbol(symbol);
     const result = await bybitGet('/v5/market/open-interest', {
       category: 'linear', symbol: futuresSymbol, intervalTime: '1h', limit: 1,
@@ -251,17 +290,14 @@ async function fetchOpenInterest(symbol) {
     const item = result?.list?.[0];
     if (!item) return null;
     return { symbol: futuresSymbol, openInterest: parseFloat(item.openInterest) };
-  } catch (err) {
-    logger.debug(`fetchOpenInterest(${symbol}): ${err.message}`);
-    return null;
-  }
+  }, () => binanceData.fetchOpenInterest(symbol));
 }
 
 /**
  * Fetch historical Open Interest (oldest-first).
  */
 async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
-  try {
+  return withPublicFallback('/v5/market/open-interest', async () => {
     const futuresSymbol = toFuturesSymbol(symbol);
     const result = await bybitGet('/v5/market/open-interest', {
       category: 'linear', symbol: futuresSymbol, intervalTime: period, limit,
@@ -272,10 +308,7 @@ async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
       sumOpenInterest:     parseFloat(d.openInterest),
       sumOpenInterestValue: parseFloat(d.openInterestValue || 0),
     }));
-  } catch (err) {
-    logger.debug(`fetchOpenInterestHistory(${symbol}): ${err.message}`);
-    return [];
-  }
+  }, () => binanceData.fetchOpenInterestHistory(symbol, period, limit));
 }
 
 /**
@@ -284,7 +317,7 @@ async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
  *       fetchTopTraderLongShortRatio is aliased to this function.
  */
 async function fetchGlobalLongShortRatio(symbol, period = '1h', limit = 6) {
-  try {
+  return withPublicFallback('/v5/market/account-ratio', async () => {
     const futuresSymbol = toFuturesSymbol(symbol);
     // Bybit period format: 5min, 15min, 30min, 1h, 4h, 1d
     const bybitPeriod = period.replace('m', 'min');
@@ -298,10 +331,7 @@ async function fetchGlobalLongShortRatio(symbol, period = '1h', limit = 6) {
       longAccount:    parseFloat(d.buyRatio),
       shortAccount:   parseFloat(d.sellRatio),
     }));
-  } catch (err) {
-    logger.debug(`fetchGlobalLongShortRatio(${symbol}): ${err.message}`);
-    return [];
-  }
+  }, () => binanceData.fetchGlobalLongShortRatio(symbol, period, limit));
 }
 
 /**
@@ -316,7 +346,7 @@ async function fetchTopTraderLongShortRatio(symbol, period = '1h', limit = 6) {
  * Fetch L2 order book and compute bid/ask imbalance.
  */
 async function fetchOrderBookDepth(symbol, limit = 20) {
-  try {
+  return withPublicFallback('/v5/market/orderbook', async () => {
     const futuresSymbol = toFuturesSymbol(symbol);
     const result = await bybitGet('/v5/market/orderbook', {
       category: 'linear', symbol: futuresSymbol, limit,
@@ -329,17 +359,14 @@ async function fetchOrderBookDepth(symbol, limit = 20) {
     const imbalance = total > 0 ? (bidVolume - askVolume) / total : 0;
     const bias = imbalance > 0.1 ? 'BUY' : imbalance < -0.1 ? 'SELL' : 'NEUTRAL';
     return { bidVolume, askVolume, imbalance, bias };
-  } catch (err) {
-    logger.debug(`fetchOrderBookDepth(${symbol}): ${err.message}`);
-    return null;
-  }
+  }, () => binanceData.fetchOrderBookDepth(symbol, limit));
 }
 
 /**
  * Fetch recent liquidation orders.
  */
 async function fetchLiquidationOrders(symbol, limit = 50) {
-  try {
+  return withPublicFallback('/v5/market/liquidation', async () => {
     const futuresSymbol = toFuturesSymbol(symbol);
     const result = await bybitGet('/v5/market/liquidation', {
       category: 'linear', symbol: futuresSymbol, limit,
@@ -353,17 +380,14 @@ async function fetchLiquidationOrders(symbol, limit = 50) {
       avgPrice:    parseFloat(o.price),
       time:        parseInt(o.updatedTime),
     }));
-  } catch (err) {
-    logger.debug(`fetchLiquidationOrders(${symbol}): ${err.message}`);
-    return [];
-  }
+  }, () => binanceData.fetchLiquidationOrders(symbol, limit));
 }
 
 /**
  * Fetch exchange/instrument specs (LOT_SIZE, precision) for all linear symbols.
  */
 async function fetchExchangeSpecs() {
-  try {
+  return withPublicFallback('/v5/market/instruments-info', async () => {
     const result = await bybitGet('/v5/market/instruments-info', { category: 'linear' });
     const specs = {};
     if (result?.list) {
@@ -378,26 +402,20 @@ async function fetchExchangeSpecs() {
       });
     }
     return specs;
-  } catch (err) {
-    logger.error(`Failed to fetch exchange specs: ${err.message}`);
-    return {};
-  }
+  }, () => binanceData.fetchExchangeSpecs());
 }
 
 /**
  * Fetch active spot symbols.
  */
 async function fetchSpotExchangeSymbols() {
-  try {
+  return withPublicFallback('/v5/market/instruments-info', async () => {
     const result = await bybitGet('/v5/market/instruments-info', { category: 'spot' });
     if (!result?.list) return [];
     return result.list
       .filter(s => s.status === 'Trading')
       .map(s => s.symbol);
-  } catch (err) {
-    logger.error(`Failed to fetch spot symbols: ${err.message}`);
-    return [];
-  }
+  }, () => binanceData.fetchSpotExchangeSymbols());
 }
 
 // ─── Private Endpoints ───────────────────────────────────────────────────────
