@@ -425,23 +425,29 @@ function evaluateSignal(symbol, data, options = {}) {
   if (h4Pattern.detected) {
     tags.push(h4Pattern.name.toUpperCase());
     warnings.push(`ℹ️ H4 pattern: ${h4Pattern.name} (${(h4Pattern.gapPct * 100).toFixed(2)}% gap, contraction ${(h4Pattern.contractionRatio * 100).toFixed(0)}%).`);
+    const patternWeight = getPatternScoreWeight(h4Pattern.name);
 
     if (h4Pattern.breakout) {
+      const breakoutRetestStatus = detectRetest(H1, breakoutLevel, breakoutBias);
+      const retestBonus = breakoutRetestStatus === 'CONFIRMED' ? 8 : breakoutRetestStatus === 'PENDING' ? -6 : 0;
+
       if (h4Pattern.breakoutDirection === 'bullish') {
-        longScore += 15;
-        longReasons.push(`H4 ${h4Pattern.name} bullish breakout (+15)`);
+        longScore += patternWeight + retestBonus;
+        longReasons.push(`H4 ${h4Pattern.name} bullish breakout (+${patternWeight}${retestBonus > 0 ? ` +${retestBonus}` : retestBonus < 0 ? ` ${retestBonus}` : ''})`);
         tags.push('PATTERN BREAKOUT UP');
+        if (breakoutRetestStatus === 'CONFIRMED') tags.push('BREAKOUT_RETEST_CONTINUATION');
       } else if (h4Pattern.breakoutDirection === 'bearish') {
-        shortScore += 15;
-        shortReasons.push(`H4 ${h4Pattern.name} bearish breakout (+15)`);
+        shortScore += patternWeight + retestBonus;
+        shortReasons.push(`H4 ${h4Pattern.name} bearish breakout (+${patternWeight}${retestBonus > 0 ? ` +${retestBonus}` : retestBonus < 0 ? ` ${retestBonus}` : ''})`);
         tags.push('PATTERN BREAKOUT DOWN');
+        if (breakoutRetestStatus === 'CONFIRMED') tags.push('BREAKOUT_RETEST_CONTINUATION');
       }
     } else if (h4Pattern.direction === 'bullish') {
-      longScore += 5;
-      longReasons.push(`H4 ${h4Pattern.name} bullish bias (+5)`);
+      longScore += Math.max(4, Math.floor(patternWeight / 4));
+      longReasons.push(`H4 ${h4Pattern.name} bullish bias (+${Math.max(4, Math.floor(patternWeight / 4))})`);
     } else if (h4Pattern.direction === 'bearish') {
-      shortScore += 5;
-      shortReasons.push(`H4 ${h4Pattern.name} bearish bias (+5)`);
+      shortScore += Math.max(4, Math.floor(patternWeight / 4));
+      shortReasons.push(`H4 ${h4Pattern.name} bearish bias (+${Math.max(4, Math.floor(patternWeight / 4))})`);
     }
   }
 
@@ -600,13 +606,19 @@ function evaluateSignal(symbol, data, options = {}) {
 
   // ─── CATEGORY 4: Breakout & Retest (Max: 15 pts) ───
   if (retestStatus === 'CONFIRMED') {
+    const patternBreakoutMatch =
+      h4Pattern.breakout &&
+      ((breakoutBias === 'LONG' && h4Pattern.breakoutDirection === 'bullish') ||
+       (breakoutBias === 'SHORT' && h4Pattern.breakoutDirection === 'bearish'));
+    const retestBonus = patternBreakoutMatch ? 8 : 15;
     if (breakoutBias === 'LONG') {
-      longScore += 15;
-      longReasons.push(`H1 breakout retest confirmed (+15)`);
+      longScore += retestBonus;
+      longReasons.push(`H1 breakout retest confirmed (+${retestBonus})`);
     } else {
-      shortScore += 15;
-      shortReasons.push(`H1 breakdown retest confirmed (+15)`);
+      shortScore += retestBonus;
+      shortReasons.push(`H1 breakdown retest confirmed (+${retestBonus})`);
     }
+    if (patternBreakoutMatch) tags.push('PATTERN_RETEST_CONTINUATION');
   } else if (retestStatus === 'PENDING') {
     // Retest ada tapi belum ada close confirmation — root cause dari banyak SL hit prematur
     longScore -= 5;
