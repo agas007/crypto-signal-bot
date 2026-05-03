@@ -34,7 +34,8 @@ const config = {
   },
 
   futuresData: {
-    providerOrder: process.env.FUTURES_DATA_PROVIDER_ORDER || 'bitget,okx,kucoin,binance',
+    providerOrder: process.env.FUTURES_DATA_PROVIDER_ORDER || 'bitget,okx,kucoin',
+    enableBinanceFallback: process.env.FUTURES_DATA_ENABLE_BINANCE_FALLBACK === '1',
     bitgetBaseUrl: process.env.BITGET_BASE_URL || 'https://api.bitget.com',
     okxBaseUrl: process.env.OKX_BASE_URL || 'https://www.okx.com',
     kucoinBaseUrl: process.env.KUCOIN_BASE_URL || 'https://api-futures.kucoin.com',

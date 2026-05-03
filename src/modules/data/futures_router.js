@@ -3,7 +3,7 @@ const config = require('../../config');
 const logger = require('../../utils/logger');
 const binanceData = require('./binance');
 
-const DEFAULT_PROVIDER_ORDER = ['bitget', 'okx', 'kucoin', 'binance'];
+const DEFAULT_PROVIDER_ORDER = ['bitget', 'okx', 'kucoin'];
 const DEFAULT_TIMEOUT = 15_000;
 
 function parseProviderOrder() {
@@ -269,7 +269,18 @@ async function httpGet(provider, path, params = {}) {
 function providerListForMethod(method) {
   const order = parseProviderOrder();
   const preferred = state.preferredByMethod.get(method);
-  return unique([preferred, ...order, 'binance']);
+  const includeBinanceFallback = shouldIncludeBinanceFallback();
+
+  const chain = unique([preferred, ...order]);
+  if (includeBinanceFallback && !chain.includes('binance')) {
+    chain.push('binance');
+  }
+  return chain;
+}
+
+function shouldIncludeBinanceFallback() {
+  const order = parseProviderOrder();
+  return process.env.FUTURES_DATA_ENABLE_BINANCE_FALLBACK === '1' || order.includes('binance');
 }
 
 function markProviderBlocked(provider, method, err) {
@@ -780,10 +791,12 @@ async function primePublicProviderChain() {
     }
   }
 
-  const ok = await probeProvider('binance');
-  if (ok) {
-    logger.info('🛰️ Futures public provider primed: BINANCE');
-    return 'binance';
+  if (shouldIncludeBinanceFallback()) {
+    const ok = await probeProvider('binance');
+    if (ok) {
+      logger.info('🛰️ Futures public provider primed: BINANCE');
+      return 'binance';
+    }
   }
 
   logger.warn('⚠️ No futures public provider responded during priming. Scanner will use live fallback calls.');
