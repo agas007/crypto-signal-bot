@@ -61,6 +61,8 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 | Variable | Kegunaan |
 |---|---|
 | `CRON_SECRET` | Secret untuk validasi request cron |
+| `CHECK_SIGNAL_URL` | URL endpoint check-signal yang dipanggil `/scan-now` |
+| `SCAN_TRIGGER_TIMEOUT_MS` | Timeout request trigger dari slash command |
 | `DISCORD_WEBHOOK_URL` | Webhook Discord utama |
 | `UPSTASH_REDIS_REST_URL` | URL REST Upstash Redis |
 | `UPSTASH_REDIS_REST_TOKEN` | Token Upstash Redis |
@@ -100,6 +102,7 @@ Command yang tersedia:
 
 - `/status` - bot health, scan status, dan runtime info
 - `/scan-now` - trigger scan sekali, hasilnya dikirim ke channel lewat webhook
+- `/scan-now` - kirim request ke `CHECK_SIGNAL_URL` dengan `CRON_SECRET`
 - `/active` - list active trades
 - `/watchlist` - latest watchlist
 - `/performance` - cached performance summary
@@ -170,6 +173,18 @@ Kalau hanya butuh endpoint cron, deploy `dashboard/` sudah cukup.
    - `Authorization: Bearer <CRON_SECRET>`
 5. Schedule:
    - `5 * * * *`
+
+## Setup /scan-now
+
+`/scan-now` tidak menjalankan scanner langsung di interaction handler. Command ini hanya menembak endpoint check-signal yang sama dengan cron.
+
+Set ini di Vercel project `dashboard/`:
+
+- `CRON_SECRET` - cukup satu kali, dipakai oleh cron-job.org dan `/scan-now`
+- `CHECK_SIGNAL_URL` - URL public endpoint scan, contoh:
+  - `https://crypto-signal-bot-blush.vercel.app/api/check-signal`
+
+Kalau `CHECK_SIGNAL_URL` tidak diisi, command akan coba pakai `VERCEL_PROJECT_PRODUCTION_URL` atau `VERCEL_URL`.
 
 Kenapa `5 * * * *`:
 

@@ -1,7 +1,6 @@
 const crypto = require('crypto');
 const tracker = require('../modules/tracker');
 const binancePerformance = require('../modules/tracker/binance_performance');
-const { runSignalCheck } = require('./run_signal_check');
 const { formatJakartaTime, getNextJakartaReset } = require('../utils/time');
 const { isEnabled: isRedisEnabled } = require('../utils/redis');
 const { COMMANDS } = require('./discord_command_definitions');
@@ -38,6 +37,58 @@ function formatSignalLine(signal) {
 async function hydrateTracker() {
   await tracker.syncFromRedis().catch(() => {});
   return tracker;
+}
+
+function getCheckSignalUrl() {
+  const configured = process.env.CHECK_SIGNAL_URL || process.env.CRON_TRIGGER_URL;
+  if (configured) return configured;
+
+  const baseUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL || '';
+  if (!baseUrl) return '';
+
+  const normalized = baseUrl.startsWith('http://') || baseUrl.startsWith('https://')
+    ? baseUrl
+    : `https://${baseUrl}`;
+  return `${normalized.replace(/\/+$/, '')}/api/check-signal`;
+}
+
+async function triggerRemoteScan() {
+  const targetUrl = getCheckSignalUrl();
+  const cronSecret = process.env.CRON_SECRET;
+
+  if (!targetUrl) {
+    throw new Error('CHECK_SIGNAL_URL is not configured');
+  }
+
+  if (!cronSecret) {
+    throw new Error('CRON_SECRET is not configured');
+  }
+
+  const url = new URL(targetUrl);
+  url.searchParams.set('secret', cronSecret);
+
+  const controller = new AbortController();
+  const timeoutMs = Number(process.env.SCAN_TRIGGER_TIMEOUT_MS || 2500);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url.toString(), {
+      method: 'GET',
+      signal: controller.signal,
+      cache: 'no-store',
+      headers: {
+        Authorization: `Bearer ${cronSecret}`,
+      },
+    });
+
+    return {
+      ok: res.ok,
+      status: res.status,
+      url: url.toString(),
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 function buildStatusResponse() {
@@ -216,13 +267,14 @@ async function handleInteraction(interaction, context = {}) {
   const getOption = (name) => options.find((option) => option.name === name)?.value;
 
   if (commandName === 'scan-now') {
-    void runSignalCheck().catch((err) => {
+    const logger = context.logger || console;
+    void triggerRemoteScan().catch((err) => {
       const logger = context.logger || console;
       logger.error?.(`[discord/scan-now] runSignalCheck failed: ${err.message}`);
     });
 
     return buildInteractionResponse(
-      '⏳ Scan dimulai. Hasil alert akan muncul di channel Discord lewat webhook biasa.',
+      '⏳ Scan request dikirim ke endpoint check-signal. Hasil alert akan muncul di channel Discord lewat webhook biasa.',
       { ephemeral: true }
     );
   }
@@ -287,7 +339,9 @@ module.exports = {
   buildStatusResponse,
   buildWatchlistResponse,
   getDiscordCommandDefinitions,
+  getCheckSignalUrl,
   handleInteraction,
   hydrateTracker,
   verifyDiscordRequest,
+  triggerRemoteScan,
 };
