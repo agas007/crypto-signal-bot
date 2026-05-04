@@ -44,7 +44,7 @@ const config = {
   scanner: {
     intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 3_600_000, // 1 hour
     topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 5,
-    maxPairs: parseInt(process.env.MAX_PAIRS, 10) || 30,
+    maxPairs: parseInt(process.env.MAX_PAIRS, 10) || 100,
   },
 
   // Timeframes mapped to Binance interval codes
@@ -65,9 +65,9 @@ const config = {
 
   // Filter thresholds
   filters: {
-    minVolume24hUsd: 1_000_000,    // $1M minimum daily volume
-    minAtrPercent: 1.2,             // 1.2% minimum ATR — filter near-zero volatility pairs
-    minTrendStrength: 0.4,          // 0.4 minimum — require a meaningful trend
+    minVolume24hUsd: 750_000,       // $750K minimum daily volume
+    minAtrPercent: 1.0,             // 1.0% minimum ATR — filter near-zero volatility pairs
+    minTrendStrength: 0.3,          // 0.3 minimum — require a meaningful trend
   },
 
   strategy: {
