@@ -7,3 +7,9 @@ tmp_charts/
 history_lessons.json
 trade_history.json
 active_signals.json
+signals_store.json
+scan_report.json
+latest_watchlist.json
+dashboard/package-lock.json
+package-lock.json
+dashboard/yarn.lock
