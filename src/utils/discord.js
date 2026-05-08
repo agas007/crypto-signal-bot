@@ -49,7 +49,8 @@ async function postWebhook(url, payload) {
   }
 }
 
-async function postWebhookWithFile(url, payload, imagePath) {
+async function postWebhookWithFile(url, payload, imagePath, options = {}) {
+  const cleanupImage = options.cleanupImage !== false;
   if (!url || !fs.existsSync(imagePath)) return postWebhook(url, payload);
 
   const { FormData, Blob } = globalThis;
@@ -64,7 +65,7 @@ async function postWebhookWithFile(url, payload, imagePath) {
     throw new Error(`Discord (file) ${res.status}: ${text}`);
   }
 
-  fs.unlinkSync(imagePath);
+  if (cleanupImage) fs.unlinkSync(imagePath);
 }
 
 // ─── Signal Embed Builder ─────────────────────────────────────────────────────
@@ -142,13 +143,13 @@ function buildSignalEmbed(signal) {
  * Send a trade signal embed to Discord.
  * Drop-in replacement for telegram.sendSignal(signal, imagePath).
  */
-async function sendSignal(signal, imagePath = null) {
+async function sendSignal(signal, imagePath = null, options = {}) {
   try {
     if (signal.isChartUpdate) {
       if (imagePath && fs.existsSync(imagePath)) {
         await postWebhookWithFile(SIGNAL_WEBHOOK, {
           content: `📊 **Chart Confirmation: ${signal.symbol}** — sinyal sudah masuk, ini chart pendukungnya.`,
-        }, imagePath);
+        }, imagePath, options);
       }
       return true;
     }
@@ -164,7 +165,7 @@ async function sendSignal(signal, imagePath = null) {
 
     if (imagePath && fs.existsSync(imagePath)) {
       embed.image = { url: 'attachment://chart.png' };
-      await postWebhookWithFile(SIGNAL_WEBHOOK, { embeds: [embed], components }, imagePath);
+      await postWebhookWithFile(SIGNAL_WEBHOOK, { embeds: [embed], components }, imagePath, options);
     } else {
       await postWebhook(SIGNAL_WEBHOOK, { embeds: [embed], components });
     }
@@ -198,8 +199,10 @@ async function sendStatus(text) {
     for (const chunk of chunks) {
       await postWebhook(STATUS_WEBHOOK, { content: chunk });
     }
+    return true;
   } catch (err) {
     logger.error(`[Discord] sendStatus failed: ${err.message}`);
+    return false;
   }
 }
 

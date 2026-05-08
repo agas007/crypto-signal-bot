@@ -1,6 +1,6 @@
 # Crypto Signal Bot
 
-Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama tetap dipertahankan. Repo ini sekarang punya jalur serverless untuk satu kali scan per request, cocok dipanggil cron eksternal seperti `cron-job.org`, plus **Discord slash commands** serverless untuk kontrol dan status.
+Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama tetap dipertahankan. Repo ini sekarang punya jalur serverless untuk satu kali scan per request, cocok dipanggil cron eksternal seperti `cron-job.org`, plus **Discord slash commands** serverless untuk kontrol dan status, dan delivery signal/info yang bisa dikirim ke Telegram + Discord.
 
 ## Deteksi Tech Stack
 
@@ -15,6 +15,8 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 - Scheduler lama GitHub Actions: `.github/workflows/cron.yml` sudah dihapus
 - Strategy: `src/modules/strategy/index.js`
 - Signal generator / orchestrator: `src/modules/scanner/index.js`
+- Delivery layer: `src/services/signal_delivery.js`
+- Telegram notifier: `src/modules/telegram/index.js`
 - Discord notifier: `src/utils/discord.js`
 
 ## Arsitektur Baru
@@ -22,15 +24,15 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 ### Lama
 
 - GitHub Actions menjalankan scanner tiap jam.
-- Process legacy bisa hidup lama dengan `setInterval`.
-- Discord dikirim dari proses background yang selalu aktif.
+- Root app bisa hidup lama di VM untuk Telegram polling + scanner.
+- Signal dan status bisa dikirim ke Telegram + Discord dari proses background yang selalu aktif.
 
 ### Baru
 
 - `cron-job.org` memanggil endpoint `GET /api/check-signal` setiap 1 jam.
 - Endpoint menjalankan scan **sekali saja** lalu selesai dalam satu HTTP request.
 - Redis Upstash dipakai untuk dedupe signal baru.
-- Discord alert dikirim via **Discord Webhook**.
+- Signal/info dikirim via **Telegram bot + Discord Webhook**.
 - Discord slash commands jalan via `POST /api/discord`.
 
 ### Alur
@@ -40,7 +42,7 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 3. Config existing diload
 4. Scanner jalan sekali
 5. Signal yang lolos dicek ke Upstash Redis
-6. Kalau signal belum pernah dikirim untuk candle itu, alert dikirim ke Discord
+6. Kalau signal belum pernah dikirim untuk candle itu, alert dikirim ke Telegram dan Discord
 7. JSON status dikembalikan ke caller
 
 ## File Penting
@@ -48,6 +50,7 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 - `dashboard/src/app/api/check-signal/route.ts` - serverless endpoint
 - `dashboard/src/app/api/discord/route.ts` - Discord interaction endpoint
 - `src/services/run_signal_check.js` - wrapper one-shot reusable
+- `src/services/signal_delivery.js` - fanout notifier Telegram + Discord
 - `src/services/discord_commands.js` - shared slash command definitions/handlers
 - `src/modules/scanner/index.js` - core scan logic
 - `src/modules/strategy/index.js` - strategy existing
@@ -63,6 +66,8 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 | `CRON_SECRET` | Secret untuk validasi request cron |
 | `CHECK_SIGNAL_URL` | URL endpoint check-signal yang dipanggil `/scan-now` |
 | `SCAN_TRIGGER_TIMEOUT_MS` | Timeout request trigger dari slash command |
+| `TELEGRAM_BOT_TOKEN` | Token bot Telegram untuk delivery dan command polling |
+| `TELEGRAM_CHAT_ID` | Chat/channel tujuan Telegram |
 | `DISCORD_WEBHOOK_URL` | Webhook Discord utama |
 | `UPSTASH_REDIS_REST_URL` | URL REST Upstash Redis |
 | `UPSTASH_REDIS_REST_TOKEN` | Token Upstash Redis |
@@ -89,12 +94,12 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 | `SCAN_INTERVAL_MS` | Tetap ada sebagai config, tapi tidak dipakai untuk scheduler serverless |
 | `LOG_LEVEL` | Level log |
 
-### Legacy runtime optional
+### Runtime VM
 
 | Variable | Kegunaan |
 |---|---|
-| `ENABLE_LEGACY_SCANNER=1` | Mengaktifkan runtime long-running lokal lama |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Hanya untuk mode legacy lama |
+| `DISABLE_BACKGROUND_RUNTIME=1` | Mematikan scanner + Telegram polling kalau mau mode one-shot saja |
+| `ENABLE_LEGACY_SCANNER=0` | Alias kompatibilitas untuk mematikan background runtime |
 
 ## Discord Slash Commands
 
@@ -123,13 +128,13 @@ npm install
 
 ## Jalankan Lokal
 
-### Legacy web runtime
+### Persistent VM runtime
 
 ```bash
 npm start
 ```
 
-Default sekarang legacy scanner tidak jalan. Set `ENABLE_LEGACY_SCANNER=1` kalau memang mau mode lama yang persistent.
+Default sekarang root app menjalankan dashboard HTTP + Telegram polling + scanner dalam mode persistent. Set `DISABLE_BACKGROUND_RUNTIME=1` kalau mau hanya HTTP one-shot / serverless.
 
 ### One-shot manual
 
@@ -142,13 +147,13 @@ node src/run_once.js
 Repo ini paling cocok dipisah per target:
 
 1. **Dashboard Next.js**: deploy folder `dashboard/` sebagai project Vercel terpisah dan expose `app/api/check-signal/route.ts` serta `app/api/discord/route.ts`
-2. **Root Node app**: tetap dipakai hanya untuk legacy/local runtime kalau memang dibutuhkan
+2. **Root Node app**: dipakai untuk runtime VM persistent kalau lo mau Telegram polling + scanner jalan terus
 
 Langkah endpoint:
 
 1. Import repo ke Vercel
 2. Set env vars di atas
-3. Pastikan `CRON_SECRET`, Redis, OpenRouter, Discord webhook, `DISCORD_PUBLIC_KEY`, dan `DISCORD_APPLICATION_ID` terisi
+3. Pastikan `CRON_SECRET`, Redis, OpenRouter, Telegram, Discord webhook, `DISCORD_PUBLIC_KEY`, dan `DISCORD_APPLICATION_ID` terisi
 4. Deploy
 5. Di Discord Developer Portal, set **Interactions Endpoint URL** ke:
    - `https://<dashboard-vercel-domain>/api/discord`
@@ -223,7 +228,7 @@ curl "https://<domain>/api/check-signal?secret=$CRON_SECRET"
 
 1. Request tanpa secret harus `401`
 2. Request dengan secret valid dan tanpa signal harus tetap `200` dengan JSON valid
-3. Kalau signal baru muncul, Discord harus menerima 1 pesan
+3. Kalau signal baru muncul, Telegram dan Discord masing-masing harus menerima 1 pesan
 4. Request ulang untuk candle yang sama harus kena dedupe Redis
 5. Untuk test slash command, kirim `/status` atau `/help` di Discord setelah command registration berhasil
 
@@ -234,6 +239,7 @@ curl "https://<domain>/api/check-signal?secret=$CRON_SECRET"
   - `signal:{symbol}:{timeframe}:{side}:{candleTime}`
 - TTL dedupe:
   - 7 hari
+- Telegram polling + scanner sekarang jalan di VM persistent kalau background runtime aktif.
 - Discord sekarang menggunakan webhook, bukan bot process yang harus online 24/7.
 - Discord slash commands jalan lewat endpoint serverless, bukan Discord Gateway.
 - Discord channel juga bisa menerima scan summary penting, daily summary 1x sehari, health ping saat scan kosong, dan alert fallback provider bila data source lagi bermasalah.

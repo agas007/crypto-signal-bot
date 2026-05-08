@@ -5,7 +5,7 @@
 require('dotenv').config();
 
 const logger = require('./utils/logger');
-const { sendStatus } = require('./utils/discord');
+const { sendStatus } = require('./services/signal_delivery');
 const { runSignalCheck } = require('./services/run_signal_check');
 
 async function main() {
@@ -13,7 +13,8 @@ async function main() {
   console.log('🚀 [run_once] Starting one-shot scan cycle...');
   console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log(`   Redis: ${process.env.UPSTASH_REDIS_REST_URL ? '✅ configured' : '⚠️  not set (using local files)'}`);
-  console.log(`   Discord: ${(process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL) ? '✅ configured' : '❌ not set'}`);
+  console.log(`   Telegram: ${(process.env.TELEGRAM_BOT_TOKEN && process.env.TELEGRAM_CHAT_ID) ? '✅ configured' : '⚠️ not set'}`);
+  console.log(`   Discord: ${(process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL) ? '✅ configured' : '⚠️ not set'}`);
 
   // 1. Notify start (optional, comment out if too noisy)
   try {
@@ -22,7 +23,7 @@ async function main() {
       `_Triggered at ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB_`
     );
   } catch (err) {
-    logger.warn('Discord startup notification failed (non-fatal):', err.message);
+    logger.warn('Startup notification failed (non-fatal):', err.message);
   }
 
   // 2. Run the scan

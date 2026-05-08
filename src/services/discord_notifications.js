@@ -1,5 +1,5 @@
 const tracker = require('../modules/tracker');
-const { sendStatus } = require('../utils/discord');
+const { sendStatus } = require('./signal_delivery');
 const { formatJakartaTime } = require('../utils/time');
 
 function getJakartaDateKey(date = new Date()) {

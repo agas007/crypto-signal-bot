@@ -9,7 +9,7 @@ const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
 const { evaluateSignal, calculateRiskReward } = require('../strategy');
 const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
-const { sendSignal, sendStatus } = require('../../utils/discord');
+const { sendSignal, sendStatus } = require('../../services/signal_delivery');
 const tracker = require('../tracker');
 const { claimSignalDedupe, getSignalCandleTime, releaseSignalDedupe } = require('../../utils/signal_dedupe');
 const { logAudit, initAudit } = require('../../utils/audit');
@@ -19,7 +19,7 @@ const { logAudit, initAudit } = require('../../utils/audit');
  * 1. Monitor active trades for TP/SL
  * 2. Fetch top pairs
  * 3. Filter and evaluate
- * 4. Send to AI and Telegram
+ * 4. Send to AI and delivery channels
  *
  * @returns {Promise<number>} Number of signals sent
  */
@@ -433,7 +433,7 @@ async function runScanCycle() {
       const dedupeKeyResult = await claimSignalDedupe(signalForDedupe, { ttlSeconds: 7 * 24 * 60 * 60 });
 
       if (dedupeKeyResult.ok && dedupeKeyResult.deduped) {
-        logger.info(`♻️ ${candidate.symbol}: duplicate signal on same candle, skipping Discord send.`);
+        logger.info(`♻️ ${candidate.symbol}: duplicate signal on same candle, skipping delivery.`);
         logAudit(candidate.symbol, 'AI', 'SKIPPED', refined.confidence, 'Duplicate signal for same candle.');
         continue;
       }
@@ -443,14 +443,14 @@ async function runScanCycle() {
       }
 
       // ─── 1. Send Text Instan ───
-      logAudit(candidate.symbol, 'AI', 'APPROVED', refined.confidence, `${isUpdate ? 'Update signal sent' : 'Fresh signal sent'} to Telegram.`);
+      logAudit(candidate.symbol, 'AI', 'APPROVED', refined.confidence, `${isUpdate ? 'Update signal sent' : 'Fresh signal sent'} to delivery channels.`);
       refined.freshness = Math.round((Date.now() - startTime) / 1000);
       refined.timeframe = refined.timeframe || signalTimeframe;
       refined.candleTime = signalCandleTime;
       const delivered = await sendSignal(refined, null); 
       if (!delivered) {
         await releaseSignalDedupe(dedupeKeyResult.key).catch(() => {});
-        logger.warn(`⚠️ ${candidate.symbol}: Discord delivery failed, dedupe key released for retry.`);
+        logger.warn(`⚠️ ${candidate.symbol}: delivery failed, dedupe key released for retry.`);
         continue;
       }
       tracker.track(refined);
@@ -553,7 +553,7 @@ async function startScanner() {
     `🤖 *Crypto Signal Bot v4.4.1 started*\n` +
     `_Scanner active: interval ${config.scanner.intervalMs / 1000}s, max pairs ${config.scanner.maxPairs}_`
   );
-  logger.info('🤖 Crypto Signal Bot v4.4.1 started. Telegram startup notification sent.');
+  logger.info('🤖 Crypto Signal Bot v4.4.1 started. Delivery startup notification sent.');
 
   // Run first cycle immediately
   await runScanCycle();

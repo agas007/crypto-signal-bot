@@ -12,6 +12,38 @@ const binancePerformance = require('../tracker/binance_performance');
 
 let bot = null;
 let startTime = Date.now();
+let telegramHandlersBound = false;
+let telegramPollingStarted = false;
+let telegramUnhandledRejectionBound = false;
+
+function isBackgroundRuntimeEnabled() {
+  return process.env.DISABLE_BACKGROUND_RUNTIME !== '1' && process.env.ENABLE_LEGACY_SCANNER !== '0';
+}
+
+function createTelegramTransport() {
+  if (bot) return bot;
+
+  if (!config.telegram.botToken || !config.telegram.chatId) {
+    logger.warn('[Telegram] Telegram env is incomplete. Delivery will be skipped.');
+    return null;
+  }
+
+  bot = new TelegramBot(config.telegram.botToken, {
+    polling: false, // Start with polling false to clear webhook first
+    request: {
+      agentOptions: {
+        keepAlive: true,
+        family: 4
+      }
+    }
+  });
+
+  return bot;
+}
+
+async function ensureTelegramBot() {
+  return createTelegramTransport();
+}
 
 function getHelpMessage(chatId) {
   return `🤖 *Crypto Signal Bot v4.4* is active!\n` +
@@ -42,24 +74,16 @@ function getHelpMessage(chatId) {
  * Initialize the Telegram bot with polling enabled for interactive commands.
  */
 async function initTelegram() {
-  if (bot) return; // Prevent multiple initializations
-
-  bot = new TelegramBot(config.telegram.botToken, { 
-    polling: false, // Start with polling false to clear webhook first
-    request: {
-        agentOptions: {
-            keepAlive: true,
-            family: 4 
-        }
-    }
-  });
+  const telegramBot = createTelegramTransport();
+  if (!telegramBot) return;
+  if (telegramPollingStarted) return;
 
   try {
     // Clear any existing webhooks to prevent 409 Conflict errors
-    if (typeof bot.deleteWebHook === 'function') {
-      await bot.deleteWebHook();
-    } else if (typeof bot.deleteWebhook === 'function') {
-      await bot.deleteWebhook();
+    if (typeof telegramBot.deleteWebHook === 'function') {
+      await telegramBot.deleteWebHook();
+    } else if (typeof telegramBot.deleteWebhook === 'function') {
+      await telegramBot.deleteWebhook();
     }
     
     logger.info('Telegram webhook cleared. Waiting 5s before starting polling to avoid race conditions...');
@@ -68,18 +92,23 @@ async function initTelegram() {
     await new Promise(resolve => setTimeout(resolve, 5000));
     
     // Now start polling
-    await bot.startPolling();
+    await telegramBot.startPolling();
+    telegramPollingStarted = true;
     logger.info('Telegram bot initialized with interactive POLLING mode');
   } catch (err) {
     logger.error('Failed to initialize Telegram polling:', err.message);
   }
 
   // Handle unhandled rejections to prevent crashes
-  process.on('unhandledRejection', (reason, p) => {
-    logger.error(`❌ Unhandled Rejection at: ${p}, reason: ${reason}`);
-  });
+  if (!telegramUnhandledRejectionBound) {
+    process.on('unhandledRejection', (reason, p) => {
+      logger.error(`❌ Unhandled Rejection at: ${p}, reason: ${reason}`);
+    });
+    telegramUnhandledRejectionBound = true;
+  }
 
   // ─── Command Handlers ─────────────────────────────────────
+  if (telegramHandlersBound) return;
   
   // /start, /help, /commands
   const helpHandler = (msg) => {
@@ -158,12 +187,12 @@ async function initTelegram() {
       cooldownStatus = '⏳ *Daily Trade Limit Reached* (5/5 trades)';
     }
 
-    const isLegacyScannerEnabled = process.env.ENABLE_LEGACY_SCANNER === '1';
-    const scanLine = isLegacyScannerEnabled
-      ? '⚠️ *Scan:* Legacy long-running scanner (local only)'
+    const isBackgroundRuntimeEnabledValue = isBackgroundRuntimeEnabled();
+    const scanLine = isBackgroundRuntimeEnabledValue
+      ? '⚠️ *Scan:* Persistent VM scanner + Telegram polling'
       : '⌛ *Scan:* cron-job.org → Vercel `/api/check-signal`';
-    const commandLine = isLegacyScannerEnabled
-      ? '🕒 *Commands:* Telegram bot (legacy runtime)'
+    const commandLine = isBackgroundRuntimeEnabledValue
+      ? '🕒 *Commands:* Telegram bot + scanner + Discord slash commands'
       : '🕒 *Commands:* cron-job.org hourly scheduler';
     
     const text = `✅ *Bot Status: ONLINE*\n\n` +
@@ -597,6 +626,8 @@ async function initTelegram() {
       bot.sendMessage(msg.chat.id, '❌ Failed to fetch pairs.');
     }
   });
+
+  telegramHandlersBound = true;
 }
 
 /**
@@ -707,8 +738,10 @@ ${signal.warnings && signal.warnings.length > 0 ? `⚠️ *Warnings:*\n${signal.
  * @param {Object} signal
  * @param {string} [imagePath] - Absolute path to the generated chart image
  */
-async function sendSignal(signal, imagePath = null) {
-  if (!bot) initTelegram();
+async function sendSignal(signal, imagePath = null, options = {}) {
+  const cleanupImage = options.cleanupImage !== false;
+  const telegramBot = await ensureTelegramBot();
+  if (!telegramBot) return false;
 
   const message = formatSignalMessage(signal);
   
@@ -724,33 +757,36 @@ async function sendSignal(signal, imagePath = null) {
 
   try {
     if (imagePath && fs.existsSync(imagePath)) {
-      await bot.sendPhoto(config.telegram.chatId, fs.createReadStream(imagePath), {
+      await telegramBot.sendPhoto(config.telegram.chatId, fs.createReadStream(imagePath), {
         caption: message,
         parse_mode: 'Markdown',
         reply_markup: replyMarkup
       }, {
         contentType: 'image/png' // Manually specifying to avoid deprecation warnings
       });
-      fs.unlinkSync(imagePath);
+      if (cleanupImage && fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
     } else {
-      await bot.sendMessage(config.telegram.chatId, message, {
+      await telegramBot.sendMessage(config.telegram.chatId, message, {
         parse_mode: 'Markdown',
         disable_web_page_preview: true,
         reply_markup: replyMarkup
       });
     }
     logger.info(`📨 Interactive signal sent to Telegram: ${signal.symbol}`);
+    return true;
   } catch (err) {
     logger.error(`Failed to send interactive signal (${signal.symbol}): ${err.message}. Retrying as plain text...`);
     // Fallback: Send plain text message without markdown
     try {
         const plainMsg = message.replace(/[*_`]/g, '');
-        await bot.sendMessage(config.telegram.chatId, `⚠️ [FORMATTING ERROR] ⚠️\n\n${plainMsg}`, {
+        await telegramBot.sendMessage(config.telegram.chatId, `⚠️ [FORMATTING ERROR] ⚠️\n\n${plainMsg}`, {
             disable_web_page_preview: true,
             reply_markup: replyMarkup
         });
+        return true;
     } catch (retryErr) {
         logger.error(`Complete signal failure for ${signal.symbol}: ${retryErr.message}`);
+        return false;
     }
   }
 }
@@ -761,21 +797,25 @@ async function sendSignal(signal, imagePath = null) {
  * @param {string} text
  */
 async function sendStatus(text) {
-  if (!bot) initTelegram();
+  const telegramBot = await ensureTelegramBot();
+  if (!telegramBot) return false;
 
   try {
-    await bot.sendMessage(config.telegram.chatId, text, {
+    await telegramBot.sendMessage(config.telegram.chatId, text, {
       parse_mode: 'Markdown',
       disable_web_page_preview: true,
     });
+    return true;
   } catch (err) {
     logger.error(`Failed to send Telegram status: ${err.message}. Retrying as plain text...`);
     try {
-        await bot.sendMessage(config.telegram.chatId, text.replace(/[*_`]/g, ''), {
+        await telegramBot.sendMessage(config.telegram.chatId, text.replace(/[*_`]/g, ''), {
             disable_web_page_preview: true
         });
+        return true;
     } catch (retryErr) {
         logger.error(`Complete status failure: ${retryErr.message}`);
+        return false;
     }
   }
 }
@@ -789,4 +829,4 @@ function escapeMarkdown(text) {
   return text.replace(/([_*`\[\]()])/g, '\\$1');
 }
 
-module.exports = { initTelegram, sendSignal, sendStatus, formatSignalMessage };
+module.exports = { initTelegram, ensureTelegramBot, sendSignal, sendStatus, formatSignalMessage };

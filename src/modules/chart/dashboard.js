@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer');
-const { sendStatus } = require('../../utils/discord');
+const { sendStatus } = require('../../services/signal_delivery');
 const logger = require('../../utils/logger');
 const { formatJakartaTime } = require('../../utils/time');
 const tracker = require('../tracker');
@@ -429,7 +429,7 @@ async function generateAndSendDashboard(targetChatId = null) {
     }
 
     if (fs.existsSync(screenshotPath)) fs.unlinkSync(screenshotPath);
-    logger.info('✅ Dashboard pushed to Telegram successfully');
+    logger.info('✅ Dashboard pushed to configured delivery channel(s) successfully');
   } catch (err) {
     logger.error('❌ Dashboard push failed:', err.message);
   }
