@@ -30,7 +30,7 @@ const config = {
   },
 
   futuresData: {
-    providerOrder: process.env.FUTURES_DATA_PROVIDER_ORDER || 'bitget,okx,kucoin,hyperliquid',
+    providerOrder: process.env.FUTURES_DATA_PROVIDER_ORDER || 'binance,bitget,okx,kucoin,hyperliquid',
     enableHyperliquid: process.env.FUTURES_DATA_ENABLE_HYPERLIQUID !== '0',
     enableBinanceFallback: process.env.FUTURES_DATA_ENABLE_BINANCE_FALLBACK === '1',
     bitgetBaseUrl: process.env.BITGET_BASE_URL || 'https://api.bitget.com',

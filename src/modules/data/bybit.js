@@ -32,6 +32,9 @@ const DISABLE_PUBLIC_BYBIT = process.env.BYBIT_DISABLE_PUBLIC === '1';
 let publicBybitBlocked = DISABLE_PUBLIC_BYBIT;
 let publicBybitBlockLogged = false;
 const loggedBybitErrors = new Set();
+let bybitTimeOffsetMs = 0;
+let bybitTimeOffsetLastSyncAt = 0;
+const BYBIT_TIME_SYNC_TTL_MS = 5 * 60 * 1000;
 
 // ─── Interval Mapping: Binance format → Bybit format ────────────────────────
 const INTERVAL_MAP = {
@@ -200,6 +203,55 @@ function createBybitRegionBlockedError(path, baseUrl) {
   return error;
 }
 
+function isBybitTimestampError(err) {
+  const status = err?.response?.status;
+  const data = err?.response?.data || {};
+  const retCode = data.retCode;
+  const message = `${err?.message || ''} ${data.retMsg || ''}`.toLowerCase();
+  return status === 400 && retCode === 10002 || message.includes('server timestamp') || message.includes('recv_window');
+}
+
+async function syncBybitTimeOffset(force = false) {
+  if (!force && bybitTimeOffsetLastSyncAt && Date.now() - bybitTimeOffsetLastSyncAt < BYBIT_TIME_SYNC_TTL_MS) {
+    return bybitTimeOffsetMs;
+  }
+
+  try {
+    const result = await requestBybitAcrossBases('Public API', '/v5/market/time');
+    const serverTimeMs = Number(result?.time || (Number(result?.timeSecond || 0) * 1000));
+    if (Number.isFinite(serverTimeMs) && serverTimeMs > 0) {
+      bybitTimeOffsetMs = serverTimeMs - Date.now();
+      bybitTimeOffsetLastSyncAt = Date.now();
+      logger.info(`🕒 Bybit server time synced. Offset=${bybitTimeOffsetMs}ms`);
+    }
+  } catch (err) {
+    logger.warn(`⚠️ Bybit server time sync failed: ${err.message}`);
+  }
+
+  return bybitTimeOffsetMs;
+}
+
+function getBybitTimestamp() {
+  return String(Date.now() + bybitTimeOffsetMs);
+}
+
+function buildBybitSignedHeaders(params = {}) {
+  const timestamp = getBybitTimestamp();
+  const recvWindow = '20000';
+  const queryString = Object.entries(params)
+    .map(([k, v]) => `${k}=${v}`)
+    .join('&');
+  const preSign = `${timestamp}${API_KEY}${recvWindow}${queryString}`;
+  const sign = crypto.createHmac('sha256', API_SECRET).update(preSign).digest('hex');
+
+  return {
+    'X-BAPI-API-KEY': API_KEY,
+    'X-BAPI-SIGN': sign,
+    'X-BAPI-TIMESTAMP': timestamp,
+    'X-BAPI-RECV-WINDOW': recvWindow,
+  };
+}
+
 async function requestBybitAcrossBases(kind, path, params = {}, signer = null) {
   const errors = [];
 
@@ -271,24 +323,40 @@ async function bybitGetSigned(path, params = {}) {
     return null;
   }
 
-  const timestamp = Date.now().toString();
-  const recvWindow = '20000';
-  const queryString = Object.entries(params)
-    .map(([k, v]) => `${k}=${v}`)
-    .join('&');
-  const preSign = `${timestamp}${API_KEY}${recvWindow}${queryString}`;
-  const sign = crypto.createHmac('sha256', API_SECRET).update(preSign).digest('hex');
+  await syncBybitTimeOffset(false);
+
+  const attemptRequest = async () => {
+    return requestBybitAcrossBases('Private API', path, params, () => buildBybitSignedHeaders(params));
+  };
 
   try {
-    return await requestBybitAcrossBases('Private API', path, params, () => ({
-      'X-BAPI-API-KEY': API_KEY,
-      'X-BAPI-SIGN': sign,
-      'X-BAPI-TIMESTAMP': timestamp,
-      'X-BAPI-RECV-WINDOW': recvWindow,
-    }));
+    return await attemptRequest();
   } catch (err) {
     if (err?.isBybitRegionBlocked) {
       return null;
+    }
+    if (isBybitTimestampError(err)) {
+      logger.warn(`⚠️ Bybit timestamp drift detected on ${path}. Resyncing server time and retrying once...`);
+      await syncBybitTimeOffset(true);
+      try {
+        return await attemptRequest();
+      } catch (retryErr) {
+        if (retryErr?.isBybitRegionBlocked) return null;
+        if (isBybitTimestampError(retryErr)) {
+          logger.error(`❌ Bybit timestamp sync failed for ${path}: ${retryErr.message}`);
+          return null;
+        }
+        if (isBybitGeoBlockedError(retryErr)) {
+          publicBybitBlocked = true;
+          return null;
+        }
+        if (retryErr.response) {
+          logger.error(`❌ Bybit Private API Error (${path}): ${retryErr.response.status} ${JSON.stringify(retryErr.response.data)}`);
+        } else {
+          logger.error(`❌ Bybit Private Network Error (${path}): ${retryErr.message}`);
+        }
+        throw retryErr;
+      }
     }
     if (isBybitGeoBlockedError(err)) {
       publicBybitBlocked = true;
@@ -310,13 +378,10 @@ async function bybitGetSigned(path, params = {}) {
  * Bybit returns newest-first → reversed to oldest-first (matching Binance behavior).
  */
 async function fetchOHLCV(symbol, interval, limit = 100, options = {}) {
-  if (!shouldUseBybitPrimary()) {
-    return futuresRouter.fetchOHLCV(symbol, interval, limit, options);
-  }
   try {
-    return await fetchBybitPublicOHLCV(symbol, interval, limit, options);
+    return await binanceData.fetchOHLCV(symbol, interval, limit, options);
   } catch (err) {
-    logger.warn(`⚠️ Bybit primary fetchOHLCV failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+    logger.warn(`⚠️ Binance primary fetchOHLCV failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
     return futuresRouter.fetchOHLCV(symbol, interval, limit, options);
   }
 }
@@ -339,13 +404,10 @@ async function fetchMultiTimeframe(symbol) {
  * Fetch top USDT perpetual pairs sorted by 24h turnover.
  */
 async function fetchTopPairs(limit = config.scanner.maxPairs) {
-  if (!shouldUseBybitPrimary()) {
-    return futuresRouter.fetchTopPairs(limit);
-  }
   try {
-    return await fetchBybitPublicTopPairs(limit);
+    return await binanceData.fetchTopPairs(limit);
   } catch (err) {
-    logger.warn(`⚠️ Bybit primary fetchTopPairs failed: ${err.message}. Falling back to alt providers.`);
+    logger.warn(`⚠️ Binance primary fetchTopPairs failed: ${err.message}. Falling back to alt providers.`);
     return futuresRouter.fetchTopPairs(limit);
   }
 }
@@ -354,13 +416,10 @@ async function fetchTopPairs(limit = config.scanner.maxPairs) {
  * Fetch 24h ticker stats for a single symbol.
  */
 async function fetch24hTicker(symbol) {
-  if (!shouldUseBybitPrimary()) {
-    return futuresRouter.fetch24hTicker(symbol);
-  }
   try {
-    return await fetchBybitPublicTicker(symbol);
+    return await binanceData.fetch24hTicker(symbol);
   } catch (err) {
-    logger.warn(`⚠️ Bybit primary fetch24hTicker failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+    logger.warn(`⚠️ Binance primary fetch24hTicker failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
     return futuresRouter.fetch24hTicker(symbol);
   }
 }
@@ -369,14 +428,11 @@ async function fetch24hTicker(symbol) {
  * Fetch current funding rate for a linear perpetual symbol.
  */
 async function fetchFundingRate(symbol) {
-  if (!shouldUseBybitPrimary()) {
-    return futuresRouter.fetchFundingRate(symbol);
-  }
   try {
-    const ticker = await fetchBybitPublicTicker(symbol);
-    if (ticker && Number.isFinite(ticker.fundingRate)) return ticker.fundingRate;
+    const rate = await binanceData.fetchFundingRate(symbol);
+    if (Number.isFinite(rate)) return rate;
   } catch (err) {
-    logger.warn(`⚠️ Bybit primary fetchFundingRate failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+    logger.warn(`⚠️ Binance primary fetchFundingRate failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
   }
   return futuresRouter.fetchFundingRate(symbol);
 }
@@ -385,52 +441,24 @@ async function fetchFundingRate(symbol) {
  * Fetch current Open Interest.
  */
 async function fetchOpenInterest(symbol) {
-  if (!shouldUseBybitPrimary()) {
-    return futuresRouter.fetchOpenInterest(symbol);
-  }
   try {
-    const result = await bybitGet('/v5/market/open-interest', {
-      category: 'linear',
-      symbol: toFuturesSymbol(symbol),
-    });
-    const item = Array.isArray(result?.list) ? result.list[0] : result?.list?.[0] || result;
-    if (!item) return null;
-    return {
-      symbol: item.symbol || toFuturesSymbol(symbol),
-      openInterest: parseFloat(item.openInterest || item.oi || item.value || 0),
-    };
+    const result = await binanceData.fetchOpenInterest(symbol);
+    if (result) return result;
   } catch (err) {
-    logger.warn(`⚠️ Bybit primary fetchOpenInterest failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
-    return futuresRouter.fetchOpenInterest(symbol);
+    logger.warn(`⚠️ Binance primary fetchOpenInterest failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
   }
+  return futuresRouter.fetchOpenInterest(symbol);
 }
 
 /**
  * Fetch historical Open Interest (oldest-first).
  */
 async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
-  if (!shouldUseBybitPrimary()) {
-    return futuresRouter.fetchOpenInterestHistory(symbol, period, limit);
-  }
   try {
-    const result = await bybitGet('/v5/market/open-interest', {
-      category: 'linear',
-      symbol: toFuturesSymbol(symbol),
-      intervalTime: period,
-      limit,
-    });
-    const rows = Array.isArray(result?.list) ? result.list : [];
-    if (rows.length) {
-      return rows
-        .map((item) => ({
-          timestamp: parseInt(item.timestamp || item.ts || item.time || 0, 10),
-          sumOpenInterest: parseFloat(item.openInterest || item.oi || item.value || 0),
-          sumOpenInterestValue: parseFloat(item.openInterestValue || item.value || 0),
-        }))
-        .filter((row) => row.timestamp > 0);
-    }
+    const result = await binanceData.fetchOpenInterestHistory(symbol, period, limit);
+    if (Array.isArray(result) && result.length) return result;
   } catch (err) {
-    logger.warn(`⚠️ Bybit primary fetchOpenInterestHistory failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+    logger.warn(`⚠️ Binance primary fetchOpenInterestHistory failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
   }
   return futuresRouter.fetchOpenInterestHistory(symbol, period, limit);
 }
@@ -441,6 +469,12 @@ async function fetchOpenInterestHistory(symbol, period = '1h', limit = 12) {
  *       fetchTopTraderLongShortRatio is aliased to this function.
  */
 async function fetchGlobalLongShortRatio(symbol, period = '1h', limit = 6) {
+  try {
+    const result = await binanceData.fetchGlobalLongShortRatio(symbol, period, limit);
+    if (Array.isArray(result) && result.length) return result;
+  } catch (err) {
+    logger.warn(`⚠️ Binance primary fetchGlobalLongShortRatio failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+  }
   return futuresRouter.fetchGlobalLongShortRatio(symbol, period, limit);
 }
 
@@ -449,6 +483,12 @@ async function fetchGlobalLongShortRatio(symbol, period = '1h', limit = 6) {
  * Falls back to global account ratio (same quality signal).
  */
 async function fetchTopTraderLongShortRatio(symbol, period = '1h', limit = 6) {
+  try {
+    const result = await binanceData.fetchTopTraderLongShortRatio(symbol, period, limit);
+    if (Array.isArray(result) && result.length) return result;
+  } catch (err) {
+    logger.warn(`⚠️ Binance primary fetchTopTraderLongShortRatio failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+  }
   return futuresRouter.fetchTopTraderLongShortRatio(symbol, period, limit);
 }
 
@@ -456,6 +496,12 @@ async function fetchTopTraderLongShortRatio(symbol, period = '1h', limit = 6) {
  * Fetch L2 order book and compute bid/ask imbalance.
  */
 async function fetchOrderBookDepth(symbol, limit = 20) {
+  try {
+    const result = await binanceData.fetchOrderBookDepth(symbol, limit);
+    if (result) return result;
+  } catch (err) {
+    logger.warn(`⚠️ Binance primary fetchOrderBookDepth failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+  }
   return futuresRouter.fetchOrderBookDepth(symbol, limit);
 }
 
@@ -463,6 +509,12 @@ async function fetchOrderBookDepth(symbol, limit = 20) {
  * Fetch recent liquidation orders.
  */
 async function fetchLiquidationOrders(symbol, limit = 50) {
+  try {
+    const result = await binanceData.fetchLiquidationOrders(symbol, limit);
+    if (Array.isArray(result) && result.length) return result;
+  } catch (err) {
+    logger.warn(`⚠️ Binance primary fetchLiquidationOrders failed for ${symbol}: ${err.message}. Falling back to alt providers.`);
+  }
   return futuresRouter.fetchLiquidationOrders(symbol, limit);
 }
 
@@ -470,13 +522,10 @@ async function fetchLiquidationOrders(symbol, limit = 50) {
  * Fetch exchange/instrument specs (LOT_SIZE, precision) for all linear symbols.
  */
 async function fetchExchangeSpecs() {
-  if (!shouldUseBybitPrimary()) {
-    return futuresRouter.fetchExchangeSpecs();
-  }
   try {
-    return await fetchBybitPublicExchangeSpecs();
+    return await binanceData.fetchExchangeSpecs();
   } catch (err) {
-    logger.warn(`⚠️ Bybit primary fetchExchangeSpecs failed: ${err.message}. Falling back to alt providers.`);
+    logger.warn(`⚠️ Binance primary fetchExchangeSpecs failed: ${err.message}. Falling back to alt providers.`);
     return futuresRouter.fetchExchangeSpecs();
   }
 }
@@ -485,6 +534,12 @@ async function fetchExchangeSpecs() {
  * Fetch active spot symbols.
  */
 async function fetchSpotExchangeSymbols() {
+  try {
+    const result = await binanceData.fetchSpotExchangeSymbols();
+    if (Array.isArray(result) && result.length) return result;
+  } catch (err) {
+    logger.warn(`⚠️ Binance primary fetchSpotExchangeSymbols failed: ${err.message}. Falling back to alt providers.`);
+  }
   return futuresRouter.fetchSpotExchangeSymbols();
 }
 
@@ -541,6 +596,13 @@ async function fetchFuturesBalance() {
  * Fetch user trade history from Bybit.
  */
 async function fetchUserTrades(symbol, startTime = null, type = 'futures', fromId = null) {
+  try {
+    const result = await binanceData.fetchUserTrades(symbol, startTime, type, fromId);
+    if (Array.isArray(result) && result.length) return result;
+  } catch (err) {
+    logger.warn(`⚠️ Binance primary fetchUserTrades failed for ${symbol}: ${err.message}. Falling back to Bybit.`);
+  }
+
   try {
     const params = { category: 'linear', limit: 100 };
     if (symbol) params.symbol = toFuturesSymbol(symbol).toUpperCase();

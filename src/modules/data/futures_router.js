@@ -406,12 +406,9 @@ function includeProvider(provider) {
 function providerOrderForMethod(method) {
   const order = parseProviderOrder();
   const preferred = state.preferredByMethod.get(method);
-  const includeBinanceFallback = shouldIncludeBinanceFallback();
-  const candidates = unique([preferred, ...order]);
-  if (includeBinanceFallback && !candidates.includes('binance')) {
-    candidates.push('binance');
-  }
-  return candidates.filter(includeProvider);
+  const candidates = unique([preferred, ...order].filter(Boolean));
+  const withoutBinance = candidates.filter((provider) => provider !== 'binance');
+  return unique(['binance', ...withoutBinance]).filter(includeProvider);
 }
 
 async function httpGet(provider, path, params = {}) {
