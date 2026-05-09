@@ -18,7 +18,7 @@ function formatProviderFallbackMessage(report) {
   });
 
   return [
-    '⚠️ *Provider Fallback Alert*',
+    '⚠️ Provider Fallback Alert',
     '',
     `• Blocked providers: ${activeBlocked}`,
     `• Recent fallback events: ${fallbackEvents.length}`,
@@ -28,7 +28,7 @@ function formatProviderFallbackMessage(report) {
 
 function buildScanSummary(report) {
   const lines = [
-    '🧭 *Scan Summary*',
+    '🧭 Scan Summary',
     '',
     `• Status: ${report?.status || 'UNKNOWN'}`,
     `• Signals: ${report?.signalCount ?? 0}`,

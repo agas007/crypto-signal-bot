@@ -1,0 +1,31 @@
+name: Deploy VM
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: deploy-vm-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to VM via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT || 22 }}
+          fingerprint: ${{ secrets.SSH_FINGERPRINT }}
+          script: |
+            set -e
+            cd /root/crypto-signal-bot
+            REPO_DIR=/root/crypto-signal-bot PM2_APP_NAME=crypto-bot ./deploy.sh
