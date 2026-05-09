@@ -1,10 +1,23 @@
 import { NextResponse } from 'next/server';
+import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 import { aggregatePositionHistory } from '../../../../../src/utils/trade_aggregation';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+const require = createRequire(import.meta.url);
+const { getState, isEnabled: isRedisEnabled } = require('../../../../../src/utils/redis');
+
+const REDIS_KEYS = {
+  signals: 'bot:signals',
+  lessons: 'bot:lessons',
+  history: 'bot:history',
+  watchlist: 'bot:watchlist',
+  dashboard: 'bot:dashboard_state',
+  scanReport: 'bot:scan_report',
+};
 
 function normalizeCloseReason(trade: any) {
   if (!trade) return trade;
@@ -19,6 +32,16 @@ function normalizeCloseReason(trade: any) {
   }
 
   return trade;
+}
+
+async function readRedisJson(key: string) {
+  if (!isRedisEnabled()) return null;
+
+  try {
+    return await getState(key);
+  } catch (err) {
+    return null;
+  }
 }
 
 async function fetchLiveTicker(symbol: string) {
@@ -72,28 +95,48 @@ export async function GET() {
       lessons: [],
       logs: "",
       watchlist: [],
-      binanceSnapshot: null
+      binanceSnapshot: null,
+      dashboardState: null,
+      scanReport: null,
     };
 
-    const signalsPath = resolvePath('active_signals.json');
-    if (signalsPath) {
-      debugInfo.resolvedSignalsPath = signalsPath;
-      try { data.signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8')); } catch (e: any) { debugInfo.errors.signals = e.message; }
+    const redisSignals = await readRedisJson(REDIS_KEYS.signals);
+    if (redisSignals) {
+      data.signals = redisSignals;
+      debugInfo.resolvedSignalsPath = 'redis:bot:signals';
+    } else {
+      const signalsPath = resolvePath('active_signals.json');
+      if (signalsPath) {
+        debugInfo.resolvedSignalsPath = signalsPath;
+        try { data.signals = JSON.parse(fs.readFileSync(signalsPath, 'utf8')); } catch (e: any) { debugInfo.errors.signals = e.message; }
+      }
     }
 
-    const historyPath = resolvePath('trade_history.json');
-    if (historyPath) {
-      debugInfo.resolvedHistoryPath = historyPath;
-      try {
-        const rawHistory = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
-        data.history = aggregatePositionHistory(Array.isArray(rawHistory) ? rawHistory : []);
-      } catch (e: any) { debugInfo.errors.history = e.message; }
+    const redisHistory = await readRedisJson(REDIS_KEYS.history);
+    if (redisHistory) {
+      data.history = aggregatePositionHistory(Array.isArray(redisHistory) ? redisHistory : []);
+      debugInfo.resolvedHistoryPath = 'redis:bot:history';
+    } else {
+      const historyPath = resolvePath('trade_history.json');
+      if (historyPath) {
+        debugInfo.resolvedHistoryPath = historyPath;
+        try {
+          const rawHistory = JSON.parse(fs.readFileSync(historyPath, 'utf8'));
+          data.history = aggregatePositionHistory(Array.isArray(rawHistory) ? rawHistory : []);
+        } catch (e: any) { debugInfo.errors.history = e.message; }
+      }
     }
 
-    const lessonsPath = resolvePath('history_lessons.json');
-    if (lessonsPath) {
-      debugInfo.resolvedLessonsPath = lessonsPath;
-      try { data.lessons = JSON.parse(fs.readFileSync(lessonsPath, 'utf8')); } catch (e: any) { debugInfo.errors.lessons = e.message; }
+    const redisLessons = await readRedisJson(REDIS_KEYS.lessons);
+    if (redisLessons) {
+      data.lessons = redisLessons;
+      debugInfo.resolvedLessonsPath = 'redis:bot:lessons';
+    } else {
+      const lessonsPath = resolvePath('history_lessons.json');
+      if (lessonsPath) {
+        debugInfo.resolvedLessonsPath = lessonsPath;
+        try { data.lessons = JSON.parse(fs.readFileSync(lessonsPath, 'utf8')); } catch (e: any) { debugInfo.errors.lessons = e.message; }
+      }
     }
 
     const logsPath = resolvePath('scan_audit.log');
@@ -105,10 +148,28 @@ export async function GET() {
       } catch (e: any) { debugInfo.errors.logs = e.message; }
     }
 
-    const watchlistPath = resolvePath('latest_watchlist.json');
-    if (watchlistPath) {
-      debugInfo.resolvedWatchlistPath = watchlistPath;
-      try { data.watchlist = JSON.parse(fs.readFileSync(watchlistPath, 'utf8')); } catch (e: any) { debugInfo.errors.watchlist = e.message; }
+    const redisWatchlist = await readRedisJson(REDIS_KEYS.watchlist);
+    if (redisWatchlist) {
+      data.watchlist = redisWatchlist;
+      debugInfo.resolvedWatchlistPath = 'redis:bot:watchlist';
+    } else {
+      const watchlistPath = resolvePath('latest_watchlist.json');
+      if (watchlistPath) {
+        debugInfo.resolvedWatchlistPath = watchlistPath;
+        try { data.watchlist = JSON.parse(fs.readFileSync(watchlistPath, 'utf8')); } catch (e: any) { debugInfo.errors.watchlist = e.message; }
+      }
+    }
+
+    const redisDashboardState = await readRedisJson(REDIS_KEYS.dashboard);
+    if (redisDashboardState) {
+      data.dashboardState = redisDashboardState;
+      debugInfo.resolvedDashboardStatePath = 'redis:bot:dashboard_state';
+    }
+
+    const redisScanReport = await readRedisJson(REDIS_KEYS.scanReport);
+    if (redisScanReport) {
+      data.scanReport = redisScanReport;
+      debugInfo.resolvedScanReportPath = 'redis:bot:scan_report';
     }
 
     const binanceSnapshotPath = resolvePath('binance_trade_snapshot.json');
@@ -150,6 +211,13 @@ export async function GET() {
         tradeLog: Array.isArray(data.binanceSnapshot.tradeLog)
           ? data.binanceSnapshot.tradeLog.map((trade: any) => normalizeCloseReason(trade))
           : [],
+      };
+    }
+
+    if (data.scanReport) {
+      data.scanReport = {
+        ...data.scanReport,
+        errors: Array.isArray(data.scanReport.errors) ? data.scanReport.errors : [],
       };
     }
 

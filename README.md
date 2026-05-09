@@ -45,6 +45,32 @@ Crypto signal scanner berbasis **Node.js/JavaScript** dengan core strategy lama 
 6. Kalau signal belum pernah dikirim untuk candle itu, alert dikirim ke Telegram dan Discord
 7. JSON status dikembalikan ke caller
 
+### Redis Sebagai Shared State
+
+Redis dipakai sebagai jembatan state supaya VM bot dan Vercel dashboard baca sumber yang sama.
+
+```mermaid
+flowchart LR
+  VM["VM / PM2 bot runtime"]
+  Redis["Upstash Redis"]
+  Vercel["Vercel dashboard"]
+  Cron["cron-job.org /api/check-signal"]
+  Discord["Discord / Telegram delivery"]
+
+  VM -- syncToRedis / syncFromRedis --> Redis
+  Cron --> Vercel
+  Vercel --> Redis
+  VM --> Discord
+  Redis --> Vercel
+```
+
+Urutan praktisnya:
+
+1. VM scan jalan dan push state ke Redis
+2. Vercel dashboard baca Redis dulu, file lokal jadi fallback
+3. `check-signal` di Vercel pakai `runSignalCheck()` yang ikut sync Redis
+4. Kalau Redis mati, app tetap jalan, tapi dashboard bisa balik ke state lokal atau kosong
+
 ## File Penting
 
 - `dashboard/src/app/api/check-signal/route.ts` - serverless endpoint

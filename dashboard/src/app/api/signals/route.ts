@@ -1,9 +1,21 @@
 import { NextResponse } from 'next/server';
+import { createRequire } from 'module';
 import fs from 'fs';
 import path from 'path';
 
+const require = createRequire(import.meta.url);
+const { getState, isEnabled: isRedisEnabled } = require('../../../../../src/utils/redis');
+
 export async function GET() {
   try {
+    if (isRedisEnabled()) {
+      const redisSignals = await getState('bot:signals');
+      if (redisSignals) {
+        const signals = Array.isArray(redisSignals) ? redisSignals : Object.values(redisSignals);
+        return NextResponse.json({ success: true, signals });
+      }
+    }
+
     // Look for active_signals.json in root or current dir
     const possiblePaths = [
       path.join(process.cwd(), 'active_signals.json'),
