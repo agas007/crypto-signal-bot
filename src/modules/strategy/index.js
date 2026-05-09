@@ -288,6 +288,67 @@ function getPatternScoreWeight(patternName) {
   }
 }
 
+function buildRejectionDiagnostics({
+  bias,
+  longScore,
+  shortScore,
+  finalScore = null,
+  reasons = [],
+  warnings = [],
+  tags = [],
+  analysis = null,
+  riskReward = null,
+  pricePosition = null,
+  d1Trend = null,
+  h4Trend = null,
+  h1Trend = null,
+  h1Structure = null,
+  h1Stoch = null,
+  h4Stoch = null,
+  standbyBias = null,
+  standbyReason = null,
+}) {
+  return {
+    bias,
+    longScore,
+    shortScore,
+    finalScore,
+    reasons: [...reasons],
+    warnings: [...warnings],
+    tags: [...tags],
+    pricePosition,
+    analysis,
+    riskReward: riskReward
+      ? {
+          entry: riskReward.entry,
+          sl: riskReward.sl,
+          tp: riskReward.tp,
+          rr: riskReward.rr,
+          isScaled: riskReward.isScaled,
+        }
+      : null,
+    trends: {
+      d1: d1Trend?.direction || null,
+      h4: h4Trend?.direction || null,
+      h1: h1Trend?.direction || null,
+    },
+    structure: h1Structure
+      ? {
+          structure: h1Structure.structure || null,
+          bos: Boolean(h1Structure.bos),
+          bosType: h1Structure.bosType || null,
+          pendingBosType: h1Structure.pendingBosType || null,
+        }
+      : null,
+    stochastic: {
+      h1: h1Stoch ? { signal: h1Stoch.signal || null, k: h1Stoch.k, d: h1Stoch.d } : null,
+      h4: h4Stoch ? { signal: h4Stoch.signal || null, k: h4Stoch.k, d: h4Stoch.d } : null,
+    },
+    standbyBias,
+    standbyReason,
+  };
+}
+
 /**
  * Evaluate a symbol across multiple timeframes with Weighted Scoring v4.5.1.
  * Core edge comes from trend, support/resistance, structure, retest, and R:R.
@@ -295,6 +356,15 @@ function getPatternScoreWeight(patternName) {
 function evaluateSignal(symbol, data, options = {}) {
   const { D1, H4, H1, M15 } = data;
   const fundingRate = options.fundingRate || 0;
+  const scoreWeights = config.strategy.scoreWeights || {};
+  const noStructurePenalty = scoreWeights.noStructurePenalty ?? 4;
+  const lowVolPenalty = scoreWeights.lowVolPenalty ?? 6;
+  const middleZonePenalty = scoreWeights.middleZonePenalty ?? 4;
+  const nearLevelDirectionalBias = scoreWeights.nearLevelDirectionalBias ?? 9;
+  const repeatedTouchBonus = scoreWeights.repeatedTouchBonus ?? 6;
+  const strongRepeatedTouchBonus = scoreWeights.strongRepeatedTouchBonus ?? 8;
+  const retestPendingPenalty = scoreWeights.retestPendingPenalty ?? 4;
+  const rrBelowMinPenalty = scoreWeights.rrBelowMinPenalty ?? 10;
   const emaParams = config.indicators.ema;
   const stochParams = config.indicators.stochastic;
 
@@ -460,7 +530,42 @@ function evaluateSignal(symbol, data, options = {}) {
   if (trendConflict) {
     const conflictReason = `Trend conflict D1 ${d1Trend.direction} vs H4 ${h4Trend.direction} — timeframe utama berlawanan, tidak ada edge.`;
     return options.includeRejectionReason
-      ? { signal: null, rejectionReason: conflictReason }
+      ? {
+          signal: null,
+          rejectionReason: conflictReason,
+          diagnostics: buildRejectionDiagnostics({
+            bias: d1Trend.direction === 'bullish' ? 'LONG' : d1Trend.direction === 'bearish' ? 'SHORT' : null,
+            longScore,
+            shortScore,
+            reasons: [...longReasons, ...shortReasons],
+            warnings,
+            tags,
+            analysis: {
+              d1Trend,
+              h4SR,
+              h4Pattern,
+              h4Trend,
+              h1Trend,
+              m15Trend,
+              h1Structure,
+              h1Compression,
+              ema1321,
+              h4OB,
+              h1OB,
+              h1Engulfing,
+              h1Pin,
+              h1Stoch,
+              h4Stoch,
+            },
+            pricePosition,
+            d1Trend,
+            h4Trend,
+            h1Trend,
+            h1Structure,
+            h1Stoch,
+            h4Stoch,
+          }),
+        }
       : null;
   }
 
@@ -473,8 +578,8 @@ function evaluateSignal(symbol, data, options = {}) {
     shortReasons.push(`H1 bearish structure (Lower Highs) (+10)`);
   } else {
     // H1 no_structure = ranging/mixed — entry prematur, semua SL hit terjadi saat kondisi ini
-    longScore -= 8;
-    shortScore -= 8;
+    longScore -= noStructurePenalty;
+    shortScore -= noStructurePenalty;
     warnings.push('⚠️ H1 structure tidak terbentuk (ranging/mixed). Entry tanpa struktur rawan SL prematur — tunggu HH/HL atau LH/LL terbentuk dulu.');
     tags.push('NO_STRUCTURE');
   }
@@ -554,8 +659,8 @@ function evaluateSignal(symbol, data, options = {}) {
   // Low Volatility Filter
   const minVol = config.filters.minAtrPercent || 0.5;
   if (atrPercent < minVol) {
-    longScore -= 10;
-    shortScore -= 10;
+    longScore -= lowVolPenalty;
+    shortScore -= lowVolPenalty;
     warnings.push(`✋ Market flat/sideways (ATR: ${atrPercent.toFixed(2)}%). Avoid entries.`);
   } else {
     longScore += 5;
@@ -565,35 +670,34 @@ function evaluateSignal(symbol, data, options = {}) {
   // Price location filter: treat resistance/support context as directional bias,
   // not just a label for charting.
   if (pricePosition === 'near_resistance') {
-    shortScore += 12;
-    longScore -= 12;
+    shortScore += nearLevelDirectionalBias;
+    longScore -= nearLevelDirectionalBias;
     shortReasons.push('H4 price dekat resistance — rejection/failed breakout lebih likely');
     warnings.push('⚠️ Price dekat resistance. Long butuh confluence ekstra dan retest yang bersih.');
   } else if (pricePosition === 'near_support') {
-    longScore += 12;
-    shortScore -= 12;
+    longScore += nearLevelDirectionalBias;
+    shortScore -= nearLevelDirectionalBias;
     longReasons.push('H4 price dekat support — bounce lebih likely');
     warnings.push('ℹ️ Price dekat support. Short butuh breakdown valid, bukan sekadar wick.');
   } else {
-    longScore -= 8;
-    shortScore -= 8;
+    longScore -= middleZonePenalty;
+    shortScore -= middleZonePenalty;
     warnings.push('ℹ️ Price berada di middle zone. Edge menurun, tunggu area level yang lebih jelas.');
   }
 
   // Repeated-touch levels behave more like magnets for rejection/bounce until proven broken.
   const repeatedLevelTouches = config.strategy.repeatedLevelTouches || 3;
-  const standbyMinRr = config.strategy.standbyMinRr || 2.0;
 
   if (pricePosition === 'near_resistance' && resistanceTouches >= repeatedLevelTouches) {
-    const touchBonus = resistanceTouches >= 5 ? 10 : 7;
+    const touchBonus = resistanceTouches >= 5 ? strongRepeatedTouchBonus : repeatedTouchBonus;
     shortScore += touchBonus;
-    longScore -= 4;
+    longScore -= Math.max(2, Math.floor(repeatedTouchBonus / 2));
     shortReasons.push(`Resistance H4 sudah dites ${resistanceTouches}x — standby SHORT saat rejection lebih valid (+${touchBonus})`);
     tags.push('REPEATED RESISTANCE');
   } else if (pricePosition === 'near_support' && supportTouches >= repeatedLevelTouches) {
-    const touchBonus = supportTouches >= 5 ? 10 : 7;
+    const touchBonus = supportTouches >= 5 ? strongRepeatedTouchBonus : repeatedTouchBonus;
     longScore += touchBonus;
-    shortScore -= 4;
+    shortScore -= Math.max(2, Math.floor(repeatedTouchBonus / 2));
     longReasons.push(`Support H4 sudah dites ${supportTouches}x — standby LONG saat bounce lebih valid (+${touchBonus})`);
     tags.push('REPEATED SUPPORT');
   }
@@ -624,8 +728,8 @@ function evaluateSignal(symbol, data, options = {}) {
     if (patternBreakoutMatch) tags.push('PATTERN_RETEST_CONTINUATION');
   } else if (retestStatus === 'PENDING') {
     // Retest ada tapi belum ada close confirmation — root cause dari banyak SL hit prematur
-    longScore -= 5;
-    shortScore -= 5;
+    longScore -= retestPendingPenalty;
+    shortScore -= retestPendingPenalty;
     warnings.push('⏳ Retest belum terkonfirmasi (PENDING). Tunggu candle close di sisi yang benar sebelum entry.');
     tags.push('RETEST_PENDING');
   } else {
@@ -680,21 +784,71 @@ function evaluateSignal(symbol, data, options = {}) {
       longReasons.push(`Good R:R Ratio (${riskReward.rr.toFixed(1)}) (+5)`);
     } else {
         // Rule: R:R must be 2.0+ or it's a weak setup
-        longScore -= 15;
-        shortScore -= 15;
+        longScore -= rrBelowMinPenalty;
+        shortScore -= rrBelowMinPenalty;
     }
   }
+
+  const minFinalScore = Number.isFinite(options.minFinalScore) ? options.minFinalScore : (config.strategy.minFinalScore || 25);
+  const minRrRatio = Number.isFinite(options.minRrRatio) ? options.minRrRatio : 2.0;
+  const standbyMinRr = Number.isFinite(options.standbyMinRr) ? options.standbyMinRr : (config.strategy.standbyMinRr || minRrRatio);
 
   // ─── FINAL SELECTION ──────────────────────────────────
   let finalScore = longScore > shortScore ? longScore : shortScore;
   let reasons = longScore > shortScore ? longReasons : shortReasons;
   
-  if (finalScore < 30) {
-    return options.includeRejectionReason ? { signal: null, rejectionReason: `Weighted score too low (${finalScore}/100)` } : null;
+  if (finalScore < minFinalScore) {
+    return options.includeRejectionReason ? {
+      signal: null,
+      rejectionReason: `Weighted score too low (${finalScore}/100). Need min ${minFinalScore}.`,
+      diagnostics: buildRejectionDiagnostics({
+        bias,
+        longScore,
+        shortScore,
+        finalScore,
+        reasons,
+        warnings,
+        tags,
+        analysis: {
+          d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch,
+        },
+        riskReward,
+        pricePosition,
+        d1Trend,
+        h4Trend,
+        h1Trend,
+        h1Structure,
+        h1Stoch,
+        h4Stoch,
+      }),
+    } : null;
   }
 
-  if (!riskReward || riskReward.rr < 2.0) {
-      return options.includeRejectionReason ? { signal: null, rejectionReason: `Poor R:R Ratio (${riskReward ? riskReward.rr.toFixed(1) : 'N/A'}). Need min 2.0.` } : null;
+  if (!riskReward || riskReward.rr < minRrRatio) {
+      return options.includeRejectionReason ? {
+        signal: null,
+        rejectionReason: `Poor R:R Ratio (${riskReward ? riskReward.rr.toFixed(1) : 'N/A'}). Need min ${minRrRatio.toFixed(1)}.`,
+        diagnostics: buildRejectionDiagnostics({
+          bias,
+          longScore,
+          shortScore,
+          finalScore,
+          reasons,
+          warnings,
+          tags,
+          analysis: {
+            d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch,
+          },
+          riskReward,
+          pricePosition,
+          d1Trend,
+          h4Trend,
+          h1Trend,
+          h1Structure,
+          h1Stoch,
+          h4Stoch,
+        }),
+      } : null;
   }
 
   const standbyOnly = Boolean(standbyBias && bias === standbyBias && riskReward && riskReward.rr < standbyMinRr);

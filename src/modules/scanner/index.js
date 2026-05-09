@@ -16,6 +16,173 @@ const tracker = require('../tracker');
 const { claimSignalDedupe, getSignalCandleTime, releaseSignalDedupe } = require('../../utils/signal_dedupe');
 const { logAudit, initAudit } = require('../../utils/audit');
 
+function normalizeLessonText(text, maxLength = 500) {
+  const normalized = String(text || '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+
+  return normalized.slice(0, maxLength).trim();
+}
+
+function formatScoreHint(result) {
+  const diagnostics = result?.diagnostics || {};
+  const finalScore = Number.isFinite(diagnostics.finalScore) ? diagnostics.finalScore : null;
+  const longScore = Number.isFinite(diagnostics.longScore) ? diagnostics.longScore : null;
+  const shortScore = Number.isFinite(diagnostics.shortScore) ? diagnostics.shortScore : null;
+
+  if (finalScore != null) return `score ${finalScore}/100`;
+  if (longScore != null || shortScore != null) {
+    return `score L${longScore ?? 0}/S${shortScore ?? 0}`;
+  }
+  return 'score n/a';
+}
+
+function classifyStrategyLessonReason(result = {}) {
+  const text = [
+    result?.lessonReason,
+    result?.rejectionReason,
+    result?.standbyReason,
+    result?.diagnostics?.warnings?.join(' '),
+    result?.diagnostics?.reasons?.join(' '),
+    result?.diagnostics?.tags?.join(' '),
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  if (text.includes('trend conflict') || text.includes('timeframe utama berlawanan')) return 'trend_conflict';
+  if (text.includes('poor r:r') || text.includes('need min 2.0') || text.includes('r:r ratio')) return 'poor_rr';
+  if (text.includes('weighted score too low') || text.includes('score terlalu rendah')) return 'score_low';
+  if (text.includes('standby')) return 'standby';
+  if (text.includes('signal lolos validasi') || text.includes('terkirim')) return 'accepted';
+  if (text.includes('no pairs')) return 'no_pairs';
+  if (text.includes('no signal')) return 'no_signal';
+  if (text.includes('error')) return 'error';
+  return 'other';
+}
+
+function buildOutcomeLessonDiagnostics(source, candidate = null) {
+  const sourceAnalysis = source?.analysis || null;
+  const candidateAnalysis = candidate?.analysis || null;
+  const analysis = sourceAnalysis && Object.keys(sourceAnalysis).length > 0
+    ? sourceAnalysis
+    : candidateAnalysis;
+  const scoreValue = Number.isFinite(source?.score)
+    ? source.score
+    : Number.isFinite(candidate?.score)
+      ? candidate.score
+      : null;
+
+  return {
+    bias: source?.bias || candidate?.bias || 'UNKNOWN',
+    finalScore: scoreValue,
+    longScore: scoreValue,
+    shortScore: scoreValue,
+    reasons: source?.reasons || candidate?.reasons || [],
+    warnings: source?.warnings || candidate?.warnings || [],
+    tags: source?.tags || candidate?.tags || [],
+    analysis,
+    riskReward: source?.riskReward || candidate?.riskReward || null,
+    pricePosition: sourceAnalysis?.pricePosition || candidateAnalysis?.pricePosition || null,
+    trends: {
+      d1: sourceAnalysis?.d1Trend?.direction || candidateAnalysis?.d1Trend?.direction || null,
+      h4: sourceAnalysis?.h4Trend?.direction || candidateAnalysis?.h4Trend?.direction || null,
+      h1: sourceAnalysis?.h1Trend?.direction || candidateAnalysis?.h1Trend?.direction || null,
+    },
+    structure: sourceAnalysis?.h1Structure
+      ? {
+          structure: sourceAnalysis.h1Structure.structure || null,
+          bos: Boolean(sourceAnalysis.h1Structure.bos),
+          bosType: sourceAnalysis.h1Structure.bosType || null,
+          pendingBosType: sourceAnalysis.h1Structure.pendingBosType || null,
+        }
+      : candidateAnalysis?.h1Structure
+        ? {
+            structure: candidateAnalysis.h1Structure.structure || null,
+            bos: Boolean(candidateAnalysis.h1Structure.bos),
+            bosType: candidateAnalysis.h1Structure.bosType || null,
+            pendingBosType: candidateAnalysis.h1Structure.pendingBosType || null,
+          }
+        : null,
+  };
+}
+
+function buildStrategyLessonText(symbol, result, scanReport = null, candidate = null) {
+  const diagnostics = result?.diagnostics || {};
+  const lessonReason = result?.lessonReason || result?.rejectionReason || 'Setup ditolak';
+  const reasonKey = result?.reasonKey || classifyStrategyLessonReason(result);
+  const bias = diagnostics.bias || candidate?.bias || 'UNKNOWN';
+  const scoreHint = formatScoreHint(result);
+  const rr = diagnostics.riskReward?.rr;
+  const rrHint = Number.isFinite(rr) ? `R:R ${rr.toFixed(2)}` : 'R:R n/a';
+  const trendHint = diagnostics.trends?.d1 && diagnostics.trends?.h4
+    ? `D1 ${diagnostics.trends.d1} vs H4 ${diagnostics.trends.h4}`
+    : null;
+  const structureHint = diagnostics.structure?.structure
+    ? `H1 ${diagnostics.structure.structure}${diagnostics.structure.bosType ? ` (${diagnostics.structure.bosType})` : ''}`
+    : null;
+  const extraHints = [
+    trendHint,
+    structureHint,
+    diagnostics.pricePosition ? `posisi ${diagnostics.pricePosition}` : null,
+    diagnostics.warnings?.[0] ? diagnostics.warnings[0].replace(/^⚠️\s*/, '') : null,
+  ].filter(Boolean);
+
+  const scanNote = scanReport && scanReport.status && !['RUNNING', 'SIGNALS_SENT'].includes(scanReport.status)
+    ? `Scan ${scanReport.status}`
+    : null;
+
+  const reasonLeadMap = {
+    trend_conflict: `Trend conflict ${diagnostics.trends?.d1 || 'n/a'} vs ${diagnostics.trends?.h4 || 'n/a'}`,
+    poor_rr: `R:R terlalu kecil (${rrHint})`,
+    score_low: `Score terlalu rendah (${scoreHint})`,
+    standby: 'Setup masih standby',
+    accepted: 'Signal lolos validasi',
+    no_pairs: 'Tidak ada pair yang bisa diproses',
+    no_signal: 'Cycle tanpa signal',
+    error: 'Cycle error',
+  };
+  const reasonLead = reasonLeadMap[reasonKey] || lessonReason.replace(/\.$/, '');
+
+  const text = [
+    `${symbol}: ${reasonLead}`,
+    `${scoreHint}, ${rrHint}, bias ${bias}`,
+    extraHints.length > 0 ? extraHints.join('; ') : null,
+    scanNote,
+  ].filter(Boolean).join('. ');
+
+  return normalizeLessonText(text);
+}
+
+function buildCycleLessonText(scanReport, sentCount) {
+  const topErrors = Array.isArray(scanReport?.errors) ? scanReport.errors.slice(0, 2).join('; ') : '';
+  const summary = [
+    `Scan ${scanReport?.status || 'UNKNOWN'} selesai`,
+    `signal ${sentCount || 0}`,
+    `candidate ${scanReport?.candidateCount || 0}`,
+    `watchlist ${scanReport?.watchlistCount || 0}`,
+    `error ${scanReport?.errorCount || 0}`,
+    topErrors || null,
+  ].filter(Boolean).join('. ');
+
+  return normalizeLessonText(summary);
+}
+
+function recordStrategyLesson(tracker, symbol, result, scanReport, candidate = null, meta = {}) {
+  if (!tracker || typeof tracker.saveLesson !== 'function') return;
+  const reasonKey = meta.reasonKey || result?.reasonKey || classifyStrategyLessonReason(result);
+  const lessonText = buildStrategyLessonText(symbol, { ...result, reasonKey }, scanReport, candidate);
+  const bias = result?.diagnostics?.bias || candidate?.bias || 'UNKNOWN';
+  const kind = meta.kind || result?.kind || (['accepted', 'standby'].includes(reasonKey) ? reasonKey : 'reject');
+  tracker.saveLesson(symbol, bias, lessonText, {
+    kind,
+    reasonKey,
+    score: result?.diagnostics?.finalScore ?? result?.score ?? candidate?.score ?? null,
+    source: meta.source || 'scanner',
+  });
+}
+
 /**
  * Run a single scan cycle:
  * 1. Monitor active trades for TP/SL
@@ -120,6 +287,12 @@ async function runScanCycle() {
       pushScanError(`BTC regime fetch failed: ${err.message}`);
     }
     scanReport.checks.btcTrend = btcTrend;
+    const lessonSummary = tracker.getDailyLessonSummary ? tracker.getDailyLessonSummary() : null;
+    scanReport.adaptiveThresholds = lessonSummary?.thresholds || {
+      minRrRatio: config.strategy.minRrRatio,
+      standbyMinRr: config.strategy.standbyMinRr,
+      minFinalScore: config.strategy.minFinalScore || 25,
+    };
 
     // 2. Filter + evaluate each pair
     const candidates = [];
@@ -199,6 +372,9 @@ async function runScanCycle() {
           accountBalance: effectiveBalance,
           stepSize: specs.stepSize,
           minNotional: specs.minNotional,
+          minRrRatio: scanReport.adaptiveThresholds?.minRrRatio,
+          minFinalScore: scanReport.adaptiveThresholds?.minFinalScore,
+          standbyMinRr: scanReport.adaptiveThresholds?.standbyMinRr,
           includeRejectionReason: true
       });
       
@@ -208,8 +384,20 @@ async function runScanCycle() {
       const isRejection = result && result.signal === null && result.rejectionReason;
       const signal = isRejection ? null : result;
 
+      if (isRejection) {
+        recordStrategyLesson(tracker, symbol, {
+          ...result,
+          lessonReason: result.rejectionReason,
+        }, scanReport);
+      }
+
       if (signal && signal.standbyOnly) {
         scanReport.watchlistCount++;
+        recordStrategyLesson(tracker, signal.symbol || symbol, {
+          lessonReason: signal.standbyReason || 'Setup masih standby',
+          rejectionReason: signal.standbyReason || 'Setup masih standby',
+          diagnostics: buildOutcomeLessonDiagnostics(signal),
+        });
         technicalWatchlist.push({
           symbol: signal.symbol,
           score: signal.score,
@@ -464,6 +652,12 @@ async function runScanCycle() {
         logger.warn(`⚠️ ${candidate.symbol}: delivery failed, dedupe key released for retry.`);
         continue;
       }
+
+      recordStrategyLesson(tracker, refined.symbol || candidate.symbol, {
+        lessonReason: 'Signal lolos validasi dan terkirim',
+        diagnostics: buildOutcomeLessonDiagnostics(refined, candidate),
+      }, scanReport, candidate);
+
       tracker.track(refined);
       sentCount++;
 
@@ -548,8 +742,21 @@ async function runScanCycle() {
       errors: scanReport.errorCount,
     };
     scanReport.providerHealth = getProviderHealth ? getProviderHealth() : null;
+    scanReport.lessonSummary = tracker.getDailyLessonSummary ? tracker.getDailyLessonSummary() : null;
+    scanReport.adaptiveThresholds = scanReport.lessonSummary?.thresholds || scanReport.adaptiveThresholds || {
+      minRrRatio: config.strategy.minRrRatio,
+      standbyMinRr: config.strategy.standbyMinRr,
+      minFinalScore: config.strategy.minFinalScore || 25,
+    };
     tracker.saveScanReport(scanReport);
     logger.info(`🧾 Scan report saved: ${scanReport.status} | signals=${scanReport.signalCount} | errors=${scanReport.errorCount}`);
+    if (sentCount === 0 && (scanReport.candidateCount > 0 || scanReport.watchlistCount > 0 || scanReport.errorCount > 0)) {
+      tracker.saveLesson(
+        'SCAN',
+        scanReport.status || 'NO_SIGNAL',
+        buildCycleLessonText(scanReport, sentCount)
+      );
+    }
     await maybeSendDiscordNotifications(scanReport).catch((err) => {
       logger.warn(`[runScanCycle] cycle summary skipped: ${err.message}`);
     });

@@ -38,6 +38,30 @@ function buildScanSummary(report) {
     `• Duration: ${report?.durationMs ? `${Math.round(report.durationMs / 1000)}s` : 'n/a'}`,
   ];
 
+  const lessonSummary = report?.lessonSummary || null;
+  const thresholds = report?.adaptiveThresholds || lessonSummary?.thresholds || null;
+  const topRejectReasons = Array.isArray(lessonSummary?.topRejectReasons) ? lessonSummary.topRejectReasons : [];
+
+  if (thresholds) {
+    lines.push(
+      '',
+      '🧪 Adaptive Thresholds',
+      `• Min R:R: ${Number.isFinite(thresholds.minRrRatio) ? thresholds.minRrRatio.toFixed(1) : 'n/a'}`,
+      `• Min score: ${Number.isFinite(thresholds.minFinalScore) ? thresholds.minFinalScore : 'n/a'}`,
+      `• Standby R:R: ${Number.isFinite(thresholds.standbyMinRr) ? thresholds.standbyMinRr.toFixed(1) : 'n/a'}`,
+    );
+  }
+
+  if (topRejectReasons.length > 0) {
+    lines.push('', '📉 Top Reject Reasons Today');
+    for (const reason of topRejectReasons.slice(0, 3)) {
+      const examples = Array.isArray(reason.symbols) && reason.symbols.length > 0
+        ? ` | ${reason.symbols.slice(0, 3).join(', ')}`
+        : '';
+      lines.push(`• ${reason.rank}. ${reason.label}: ${reason.count}${examples}`);
+    }
+  }
+
   const providerMessage = formatProviderFallbackMessage(report);
   if (providerMessage) {
     lines.push('', providerMessage);

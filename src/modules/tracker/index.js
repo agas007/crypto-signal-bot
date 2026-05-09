@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const config = require('../../config');
 const logger = require('../../utils/logger');
 const { getJakartaResetTime } = require('../../utils/time');
 const { getState, setState, isEnabled: redisEnabled } = require('../../utils/redis');
@@ -8,6 +9,7 @@ const { getState, setState, isEnabled: redisEnabled } = require('../../utils/red
 const R = {
   signals:   'bot:signals',
   lessons:   'bot:lessons',
+  lessonStats: 'bot:lesson_stats',
   history:   'bot:history',
   watchlist: 'bot:watchlist',
   dashboard: 'bot:dashboard_state',
@@ -18,6 +20,7 @@ const DATA_DIR = process.env.DATA_DIR || process.cwd();
 const IS_SERVERLESS = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME);
 const STORAGE_PATH = path.join(DATA_DIR, 'active_signals.json');
 const LESSONS_PATH = path.join(DATA_DIR, 'history_lessons.json');
+const LESSON_STATS_PATH = path.join(DATA_DIR, 'lesson_stats.json');
 const HISTORY_PATH = path.join(DATA_DIR, 'trade_history.json');
 const WATCHLIST_PATH = path.join(DATA_DIR, 'latest_watchlist.json');
 const BINANCE_SNAPSHOT_PATH = path.join(DATA_DIR, 'binance_trade_snapshot.json');
@@ -33,6 +36,41 @@ if (DATA_DIR !== process.cwd() && !fs.existsSync(DATA_DIR)) {
   }
 }
 
+function getLessonDayKey(timestamp = Date.now()) {
+  return new Date(timestamp).toLocaleDateString('en-CA', { timeZone: 'Asia/Jakarta' });
+}
+
+function normalizeLessonReasonKey(value) {
+  const text = String(value || '').toLowerCase();
+
+  if (!text) return 'other';
+  if (text.includes('trend conflict') || text.includes('timeframe utama berlawanan')) return 'trend_conflict';
+  if (text.includes('poor r:r') || text.includes('need min 2.0') || text.includes('r:r ke') || text.includes('r:r ratio')) return 'poor_rr';
+  if (text.includes('weighted score too low') || text.includes('score terlalu rendah') || text.includes('score 0/100')) return 'score_low';
+  if (text.includes('standby')) return 'standby';
+  if (text.includes('signal lolos validasi') || text.includes('terkirim')) return 'accepted';
+  if (text.includes('no pairs')) return 'no_pairs';
+  if (text.includes('error')) return 'error';
+  if (text.includes('no signal')) return 'no_signal';
+  return 'other';
+}
+
+function labelLessonReasonKey(key) {
+  const map = {
+    trend_conflict: 'Trend conflict D1/H4',
+    poor_rr: 'R:R terlalu kecil',
+    score_low: 'Weighted score terlalu rendah',
+    standby: 'Setup standby',
+    accepted: 'Signal lolos',
+    no_pairs: 'Tidak ada pair',
+    no_signal: 'Cycle no signal',
+    error: 'Error runtime',
+    other: 'Lainnya',
+  };
+
+  return map[key] || map.other;
+}
+
 /**
  * Memory module to track active trade signals and history.
  */
@@ -40,6 +78,7 @@ class SignalTracker {
   constructor() {
     this.signals = this._load();
     this.lessons = this._loadLessons();
+    this.lessonStats = this._loadLessonStats();
     this.history = this._loadHistory();
     this.latestWatchlist = this._loadWatchlist();
     this.latestBinanceSnapshot = this._loadBinanceSnapshot();
@@ -74,6 +113,15 @@ class SignalTracker {
       }
     } catch (err) { logger.error('Failed to load lessons:', err.message); }
     return [];
+  }
+
+  _loadLessonStats() {
+    try {
+      if (fs.existsSync(LESSON_STATS_PATH)) {
+        return JSON.parse(fs.readFileSync(LESSON_STATS_PATH, 'utf8'));
+      }
+    } catch (err) { logger.error('Failed to load lesson stats:', err.message); }
+    return { daily: {} };
   }
 
   _loadHistory() {
@@ -147,6 +195,18 @@ class SignalTracker {
     if (redisEnabled()) setState(R.lessons, this.lessons).catch(e => logger.error('[Redis] save lessons:', e.message));
   }
 
+  _saveLessonStats() {
+    if (IS_SERVERLESS) {
+      if (redisEnabled()) setState(R.lessonStats, this.lessonStats).catch(e => logger.error('[Redis] save lesson stats:', e.message));
+      return;
+    }
+
+    try {
+      fs.writeFileSync(LESSON_STATS_PATH, JSON.stringify(this.lessonStats, null, 2));
+    } catch (err) { logger.error('Failed to save lesson stats:', err.message); }
+    if (redisEnabled()) setState(R.lessonStats, this.lessonStats).catch(e => logger.error('[Redis] save lesson stats:', e.message));
+  }
+
   _saveHistory() {
     if (IS_SERVERLESS) {
       if (redisEnabled()) setState(R.history, this.history.slice(-100)).catch(e => logger.error('[Redis] save history:', e.message));
@@ -165,24 +225,189 @@ class SignalTracker {
    * Keep a lesson learned from a failed trade.
    * Deduplicates: skips if the same symbol+bias already has a lesson within 24h.
    */
-  saveLesson(symbol, bias, analysis) {
+  saveLesson(symbol, bias, analysis, meta = {}) {
     const now = Date.now();
     const dayAgo = now - (24 * 60 * 60 * 1000);
+    const kind = meta.kind || 'general';
+    const reasonKey = normalizeLessonReasonKey(meta.reasonKey || meta.lessonReason || analysis);
     const duplicate = this.lessons.find(l => 
-      l.symbol === symbol && l.bias === bias && l.timestamp > dayAgo
+      l.symbol === symbol && l.bias === bias && l.kind === kind && l.reasonKey === reasonKey && l.timestamp > dayAgo
     );
     if (duplicate) {
       logger.debug(`🧠 [Tracker] Skipping duplicate lesson for ${symbol} (${bias}) - already learned today.`);
       return;
     }
 
-    this.lessons.push({ symbol, bias, analysis, timestamp: now });
+    const lesson = {
+      symbol,
+      bias,
+      analysis,
+      timestamp: now,
+      kind,
+      reasonKey,
+      score: meta.score ?? null,
+      source: meta.source || null,
+    };
+
+    this.lessons.push(lesson);
+    this._recordLessonStats(lesson);
     this._saveLessons();
     logger.info(`🧠 [Tracker] Lesson saved for ${symbol}. Total memory: ${this.lessons.length}`);
   }
 
   getRecentLessons() {
     return this.lessons.slice(-10); // Return last 10 lessons for AI prompt
+  }
+
+  getLessonsSince(resetTime = this.getEffectiveResetTime()) {
+    return this.lessons.filter((lesson) => (lesson.timestamp || 0) > resetTime);
+  }
+
+  _getLessonStatsDay(dayKey = getLessonDayKey()) {
+    if (!this.lessonStats.daily) this.lessonStats.daily = {};
+    if (!this.lessonStats.daily[dayKey]) {
+      this.lessonStats.daily[dayKey] = {
+        dayKey,
+        totalLessons: 0,
+        rejectCount: 0,
+        byReason: {},
+        updatedAt: Date.now(),
+      };
+    }
+    return this.lessonStats.daily[dayKey];
+  }
+
+  _recordLessonStats(lesson) {
+    if (!lesson || lesson.kind !== 'reject') return;
+
+    const dayKey = getLessonDayKey(lesson.timestamp);
+    const bucket = this._getLessonStatsDay(dayKey);
+    const reasonKey = lesson.reasonKey || 'other';
+    const reasonBucket = bucket.byReason[reasonKey] || {
+      key: reasonKey,
+      label: labelLessonReasonKey(reasonKey),
+      count: 0,
+      symbols: [],
+      lastTimestamp: 0,
+      lastAnalysis: '',
+    };
+
+    reasonBucket.count += 1;
+    reasonBucket.lastTimestamp = lesson.timestamp || Date.now();
+    reasonBucket.lastAnalysis = String(lesson.analysis || '').slice(0, 180);
+    if (!reasonBucket.symbols.includes(lesson.symbol)) {
+      reasonBucket.symbols.push(lesson.symbol);
+      reasonBucket.symbols = reasonBucket.symbols.slice(-3);
+    }
+
+    bucket.byReason[reasonKey] = reasonBucket;
+    bucket.rejectCount += 1;
+    bucket.totalLessons += 1;
+    bucket.updatedAt = Date.now();
+    this.lessonStats.daily[dayKey] = bucket;
+    this._saveLessonStats();
+  }
+
+  getDailyLessonSummary(resetTime = this.getEffectiveResetTime()) {
+    const dayKey = getLessonDayKey(resetTime);
+    const bucket = this.lessonStats.daily?.[dayKey] || {
+      dayKey,
+      totalLessons: 0,
+      rejectCount: 0,
+      byReason: {},
+    };
+
+    const fallbackRejectLessons = this.getLessonsSince(resetTime).filter((lesson) => lesson.kind === 'reject');
+    if (Object.keys(bucket.byReason || {}).length === 0 && fallbackRejectLessons.length > 0) {
+      for (const lesson of fallbackRejectLessons) {
+        const reasonKey = lesson.reasonKey || normalizeLessonReasonKey(lesson.analysis);
+        const reasonBucket = bucket.byReason[reasonKey] || {
+          key: reasonKey,
+          label: labelLessonReasonKey(reasonKey),
+          count: 0,
+          symbols: [],
+          lastTimestamp: 0,
+          lastAnalysis: '',
+        };
+        reasonBucket.count += 1;
+        reasonBucket.lastTimestamp = lesson.timestamp || Date.now();
+        reasonBucket.lastAnalysis = String(lesson.analysis || '').slice(0, 180);
+        if (!reasonBucket.symbols.includes(lesson.symbol)) {
+          reasonBucket.symbols.push(lesson.symbol);
+          reasonBucket.symbols = reasonBucket.symbols.slice(-3);
+        }
+        bucket.byReason[reasonKey] = reasonBucket;
+      }
+      bucket.rejectCount = fallbackRejectLessons.length;
+      bucket.totalLessons = fallbackRejectLessons.length;
+    }
+
+    const topRejectReasons = Object.values(bucket.byReason || {})
+      .sort((a, b) => b.count - a.count || b.lastTimestamp - a.lastTimestamp)
+      .slice(0, 3)
+      .map((entry, index) => ({
+        rank: index + 1,
+        key: entry.key,
+        label: entry.label,
+        count: entry.count,
+        symbols: entry.symbols || [],
+        example: entry.lastAnalysis || '',
+      }));
+
+    return {
+      dayKey,
+      totalLessons: bucket.totalLessons || 0,
+      rejectCount: bucket.rejectCount || 0,
+      topRejectReasons,
+      thresholds: this.getAdaptiveStrategyThresholds(topRejectReasons, bucket.rejectCount || 0),
+    };
+  }
+
+  getAdaptiveStrategyThresholds(topRejectReasons = [], rejectCount = 0) {
+    const baseMinRr = config.strategy.minRrRatio || 2.0;
+    const baseStandbyMinRr = config.strategy.standbyMinRr || baseMinRr;
+    const baseMinScore = config.strategy.minFinalScore || 25;
+    const thresholds = {
+      minRrRatio: baseMinRr,
+      standbyMinRr: baseStandbyMinRr,
+      minFinalScore: baseMinScore,
+    };
+
+    if (!Array.isArray(topRejectReasons) || rejectCount < 5) {
+      return thresholds;
+    }
+
+    const dominant = topRejectReasons[0] || null;
+    const secondary = topRejectReasons[1] || null;
+    const dominantShare = dominant ? dominant.count / rejectCount : 0;
+    const secondaryShare = secondary ? secondary.count / rejectCount : 0;
+
+    if (dominant?.key === 'poor_rr' && dominantShare >= 0.35) {
+      const drop = rejectCount >= 12 ? 0.35 : 0.2;
+      thresholds.minRrRatio = Math.max(1.6, baseMinRr - drop);
+      thresholds.standbyMinRr = Math.max(1.6, baseStandbyMinRr - drop);
+    }
+
+    if (dominant?.key === 'score_low' && dominantShare >= 0.35) {
+      const drop = rejectCount >= 12 ? 5 : 3;
+      thresholds.minFinalScore = Math.max(20, baseMinScore - drop);
+    }
+
+    if (
+      dominant?.key === 'poor_rr' &&
+      secondary?.key === 'score_low' &&
+      dominantShare >= 0.25 &&
+      secondaryShare >= 0.25
+    ) {
+      thresholds.minRrRatio = Math.max(1.6, Math.min(thresholds.minRrRatio, baseMinRr - 0.3));
+      thresholds.minFinalScore = Math.max(20, Math.min(thresholds.minFinalScore, baseMinScore - 4));
+    }
+
+    if (dominant?.key === 'trend_conflict' && dominantShare >= 0.4) {
+      thresholds.minFinalScore = Math.max(thresholds.minFinalScore, 24);
+    }
+
+    return thresholds;
   }
 
   /**
@@ -346,7 +571,9 @@ class SignalTracker {
    */
   clearLessons() {
     this.lessons = [];
+    this.lessonStats = { daily: {} };
     this._saveLessons();
+    this._saveLessonStats();
     logger.info('🧠 [Tracker] AI lessons cleared.');
   }
   /**
@@ -513,9 +740,10 @@ class SignalTracker {
     if (!redisEnabled()) return;
     logger.info('📥 [Tracker] Loading state from Upstash Redis...');
 
-    const [signals, lessons, history, watchlist, dashboard, scanReport] = await Promise.all([
+    const [signals, lessons, lessonStats, history, watchlist, dashboard, scanReport] = await Promise.all([
       getState(R.signals),
       getState(R.lessons),
+      getState(R.lessonStats),
       getState(R.history),
       getState(R.watchlist),
       getState(R.dashboard),
@@ -524,6 +752,7 @@ class SignalTracker {
 
     if (signals)   { this.signals = signals;           logger.info(`  ✅ signals: ${Object.keys(signals).length} active`); }
     if (lessons)   { this.lessons = lessons;           logger.info(`  ✅ lessons: ${lessons.length}`); }
+    if (lessonStats) { this.lessonStats = lessonStats;  logger.info('  ✅ lesson stats loaded'); }
     if (history)   { this.history = history;           logger.info(`  ✅ history: ${history.length} trades`); }
     if (watchlist) { this.latestWatchlist = watchlist; logger.info(`  ✅ watchlist: ${watchlist.length}`); }
     if (dashboard) { this.dashboardState = dashboard; }
@@ -541,6 +770,7 @@ class SignalTracker {
     await Promise.all([
       setState(R.signals,   this.signals),
       setState(R.lessons,   this.lessons),
+      setState(R.lessonStats, this.lessonStats),
       setState(R.history,   this.history.slice(-100)),
       setState(R.watchlist, this.latestWatchlist),
       setState(R.dashboard, this.dashboardState),
