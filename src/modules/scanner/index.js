@@ -10,6 +10,8 @@ const { applyFilters } = require('../filter');
 const { evaluateSignal, calculateRiskReward } = require('../strategy');
 const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../../services/signal_delivery');
+const { maybeSendDiscordNotifications } = require('../../services/discord_notifications');
+const { generateChartImage } = require('../chart');
 const tracker = require('../tracker');
 const { claimSignalDedupe, getSignalCandleTime, releaseSignalDedupe } = require('../../utils/signal_dedupe');
 const { logAudit, initAudit } = require('../../utils/audit');
@@ -447,7 +449,16 @@ async function runScanCycle() {
       refined.freshness = Math.round((Date.now() - startTime) / 1000);
       refined.timeframe = refined.timeframe || signalTimeframe;
       refined.candleTime = signalCandleTime;
-      const delivered = await sendSignal(refined, null); 
+      const chartCandles = refined.candles || candidate.candles || [];
+      let chartImagePath = null;
+      if (Array.isArray(chartCandles) && chartCandles.length > 0) {
+        chartImagePath = await generateChartImage(refined.symbol || candidate.symbol, chartCandles, refined);
+        if (chartImagePath) {
+          logger.info(`📷 Chart generated for ${candidate.symbol}`);
+        }
+      }
+
+      const delivered = await sendSignal(refined, chartImagePath);
       if (!delivered) {
         await releaseSignalDedupe(dedupeKeyResult.key).catch(() => {});
         logger.warn(`⚠️ ${candidate.symbol}: delivery failed, dedupe key released for retry.`);
@@ -539,6 +550,9 @@ async function runScanCycle() {
     scanReport.providerHealth = getProviderHealth ? getProviderHealth() : null;
     tracker.saveScanReport(scanReport);
     logger.info(`🧾 Scan report saved: ${scanReport.status} | signals=${scanReport.signalCount} | errors=${scanReport.errorCount}`);
+    await maybeSendDiscordNotifications(scanReport).catch((err) => {
+      logger.warn(`[runScanCycle] cycle summary skipped: ${err.message}`);
+    });
   }
 }
 
