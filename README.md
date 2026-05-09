@@ -167,6 +167,31 @@ Langkah endpoint:
 
 Kalau hanya butuh endpoint cron, deploy `dashboard/` sudah cukup.
 
+## Auto Deploy VM via GitHub Actions
+
+Kalau root VM lo jalan via PM2, repo ini juga bisa auto update tiap push ke `main`.
+
+### Secrets GitHub yang dibutuhkan
+
+- `SSH_HOST`
+- `SSH_USER`
+- `SSH_PRIVATE_KEY`
+- `SSH_PORT` - opsional, default `22`
+- `SSH_FINGERPRINT` - opsional tapi disarankan
+
+### Cara kerja
+
+- GitHub Actions trigger saat ada push ke `main`
+- Actions SSH ke VM
+- VM menjalankan `deploy.sh`
+- `deploy.sh` melakukan `git pull --ff-only` lalu `pm2 restart crypto-bot --update-env`
+
+### Catatan
+
+- Path default VM yang dipakai workflow ini: `/root/crypto-signal-bot`
+- Kalau path repo di VM beda, ubah `cd /root/crypto-signal-bot` di workflow atau set `REPO_DIR` saat memanggil script
+- Pastikan working tree VM bersih, karena `deploy.sh` akan menolak pull kalau ada perubahan lokal yang belum di-commit
+
 ## Setup cron-job.org
 
 1. Buat job baru di cron-job.org

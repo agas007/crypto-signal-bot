@@ -405,7 +405,13 @@ async function fetchMultiTimeframe(symbol) {
  */
 async function fetchTopPairs(limit = config.scanner.maxPairs) {
   try {
-    return await binanceData.fetchTopPairs(limit);
+    const topPairs = await binanceData.fetchTopPairs(limit);
+    if (Array.isArray(topPairs) && topPairs.length > 0) {
+      return topPairs;
+    }
+
+    logger.warn('⚠️ Binance primary fetchTopPairs returned no pairs. Falling back to alt providers.');
+    return futuresRouter.fetchTopPairs(limit);
   } catch (err) {
     logger.warn(`⚠️ Binance primary fetchTopPairs failed: ${err.message}. Falling back to alt providers.`);
     return futuresRouter.fetchTopPairs(limit);

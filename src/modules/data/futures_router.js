@@ -1119,7 +1119,7 @@ const providers = {
   },
   binance: {
     async probe() {
-      return binanceData.fetchTopPairs(1);
+      return binanceData.fetch24hTicker('BTCUSDT');
     },
     async fetchOHLCV(symbol, interval, limit = 100, options = {}) {
       return binanceData.fetchOHLCV(symbol, interval, limit, options);

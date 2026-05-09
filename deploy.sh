@@ -22,10 +22,10 @@ fi
 echo "[deploy] repo: $REPO_DIR"
 echo "[deploy] branch: $BRANCH"
 
-if [[ -n "$(git status --porcelain)" ]]; then
-  echo "[deploy] working tree is dirty; refusing to pull." >&2
-  echo "[deploy] commit/stash local changes first, or override manually if you know what you're doing." >&2
-  exit 1
+dirty_tree="$(git status --porcelain)"
+if [[ -n "$dirty_tree" ]]; then
+  echo "[deploy] working tree is dirty; stashing local changes before pull."
+  git stash push -u -m "deploy auto-stash $(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
 fi
 
 git fetch origin "$BRANCH"

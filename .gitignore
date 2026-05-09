@@ -13,3 +13,5 @@ latest_watchlist.json
 dashboard/package-lock.json
 package-lock.json
 dashboard/yarn.lock
+# Added by code-review-graph
+.code-review-graph/
