@@ -64,6 +64,16 @@ function buildScanSummary(report) {
     );
   }
 
+  if (report?.adaptiveTuning?.status) {
+    lines.push(
+      '',
+      '🧠 AI Tuning',
+      `• Status: ${report.adaptiveTuning.status}`,
+      `• Confidence: ${Number.isFinite(report.adaptiveTuning.confidence) ? `${Math.round(report.adaptiveTuning.confidence * 100)}%` : 'n/a'}`,
+      `• Reason: ${report.adaptiveTuning.reason || 'n/a'}`,
+    );
+  }
+
   if (phaseBreakdown) {
     lines.push(
       '',

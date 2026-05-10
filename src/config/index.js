@@ -91,6 +91,27 @@ const config = {
       retestPendingPenalty: parseInt(process.env.RETEST_PENDING_PENALTY, 10) || 2,
       rrBelowMinPenalty: parseInt(process.env.RR_BELOW_MIN_PENALTY, 10) || 7,
     },
+    tuning: {
+      enabled: process.env.ENABLE_AI_TUNING !== '0',
+      minLessonsForSuggestion: parseInt(process.env.AI_TUNING_MIN_LESSONS, 10) || 5,
+      refreshDeltaRejects: parseInt(process.env.AI_TUNING_REFRESH_DELTA_REJECTS, 10) || 5,
+      confidenceToApply: parseFloat(process.env.AI_TUNING_CONFIDENCE_TO_APPLY) || 0.6,
+      limits: {
+        minFinalScore: { min: 18, max: 28 },
+        minRrRatio: { min: 1.5, max: 2.6 },
+        standbyMinRr: { min: 1.5, max: 2.6 },
+        scoreWeights: {
+          noStructurePenalty: { min: 1, max: 6 },
+          lowVolPenalty: { min: 1, max: 8 },
+          middleZonePenalty: { min: 0, max: 6 },
+          nearLevelDirectionalBias: { min: 6, max: 14 },
+          repeatedTouchBonus: { min: 4, max: 12 },
+          strongRepeatedTouchBonus: { min: 6, max: 14 },
+          retestPendingPenalty: { min: 0, max: 6 },
+          rrBelowMinPenalty: { min: 4, max: 12 },
+        },
+      },
+    },
   },
 };
 

@@ -356,7 +356,7 @@ function buildRejectionDiagnostics({
 function evaluateSignal(symbol, data, options = {}) {
   const { D1, H4, H1, M15 } = data;
   const fundingRate = options.fundingRate || 0;
-  const scoreWeights = config.strategy.scoreWeights || {};
+  const scoreWeights = options.scoreWeights || config.strategy.scoreWeights || {};
   const noStructurePenalty = scoreWeights.noStructurePenalty ?? 4;
   const lowVolPenalty = scoreWeights.lowVolPenalty ?? 6;
   const middleZonePenalty = scoreWeights.middleZonePenalty ?? 4;

@@ -14,6 +14,7 @@ const R = {
   watchlist: 'bot:watchlist',
   dashboard: 'bot:dashboard_state',
   scanReport: 'bot:scan_report',
+  adaptiveTuning: 'bot:adaptive_tuning',
 };
 
 const DATA_DIR = process.env.DATA_DIR || process.cwd();
@@ -26,6 +27,7 @@ const WATCHLIST_PATH = path.join(DATA_DIR, 'latest_watchlist.json');
 const BINANCE_SNAPSHOT_PATH = path.join(DATA_DIR, 'binance_trade_snapshot.json');
 const DASHBOARD_STATE_PATH = path.join(DATA_DIR, 'dashboard_state.json');
 const SCAN_REPORT_PATH = path.join(DATA_DIR, 'scan_report.json');
+const ADAPTIVE_TUNING_PATH = path.join(DATA_DIR, 'adaptive_tuning.json');
 
 // Ensure directory exists if it's not the root or current directory
 if (DATA_DIR !== process.cwd() && !fs.existsSync(DATA_DIR)) {
@@ -89,6 +91,81 @@ function labelLessonReasonKey(key) {
   return map[key] || map.other;
 }
 
+function clampNumber(value, min, max, fallback) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.min(max, Math.max(min, num));
+}
+
+function pickAllowedScoreWeights(source = {}) {
+  const limits = config.strategy.tuning?.limits?.scoreWeights || {};
+  const defaults = config.strategy.scoreWeights || {};
+  const result = {};
+
+  for (const key of Object.keys(limits)) {
+    const range = limits[key] || {};
+    result[key] = clampNumber(
+      source[key],
+      range.min ?? -Infinity,
+      range.max ?? Infinity,
+      defaults[key],
+    );
+  }
+
+  return result;
+}
+
+function normalizeAdaptiveTuningSuggestion(suggestion = {}) {
+  const limits = config.strategy.tuning?.limits || {};
+  const current = {
+    minFinalScore: config.strategy.minFinalScore || 22,
+    minRrRatio: config.strategy.minRrRatio || 2.0,
+    standbyMinRr: config.strategy.standbyMinRr || config.strategy.minRrRatio || 2.0,
+  };
+  const thresholds = suggestion.thresholds || {};
+  const rawConfidence = Number(suggestion.confidence);
+  const normalizedConfidence = Number.isFinite(rawConfidence) && rawConfidence > 1 ? rawConfidence / 100 : rawConfidence;
+  const status = ['APPLY', 'HOLD', 'NO_CHANGE'].includes(String(suggestion.status || '').toUpperCase())
+    ? String(suggestion.status).toUpperCase()
+    : 'HOLD';
+
+  return {
+    version: 1,
+    status,
+    reason: String(suggestion.reason || '').trim(),
+    confidence: clampNumber(normalizedConfidence, 0, 1, 0),
+    thresholds: {
+      minFinalScore: clampNumber(
+        thresholds.minFinalScore,
+        limits.minFinalScore?.min ?? 18,
+        limits.minFinalScore?.max ?? 28,
+        current.minFinalScore,
+      ),
+      minRrRatio: clampNumber(
+        thresholds.minRrRatio,
+        limits.minRrRatio?.min ?? 1.5,
+        limits.minRrRatio?.max ?? 2.6,
+        current.minRrRatio,
+      ),
+      standbyMinRr: clampNumber(
+        thresholds.standbyMinRr,
+        limits.standbyMinRr?.min ?? 1.5,
+        limits.standbyMinRr?.max ?? 2.6,
+        current.standbyMinRr,
+      ),
+    },
+    scoreWeights: pickAllowedScoreWeights(suggestion.scoreWeights || {}),
+    notes: Array.isArray(suggestion.notes)
+      ? suggestion.notes.map((note) => String(note).trim()).filter(Boolean).slice(0, 5)
+      : [],
+    sourceDayKey: suggestion.sourceDayKey || null,
+    sourceRejectCount: Number.isFinite(Number(suggestion.sourceRejectCount)) ? Number(suggestion.sourceRejectCount) : null,
+    sourceTopFailurePhase: suggestion.sourceTopFailurePhase || null,
+    generatedAt: suggestion.generatedAt || new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 /**
  * Memory module to track active trade signals and history.
  */
@@ -102,6 +179,7 @@ class SignalTracker {
     this.latestBinanceSnapshot = this._loadBinanceSnapshot();
     this.dashboardState = this._loadDashboardState();
     this.latestScanReport = this._loadScanReport();
+    this.adaptiveTuning = this._loadAdaptiveTuning();
     this.manualResetAt = 0;
   }
 
@@ -184,6 +262,15 @@ class SignalTracker {
         return JSON.parse(fs.readFileSync(SCAN_REPORT_PATH, 'utf8'));
       }
     } catch (err) { logger.error('Failed to load scan report:', err.message); }
+    return null;
+  }
+
+  _loadAdaptiveTuning() {
+    try {
+      if (fs.existsSync(ADAPTIVE_TUNING_PATH)) {
+        return JSON.parse(fs.readFileSync(ADAPTIVE_TUNING_PATH, 'utf8'));
+      }
+    } catch (err) { logger.error('Failed to load adaptive tuning:', err.message); }
     return null;
   }
 
@@ -746,6 +833,65 @@ class SignalTracker {
     if (redisEnabled()) setState(R.scanReport, this.latestScanReport).catch(e => logger.error('[Redis] save scan report:', e.message));
   }
 
+  saveAdaptiveTuning(suggestion) {
+    this.adaptiveTuning = normalizeAdaptiveTuningSuggestion(suggestion || {});
+    if (IS_SERVERLESS) {
+      if (redisEnabled()) setState(R.adaptiveTuning, this.adaptiveTuning).catch(e => logger.error('[Redis] save adaptive tuning:', e.message));
+      return this.adaptiveTuning;
+    }
+
+    try {
+      fs.writeFileSync(ADAPTIVE_TUNING_PATH, JSON.stringify(this.adaptiveTuning, null, 2));
+    } catch (err) {
+      logger.error('Failed to save adaptive tuning:', err.message);
+    }
+    if (redisEnabled()) setState(R.adaptiveTuning, this.adaptiveTuning).catch(e => logger.error('[Redis] save adaptive tuning:', e.message));
+    return this.adaptiveTuning;
+  }
+
+  getAdaptiveTuning() {
+    return this.adaptiveTuning || null;
+  }
+
+  shouldRefreshAdaptiveTuning(lessonSummary = null) {
+    const tuning = this.getAdaptiveTuning();
+    const rejectCount = Number(lessonSummary?.rejectCount) || 0;
+    const dayKey = lessonSummary?.dayKey || null;
+    const minLessons = config.strategy.tuning?.minLessonsForSuggestion || 5;
+
+    if (rejectCount < minLessons) return false;
+    if (!tuning) return true;
+    if (dayKey && tuning.sourceDayKey && dayKey !== tuning.sourceDayKey) return true;
+    if (Number.isFinite(tuning.sourceRejectCount) && rejectCount >= tuning.sourceRejectCount + (config.strategy.tuning?.refreshDeltaRejects || 5)) {
+      return true;
+    }
+    return false;
+  }
+
+  getEffectiveAdaptiveThresholds(lessonSummary = null) {
+    const base = lessonSummary?.thresholds || {
+      minRrRatio: config.strategy.minRrRatio,
+      standbyMinRr: config.strategy.standbyMinRr,
+      minFinalScore: config.strategy.minFinalScore || 22,
+    };
+    const tuning = this.getAdaptiveTuning();
+    if (!tuning || tuning.status !== 'APPLY') {
+      return {
+        ...base,
+      };
+    }
+
+    return {
+      minRrRatio: tuning.thresholds?.minRrRatio ?? base.minRrRatio,
+      standbyMinRr: tuning.thresholds?.standbyMinRr ?? base.standbyMinRr,
+      minFinalScore: tuning.thresholds?.minFinalScore ?? base.minFinalScore,
+      scoreWeights: {
+        ...(config.strategy.scoreWeights || {}),
+        ...(tuning.scoreWeights || {}),
+      },
+    };
+  }
+
   getScanReport() {
     return this.latestScanReport || null;
   }
@@ -758,7 +904,7 @@ class SignalTracker {
     if (!redisEnabled()) return;
     logger.info('📥 [Tracker] Loading state from Upstash Redis...');
 
-    const [signals, lessons, lessonStats, history, watchlist, dashboard, scanReport] = await Promise.all([
+    const [signals, lessons, lessonStats, history, watchlist, dashboard, scanReport, adaptiveTuning] = await Promise.all([
       getState(R.signals),
       getState(R.lessons),
       getState(R.lessonStats),
@@ -766,6 +912,7 @@ class SignalTracker {
       getState(R.watchlist),
       getState(R.dashboard),
       getState(R.scanReport),
+      getState(R.adaptiveTuning),
     ]);
 
     if (signals)   { this.signals = signals;           logger.info(`  ✅ signals: ${Object.keys(signals).length} active`); }
@@ -775,6 +922,7 @@ class SignalTracker {
     if (watchlist) { this.latestWatchlist = watchlist; logger.info(`  ✅ watchlist: ${watchlist.length}`); }
     if (dashboard) { this.dashboardState = dashboard; }
     if (scanReport) { this.latestScanReport = scanReport; }
+    if (adaptiveTuning) { this.adaptiveTuning = adaptiveTuning; logger.info('  ✅ adaptive tuning loaded'); }
 
     logger.info('✅ [Tracker] Redis sync complete.');
   }
@@ -793,6 +941,7 @@ class SignalTracker {
       setState(R.watchlist, this.latestWatchlist),
       setState(R.dashboard, this.dashboardState),
       setState(R.scanReport, this.latestScanReport),
+      setState(R.adaptiveTuning, this.adaptiveTuning),
     ]);
     logger.info('✅ [Tracker] Redis push complete.');
   }

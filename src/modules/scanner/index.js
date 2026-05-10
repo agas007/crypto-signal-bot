@@ -8,7 +8,7 @@ const {
 const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
 const { evaluateSignal, calculateRiskReward } = require('../strategy');
-const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
+const { refineSignal, analyzePostMortem, generateAdaptiveTuningSuggestion } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../../services/signal_delivery');
 const { maybeSendDiscordNotifications } = require('../../services/discord_notifications');
 const tracker = require('../tracker');
@@ -428,6 +428,7 @@ async function runScanCycle() {
           minRrRatio: scanReport.adaptiveThresholds?.minRrRatio,
           minFinalScore: scanReport.adaptiveThresholds?.minFinalScore,
           standbyMinRr: scanReport.adaptiveThresholds?.standbyMinRr,
+          scoreWeights: scanReport.adaptiveThresholds?.scoreWeights,
           includeRejectionReason: true
       });
       
@@ -812,11 +813,37 @@ async function runScanCycle() {
     };
     scanReport.providerHealth = getProviderHealth ? getProviderHealth() : null;
     scanReport.lessonSummary = tracker.getDailyLessonSummary ? tracker.getDailyLessonSummary() : null;
-    scanReport.adaptiveThresholds = scanReport.lessonSummary?.thresholds || scanReport.adaptiveThresholds || {
-      minRrRatio: config.strategy.minRrRatio,
-      standbyMinRr: config.strategy.standbyMinRr,
-      minFinalScore: config.strategy.minFinalScore || 25,
-    };
+    scanReport.adaptiveTuning = tracker.getAdaptiveTuning ? tracker.getAdaptiveTuning() : null;
+    scanReport.adaptiveThresholds = tracker.getEffectiveAdaptiveThresholds
+      ? tracker.getEffectiveAdaptiveThresholds(scanReport.lessonSummary)
+      : (scanReport.lessonSummary?.thresholds || scanReport.adaptiveThresholds || {
+          minRrRatio: config.strategy.minRrRatio,
+          standbyMinRr: config.strategy.standbyMinRr,
+          minFinalScore: config.strategy.minFinalScore || 22,
+        });
+
+    const tuningSuggestion = tracker.shouldRefreshAdaptiveTuning && tracker.shouldRefreshAdaptiveTuning(scanReport.lessonSummary)
+      ? await generateAdaptiveTuningSuggestion(
+          scanReport.lessonSummary,
+          scanReport.adaptiveThresholds,
+          scanReport.adaptiveTuning,
+          scanReport.phaseBreakdown,
+        )
+      : null;
+
+    if (tuningSuggestion) {
+      const savedTuning = tracker.saveAdaptiveTuning({
+        ...tuningSuggestion,
+        sourceDayKey: scanReport.lessonSummary?.dayKey || null,
+        sourceRejectCount: scanReport.lessonSummary?.rejectCount || 0,
+        sourceTopFailurePhase: scanReport.summary?.topFailurePhase || null,
+        phaseBreakdown: scanReport.phaseBreakdown,
+      });
+      scanReport.adaptiveTuning = savedTuning;
+      scanReport.adaptiveThresholds = tracker.getEffectiveAdaptiveThresholds
+        ? tracker.getEffectiveAdaptiveThresholds(scanReport.lessonSummary)
+        : scanReport.adaptiveThresholds;
+    }
     tracker.saveScanReport(scanReport);
     logger.info(`🧾 Scan report saved: ${scanReport.status} | signals=${scanReport.signalCount} | errors=${scanReport.errorCount}`);
     if (sentCount === 0 && (scanReport.candidateCount > 0 || scanReport.watchlistCount > 0 || scanReport.errorCount > 0)) {

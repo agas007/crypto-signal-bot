@@ -238,6 +238,108 @@ async function refineSignal(signal, options = {}) {
   }
 }
 
+function buildAdaptiveTuningPrompt(lessonSummary, effectiveThresholds, tuningState = null, phaseBreakdown = null) {
+  const topRejectReasons = Array.isArray(lessonSummary?.topRejectReasons) ? lessonSummary.topRejectReasons : [];
+  const mergedPhaseBreakdown = phaseBreakdown || lessonSummary?.phaseBreakdown || tuningState?.phaseBreakdown || null;
+  const recentLessons = tracker.getRecentLessons().slice(-5).map((lesson) => ({
+    symbol: lesson.symbol,
+    bias: lesson.bias,
+    kind: lesson.kind,
+    reasonKey: lesson.reasonKey,
+    analysis: lesson.analysis,
+  }));
+  const activeTuning = tuningState ? JSON.stringify(tuningState, null, 2) : 'null';
+
+  return `You are an adaptive calibration engine for a crypto signal bot.
+Your task is to propose SMALL, conservative tuning changes based on the latest lesson summary.
+Do not rewrite the strategy. Do not change hard rules like H4-first, 2x support/resistance touches, or the volume floor.
+Only adjust soft thresholds and score weights within the allowed ranges.
+
+CURRENT EFFECTIVE THRESHOLDS:
+${JSON.stringify(effectiveThresholds || {}, null, 2)}
+
+LATEST LESSON SUMMARY:
+${JSON.stringify({
+    dayKey: lessonSummary?.dayKey || null,
+    totalLessons: lessonSummary?.totalLessons || 0,
+    rejectCount: lessonSummary?.rejectCount || 0,
+    topRejectReasons,
+    phaseBreakdown: mergedPhaseBreakdown,
+  }, null, 2)}
+
+RECENT LESSONS:
+${JSON.stringify(recentLessons, null, 2)}
+
+EXISTING TUNING STATE:
+${activeTuning}
+
+GOAL:
+- Reduce unnecessary zeroing of healthy H4-first setups.
+- Stay conservative: small changes only.
+- Prefer fixing the dominant failure phase and dominant reject reasons.
+- If evidence is weak or noisy, return HOLD with no threshold changes.
+
+ALLOWED OUTPUT FIELDS:
+- status: APPLY, HOLD, or NO_CHANGE
+- reason: short Bahasa Indonesia explanation
+- confidence: 0-100
+- thresholds: { minFinalScore, minRrRatio, standbyMinRr }
+- scoreWeights: any subset of
+  { noStructurePenalty, lowVolPenalty, middleZonePenalty, nearLevelDirectionalBias, repeatedTouchBonus, strongRepeatedTouchBonus, retestPendingPenalty, rrBelowMinPenalty }
+- notes: array of short bullets
+
+HARD LIMITS:
+- minFinalScore must stay between 18 and 28
+- minRrRatio must stay between 1.5 and 2.6
+- standbyMinRr must stay between 1.5 and 2.6
+- score weights must stay within the bot's conservative ranges
+
+Return ONLY valid JSON. No markdown, no code fences, no extra text.
+`;
+}
+
+async function generateAdaptiveTuningSuggestion(lessonSummary, effectiveThresholds, tuningState = null, phaseBreakdown = null) {
+  if (!lessonSummary || Number(lessonSummary.rejectCount || 0) < (config.strategy.tuning?.minLessonsForSuggestion || 5)) {
+    return null;
+  }
+
+  const systemPrompt = `You are a conservative calibration assistant for a trading bot. Output only JSON. Keep changes small and safe.`;
+  const prompt = buildAdaptiveTuningPrompt(lessonSummary, effectiveThresholds, tuningState, phaseBreakdown);
+
+  try {
+    const { data } = await client.post('/chat/completions', {
+      model: config.openRouter.model,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.2,
+      max_tokens: 500,
+      response_format: { type: 'json_object' },
+    });
+
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) return null;
+
+    const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    if (parsed.confidence != null) {
+      let confidence = parseFloat(parsed.confidence);
+      if (confidence > 1) confidence = confidence / 100;
+      parsed.confidence = confidence;
+    }
+
+    if (!parsed.status) parsed.status = 'HOLD';
+    if (!parsed.reason) parsed.reason = 'AI tidak memberikan alasan tuning.';
+    return parsed;
+  } catch (err) {
+    logger.error('Adaptive tuning suggestion failed:', err.message);
+    return null;
+  }
+}
+
 /**
  * AI-driven post-mortem to analyze why a signal hit SL or TP.
  * 
@@ -492,6 +594,8 @@ module.exports = {
   analyzePostMortem, 
   analyzeRealTrade, 
   analyzePerformanceSummary,
+  generateAdaptiveTuningSuggestion,
   buildPrompt, 
-  buildSystemPrompt 
+  buildSystemPrompt,
+  buildAdaptiveTuningPrompt,
 };
