@@ -173,12 +173,11 @@ async function sendTelegramStatus(text) {
     await telegramApiRequest('sendMessage', {
       chat_id: chatId,
       text,
-      parse_mode: 'Markdown',
       disable_web_page_preview: true,
     });
     return true;
   } catch (err) {
-    logger.error(`Failed to send Telegram status: ${err.message}. Retrying as plain text...`);
+    logger.error(`Failed to send Telegram status: ${err.message}. Retrying sanitized plain text...`);
     try {
       await telegramApiRequest('sendMessage', {
         chat_id: chatId,
