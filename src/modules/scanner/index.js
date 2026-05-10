@@ -62,6 +62,7 @@ function classifyStrategyLessonReason(result = {}) {
   if (text.includes('dekat resistance tanpa retest') || text.includes('dekat support tanpa retest') || text.includes('entry unconfirmed')) return 'entry_unconfirmed';
   if (text.includes('fomo') || text.includes('terlalu jauh dari key level')) return 'fomo';
   if (text.includes('atr spike') || text.includes('candle abnormal')) return 'atr_spike';
+  if (text.includes('invalid r:r setup') || text.includes('sl distance out of bounds') || text.includes('notional below min after cap') || text.includes('margin above balance') || text.includes('r:r too high / likely unrealistic tp')) return 'rr_invalid';
   if (text.includes('poor r:r') || text.includes('need min 2.0') || text.includes('r:r ratio')) return 'poor_rr';
   if (text.includes('weighted score too low') || text.includes('score terlalu rendah')) return 'score_low';
   if (text.includes('standby')) return 'standby';
@@ -153,6 +154,7 @@ function buildStrategyLessonText(symbol, result, scanReport = null, candidate = 
     retest_pending: 'Retest belum confirmed',
     structure_weak: 'Struktur H1 belum valid',
     entry_unconfirmed: 'Entry belum confirmed di level kuat',
+    rr_invalid: 'RR setup invalid / SL-TP bounds',
     fomo: 'Entry terlalu jauh dari level',
     atr_spike: 'ATR spike / candle abnormal',
     poor_rr: `R:R terlalu kecil (${rrHint})`,
