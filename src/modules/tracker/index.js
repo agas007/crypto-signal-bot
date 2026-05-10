@@ -68,6 +68,17 @@ function normalizeLessonReasonKey(value) {
   return 'other';
 }
 
+function resolveLessonReasonKey(lesson = {}) {
+  const explicit = String(lesson.reasonKey || '').toLowerCase();
+  if (explicit && explicit !== 'other') {
+    return explicit;
+  }
+
+  return normalizeLessonReasonKey(
+    lesson.analysis || lesson.lessonReason || lesson.rejectionReason || lesson.reasonKey || ''
+  );
+}
+
 function labelLessonReasonKey(key) {
   const map = {
     trend_conflict: 'Trend conflict D1/H4',
@@ -338,7 +349,12 @@ class SignalTracker {
     const now = Date.now();
     const dayAgo = now - (24 * 60 * 60 * 1000);
     const kind = meta.kind || 'general';
-    const reasonKey = normalizeLessonReasonKey(meta.reasonKey || meta.lessonReason || analysis);
+    const reasonKey = resolveLessonReasonKey({
+      reasonKey: meta.reasonKey,
+      analysis,
+      lessonReason: meta.lessonReason,
+      rejectionReason: meta.rejectionReason,
+    });
     const duplicate = this.lessons.find(l => 
       l.symbol === symbol && l.bias === bias && l.kind === kind && l.reasonKey === reasonKey && l.timestamp > dayAgo
     );
@@ -391,7 +407,7 @@ class SignalTracker {
 
     const dayKey = getLessonDayKey(lesson.timestamp);
     const bucket = this._getLessonStatsDay(dayKey);
-    const reasonKey = lesson.reasonKey || 'other';
+    const reasonKey = resolveLessonReasonKey(lesson);
     const reasonBucket = bucket.byReason[reasonKey] || {
       key: reasonKey,
       label: labelLessonReasonKey(reasonKey),
@@ -429,7 +445,7 @@ class SignalTracker {
     const fallbackRejectLessons = this.getLessonsSince(resetTime).filter((lesson) => lesson.kind === 'reject');
     if (Object.keys(bucket.byReason || {}).length === 0 && fallbackRejectLessons.length > 0) {
       for (const lesson of fallbackRejectLessons) {
-        const reasonKey = lesson.reasonKey || normalizeLessonReasonKey(lesson.analysis);
+        const reasonKey = resolveLessonReasonKey(lesson);
         const reasonBucket = bucket.byReason[reasonKey] || {
           key: reasonKey,
           label: labelLessonReasonKey(reasonKey),
