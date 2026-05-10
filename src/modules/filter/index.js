@@ -40,16 +40,18 @@ function atrPercent(candles, period = 14) {
  *   trend: { direction: string, strength: number },
  *   candles: Array<{high: number, low: number, close: number}>
  * }} input
- * @returns {{ pass: boolean, reasons: string[] }}
+ * @returns {{ pass: boolean, reasons: string[], reasonKeys: string[] }}
  */
 function applyFilters(input) {
   const { symbol, ticker, trend, candles } = input;
   const reasons = [];
+  const reasonKeys = [];
   let pass = true;
 
   // 1. Volume check
   if (ticker.quoteVolume < config.filters.minVolume24hUsd) {
     reasons.push(`Low volume: $${(ticker.quoteVolume / 1e6).toFixed(1)}M < $${(config.filters.minVolume24hUsd / 1e6).toFixed(0)}M`);
+    reasonKeys.push('low_volume');
     pass = false;
   }
 
@@ -57,12 +59,14 @@ function applyFilters(input) {
   const volatility = atrPercent(candles);
   if (volatility < config.filters.minAtrPercent) {
     reasons.push(`Low volatility: ATR ${volatility.toFixed(2)}% < ${config.filters.minAtrPercent}%`);
+    reasonKeys.push('low_volatility');
     pass = false;
   }
 
   // 3. Trend clarity check
   if (trend.direction === 'neutral' || trend.strength < config.filters.minTrendStrength) {
     reasons.push(`Weak trend: ${trend.direction} (strength ${trend.strength.toFixed(2)} < ${config.filters.minTrendStrength})`);
+    reasonKeys.push('weak_trend');
     pass = false;
   }
 
@@ -70,7 +74,7 @@ function applyFilters(input) {
     logger.debug(`${symbol} filtered out: ${reasons.join('; ')}`);
   }
 
-  return { pass, reasons };
+  return { pass, reasons, reasonKeys };
 }
 
 module.exports = { applyFilters, atrPercent };

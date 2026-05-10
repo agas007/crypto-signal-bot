@@ -224,6 +224,22 @@ function recordStrategyLesson(tracker, symbol, result, scanReport, candidate = n
   });
 }
 
+function recordPreFilterLesson(tracker, symbol, reasonText, scanReport = null, reasonKeys = []) {
+  if (!tracker || typeof tracker.saveLesson !== 'function') return;
+  const primaryReasonKey = Array.isArray(reasonKeys) && reasonKeys.length > 0
+    ? reasonKeys[0]
+    : classifyStrategyLessonReason({ lessonReason: reasonText, rejectionReason: reasonText });
+  const lessonText = normalizeLessonText(
+    `${symbol}: ${reasonText}. ${scanReport?.status ? `Scan ${scanReport.status}` : ''}`.trim()
+  );
+  tracker.saveLesson(symbol, 'UNKNOWN', lessonText, {
+    kind: 'reject',
+    reasonKey: primaryReasonKey,
+    score: 0,
+    source: 'scanner-prefilter',
+  });
+}
+
 /**
  * Run a single scan cycle:
  * 1. Monitor active trades for TP/SL
@@ -405,6 +421,7 @@ async function runScanCycle() {
         filtered++;
         scanReport.filteredCount++;
         scanReport.phaseBreakdown.preFilterRejected++;
+        recordPreFilterLesson(tracker, symbol, filterResult.reasons.join(', '), scanReport, filterResult.reasonKeys);
         logAudit(symbol, 'PRE-FILTER', 'REJECTED', 0, filterResult.reasons.join(', '));
         continue;
       }
