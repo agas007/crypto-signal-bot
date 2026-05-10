@@ -4,10 +4,13 @@
  * Env vars required:
  *   DISCORD_WEBHOOK_URL or DISCORD_SIGNAL_WEBHOOK_URL - for trade signals (can be same as status)
  *   DISCORD_STATUS_WEBHOOK_URL  - for status/info messages (optional, falls back to SIGNAL)
+ *   DISCORD_SIGNAL_MENTION_MODE  - off | everyone | user
+ *   DISCORD_SIGNAL_MENTION_USER_ID - Discord user ID used when mode=user
  */
 
 const fs = require('fs');
 const logger = require('./logger');
+const config = require('../config');
 
 const SIGNAL_WEBHOOK = process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL;
 const STATUS_WEBHOOK = process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL;
@@ -27,6 +30,31 @@ function tgToDiscord(text = '') {
   return text
     .replace(/\*([^*\n]+)\*/g, '**$1**')
     .replace(/_([^_\n]+)_/g, '*$1*');
+}
+
+function buildSignalMentionPayload() {
+  const mode = (config.discord?.signalMentionMode || 'off').toLowerCase();
+  const userId = config.discord?.signalMentionUserId;
+
+  if (mode === 'everyone') {
+    return {
+      content: '@everyone',
+      allowed_mentions: { parse: ['everyone'] },
+    };
+  }
+
+  if (mode === 'user' && userId) {
+    return {
+      content: `<@${userId}>`,
+      allowed_mentions: { users: [userId] },
+    };
+  }
+
+  if (mode === 'user' && !userId) {
+    logger.warn('[Discord] DISCORD_SIGNAL_MENTION_MODE=user but DISCORD_SIGNAL_MENTION_USER_ID is missing.');
+  }
+
+  return {};
 }
 
 // ─── Webhook Sender ───────────────────────────────────────────────────────────
@@ -162,12 +190,13 @@ async function sendSignal(signal, imagePath = null, options = {}) {
         { type: 2, style: 5, label: '💰 Binance',     url: `https://app.binance.com/en/trade/${signal.symbol.replace('USDT', '_USDT')}` },
       ],
     }];
+    const mentionPayload = buildSignalMentionPayload();
 
     if (imagePath && fs.existsSync(imagePath)) {
       embed.image = { url: 'attachment://chart.png' };
-      await postWebhookWithFile(SIGNAL_WEBHOOK, { embeds: [embed], components }, imagePath, options);
+      await postWebhookWithFile(SIGNAL_WEBHOOK, { ...mentionPayload, embeds: [embed], components }, imagePath, options);
     } else {
-      await postWebhook(SIGNAL_WEBHOOK, { embeds: [embed], components });
+      await postWebhook(SIGNAL_WEBHOOK, { ...mentionPayload, embeds: [embed], components });
     }
 
     logger.info(`📨 Signal sent to Discord: ${signal.symbol}`);
@@ -176,7 +205,9 @@ async function sendSignal(signal, imagePath = null, options = {}) {
     logger.error(`[Discord] sendSignal(${signal.symbol}) failed: ${err.message}`);
     // Fallback: plain text
     try {
+      const mentionPayload = buildSignalMentionPayload();
       await postWebhook(STATUS_WEBHOOK, {
+        ...mentionPayload,
         content: `🚨 **${signal.symbol} ${signal.bias}** | Entry: \`${signal.entry}\` | TP: \`${signal.take_profit}\` | SL: \`${signal.stop_loss}\``,
       });
       return true;

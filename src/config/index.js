@@ -21,6 +21,8 @@ const config = {
     webhookUrl: process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
     signalWebhookUrl: process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
     statusWebhookUrl: process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL,
+    signalMentionMode: (process.env.DISCORD_SIGNAL_MENTION_MODE || 'off').toLowerCase(),
+    signalMentionUserId: process.env.DISCORD_SIGNAL_MENTION_USER_ID,
   },
 
   bybit: {
@@ -44,7 +46,7 @@ const config = {
   scanner: {
     intervalMs: parseInt(process.env.SCAN_INTERVAL_MS, 10) || 3_600_000, // 1 hour
     topSignalsToAi: parseInt(process.env.TOP_SIGNALS_TO_AI, 10) || 5,
-    maxPairs: parseInt(process.env.MAX_PAIRS, 10) || 100,
+    maxPairs: Math.max(100, parseInt(process.env.MAX_PAIRS, 10) || 100),
   },
 
   // Timeframes mapped to Binance interval codes
