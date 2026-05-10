@@ -44,6 +44,16 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = conf
  * @returns {{ entry: number, sl: number, tp: number, rr: number }}
  */
 function calculateRiskReward(bias, currentPrice, levels, options = {}) {
+  const makeFailure = (failureReason, extra = {}) => ({
+    entry: currentPrice,
+    sl: null,
+    tp: null,
+    rr: null,
+    isScaled: false,
+    failureReason,
+    ...extra,
+  });
+
   const baseMaxSl = config.strategy.maxSlAllowed || 0.08;
   const MAX_SL_ALLOWED = options.atr ? Math.min(baseMaxSl, (options.atr * 2) / currentPrice) : baseMaxSl;
   
@@ -108,7 +118,9 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       : Math.max(MIN_SL_DISTANCE, atrDistPercent);
     if (!options.sl && (slDistPercent < minSlDistance || slDistPercent > MAX_SL_ALLOWED)) {
       logger.debug(`[RR] LONG ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(minSlDistance*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
-      return null;
+      return makeFailure(
+        `SL distance out of bounds (${(slDistPercent * 100).toFixed(2)}%, need ${(minSlDistance * 100).toFixed(2)}%-${(MAX_SL_ALLOWED * 100).toFixed(0)}%)`
+      );
     }
 
     const riskPerUnit = entry - sl;
@@ -118,7 +130,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // FIX 3: Prevent Inflated R:R using unreachable historical TP
     if (rr > 8) {
       logger.debug(`LONG: R:R ${rr.toFixed(1)} too high, likely historical TP. Capping.`);
-      return null;
+      return makeFailure(`R:R too high / likely unrealistic TP (${rr.toFixed(2)})`);
     }
 
     // Position Sizing
@@ -136,8 +148,8 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
         notionalValue = minRequired;
         quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
         if (quantity === 0 && options.stepSize) quantity = options.stepSize;
-        notionalValue = quantity * entry;
-        scaled = true;
+      notionalValue = quantity * entry;
+      scaled = true;
     }
 
     if (notionalValue > maxNotional) {
@@ -147,14 +159,14 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       // If after capping it's below minNotional, it's untradeable
       if (notionalValue < minRequired) {
         logger.debug(`[RR] LONG: Notional ${notionalValue} < min ${minRequired} after cap`);
-        return null;
+        return makeFailure(`Notional below min after cap (${notionalValue.toFixed(2)} < ${minRequired.toFixed(2)})`);
       }
     }
 
     const margin = notionalValue / LEVERAGE;
     if (margin > ACCOUNT_BALANCE) {
       logger.debug(`[RR] LONG: Margin ${margin} > balance ${ACCOUNT_BALANCE}`);
-      return null;
+      return makeFailure(`Margin above balance (${margin.toFixed(2)} > ${ACCOUNT_BALANCE.toFixed(2)})`);
     }
 
     return { entry, sl, tp, rr, isScaled: scaled, positionSize: { risk: (Math.abs(entry - sl) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
@@ -187,7 +199,9 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       : Math.max(MIN_SL_DISTANCE, atrDistPercent);
     if (!options.sl && (slDistPercent < minSlDistance || slDistPercent > MAX_SL_ALLOWED)) {
       logger.debug(`[RR] SHORT ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(minSlDistance*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
-      return null;
+      return makeFailure(
+        `SL distance out of bounds (${(slDistPercent * 100).toFixed(2)}%, need ${(minSlDistance * 100).toFixed(2)}%-${(MAX_SL_ALLOWED * 100).toFixed(0)}%)`
+      );
     }
 
     const riskPerUnit = sl - entry;
@@ -197,7 +211,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // FIX 3: Prevent Inflated R:R using unreachable historical TP
     if (rr > 8) {
       logger.debug(`SHORT: R:R ${rr.toFixed(1)} too high, likely historical TP. Capping.`);
-      return null;
+      return makeFailure(`R:R too high / likely unrealistic TP (${rr.toFixed(2)})`);
     }
 
     let quantity = riskDollar / riskPerUnit;
@@ -222,14 +236,14 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       notionalValue = quantity * entry;
       if (notionalValue < minRequired) {
         logger.debug(`[RR] SHORT: Notional ${notionalValue} < min ${minRequired} after cap`);
-        return null;
+        return makeFailure(`Notional below min after cap (${notionalValue.toFixed(2)} < ${minRequired.toFixed(2)})`);
       }
     }
 
     const margin = notionalValue / LEVERAGE;
     if (margin > ACCOUNT_BALANCE) {
       logger.debug(`[RR] SHORT: Margin ${margin} > balance ${ACCOUNT_BALANCE}`);
-      return null;
+      return makeFailure(`Margin above balance (${margin.toFixed(2)} > ${ACCOUNT_BALANCE.toFixed(2)})`);
     }
 
     return { entry, sl, tp, rr, isScaled: scaled, positionSize: { risk: (Math.abs(sl - entry) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
@@ -788,9 +802,13 @@ function evaluateSignal(symbol, data, options = {}) {
   }
 
   if (!riskReward || riskReward.rr < minRrRatio) {
+      const rrLabel = riskReward?.rr != null ? riskReward.rr.toFixed(1) : 'N/A';
+      const rrReason = riskReward?.failureReason
+        ? `Invalid R:R setup (${riskReward.failureReason})`
+        : `Poor R:R Ratio (${rrLabel}). Need min ${minRrRatio.toFixed(1)}.`;
       return options.includeRejectionReason ? {
         signal: null,
-        rejectionReason: `Poor R:R Ratio (${riskReward ? riskReward.rr.toFixed(1) : 'N/A'}). Need min ${minRrRatio.toFixed(1)}.`,
+        rejectionReason: rrReason,
         diagnostics: buildRejectionDiagnostics({
           bias,
           longScore,

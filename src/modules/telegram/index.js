@@ -596,8 +596,9 @@ async function initTelegram() {
             tp: refined.take_profit
         });
 
-        if (!refined.riskReward) {
-            return bot.sendMessage(msg.chat.id, `❌ *AI ERROR:* AI suggested invalid price levels that failed risk calculation.`, { parse_mode: 'Markdown' });
+        if (!refined.riskReward || refined.riskReward.rr == null) {
+            const reason = refined.riskReward?.failureReason || 'invalid price levels that failed risk calculation';
+            return bot.sendMessage(msg.chat.id, `❌ *AI ERROR:* AI suggested ${reason}.`, { parse_mode: 'Markdown' });
         }
 
         // Format and send as a full signal

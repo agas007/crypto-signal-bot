@@ -549,8 +549,9 @@ async function runScanCycle() {
       if (refined.bias === 'LONG' || refined.bias === 'SHORT') {
           refined.riskReward = candidate.riskReward;
           refined.candles = candidate.candles; // for chart
-          if (!refined.riskReward) {
-              logger.warn(`⚠️ ${candidate.symbol}: Risk calculation missing from deterministic candidate.`);
+          if (!refined.riskReward || refined.riskReward.rr == null) {
+              const rrReason = refined.riskReward?.failureReason || 'Risk calculation missing from deterministic candidate';
+              logger.warn(`⚠️ ${candidate.symbol}: ${rrReason}.`);
               continue;
           }
       }
@@ -660,9 +661,9 @@ async function runScanCycle() {
         }
       );
 
-      if (!freshRR || freshRR.rr < config.strategy.minRrRatio) {
+      if (!freshRR || freshRR.rr == null || freshRR.rr < config.strategy.minRrRatio) {
         const rrVal = freshRR?.rr?.toFixed(2) || 'N/A';
-        const reason = !freshRR ? 'Safety/Distance bounds' : `Low R:R (${rrVal})`;
+        const reason = freshRR?.failureReason ? freshRR.failureReason : (!freshRR ? 'Safety/Distance bounds' : `Low R:R (${rrVal})`);
         
         logger.warn(`🚫 [Fresh RR Check] ${candidate.symbol}: Signal invalidated after 3m confirmation (${reason})`);
         logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED_RR', refined.confidence, `Invalidated: ${reason} at fresh entry ${freshEntry.toFixed(5)}`);
