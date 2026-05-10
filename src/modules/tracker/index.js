@@ -54,6 +54,7 @@ function normalizeLessonReasonKey(value) {
   if (text.includes('support/resistance belum kuat') || text.includes('sudah dites') || text.includes('touch')) return 'level_touch_low';
   if (text.includes('retest belum terkonfirmasi') || text.includes('retest pending')) return 'retest_pending';
   if (text.includes('structure tidak terbentuk') || text.includes('struktur h1 belum valid') || text.includes('h1 structure tidak terbentuk')) return 'structure_weak';
+  if (text.includes('dekat resistance tanpa retest') || text.includes('dekat support tanpa retest') || text.includes('entry unconfirmed')) return 'entry_unconfirmed';
   if (text.includes('fomo') || text.includes('terlalu jauh dari key level')) return 'fomo';
   if (text.includes('atr spike') || text.includes('candle abnormal')) return 'atr_spike';
   if (text.includes('poor r:r') || text.includes('need min 2.0') || text.includes('r:r ke') || text.includes('r:r ratio')) return 'poor_rr';
@@ -76,6 +77,7 @@ function labelLessonReasonKey(key) {
     level_touch_low: 'Support/Resistance belum kuat',
     retest_pending: 'Retest belum confirmed',
     structure_weak: 'Struktur H1 belum valid',
+    entry_unconfirmed: 'Entry belum confirmed di level kuat',
     fomo: 'Entry terlalu jauh dari level',
     atr_spike: 'ATR spike / candle abnormal',
     poor_rr: 'R:R terlalu kecil',

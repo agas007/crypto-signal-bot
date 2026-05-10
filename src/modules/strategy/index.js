@@ -17,14 +17,14 @@ function roundStep(quantity, stepSize) {
 
 /**
  * Classify price position relative to support/resistance.
- * Relaxed version: wider threshold (4% instead of 2%).
+ * Relaxed version: wider threshold (default 5% instead of 2%).
  *
  * @param {number} distToSupport - Distance to nearest support as %
  * @param {number} distToResistance - Distance to nearest resistance as %
  * @param {number} [threshold=4.0] - % threshold for "near"
  * @returns {'near_support'|'near_resistance'|'middle'}
  */
-function classifyPricePosition(distToSupport, distToResistance, threshold = 4.0) {
+function classifyPricePosition(distToSupport, distToResistance, threshold = config.strategy.pricePositionThresholdPct || 4.0) {
   const nearSupport = distToSupport < threshold;
   const nearResistance = distToResistance < threshold;
 
@@ -417,9 +417,13 @@ function evaluateSignal(symbol, data, options = {}) {
   const distToResistance = resistanceLevel.value !== Infinity && resistanceLevel.value > h4SR.currentPrice
     ? ((resistanceLevel.value - h4SR.currentPrice) / h4SR.currentPrice) * 100
     : Infinity;
-  const pricePosition = classifyPricePosition(distToSupport, distToResistance);
+  const pricePosition = classifyPricePosition(distToSupport, distToResistance, config.strategy.pricePositionThresholdPct || 4.0);
   const supportTouches = supportLevel.touches || 0;
   const resistanceTouches = resistanceLevel.touches || 0;
+  const repeatedLevelTouches = config.strategy.repeatedLevelTouches || 3;
+  const strongH4LevelSetup =
+    (pricePosition === 'near_resistance' && resistanceTouches >= repeatedLevelTouches) ||
+    (pricePosition === 'near_support' && supportTouches >= repeatedLevelTouches);
 
   const breakoutBias = h4Pattern.breakoutDirection === 'bullish'
     ? 'LONG'
@@ -528,10 +532,14 @@ function evaluateSignal(symbol, data, options = {}) {
     shortScore += 10;
     shortReasons.push(`H1 bearish structure (Lower Highs) (+10)`);
   } else {
-    // H1 no_structure = ranging/mixed — entry prematur, semua SL hit terjadi saat kondisi ini
-    longScore -= noStructurePenalty;
-    shortScore -= noStructurePenalty;
-    warnings.push('⚠️ H1 structure tidak terbentuk (ranging/mixed). Entry tanpa struktur rawan SL prematur — tunggu HH/HL atau LH/LL terbentuk dulu.');
+    // H1 no_structure = ranging/mixed. Untuk setup H4 yang sudah bolak-balik dites,
+    // kita jangan bunuh terlalu keras karena edge-nya memang datang dari level H4.
+    const appliedNoStructurePenalty = strongH4LevelSetup
+      ? Math.max(1, Math.floor(noStructurePenalty / 2))
+      : noStructurePenalty;
+    longScore -= appliedNoStructurePenalty;
+    shortScore -= appliedNoStructurePenalty;
+    warnings.push('⚠️ H1 structure tidak terbentuk (ranging/mixed).');
     tags.push('NO_STRUCTURE');
   }
 
@@ -631,14 +639,15 @@ function evaluateSignal(symbol, data, options = {}) {
     longReasons.push('H4 price dekat support — bounce lebih likely');
     warnings.push('ℹ️ Price dekat support. Short butuh breakdown valid, bukan sekadar wick.');
   } else {
-    longScore -= middleZonePenalty;
-    shortScore -= middleZonePenalty;
+    const appliedMiddleZonePenalty = strongH4LevelSetup
+      ? Math.max(0, middleZonePenalty - 1)
+      : middleZonePenalty;
+    longScore -= appliedMiddleZonePenalty;
+    shortScore -= appliedMiddleZonePenalty;
     warnings.push('ℹ️ Price berada di middle zone. Edge menurun, tunggu area level yang lebih jelas.');
   }
 
   // Repeated-touch levels behave more like magnets for rejection/bounce until proven broken.
-  const repeatedLevelTouches = config.strategy.repeatedLevelTouches || 3;
-
   if (pricePosition === 'near_resistance' && resistanceTouches >= repeatedLevelTouches) {
     const touchBonus = resistanceTouches >= 5 ? strongRepeatedTouchBonus : repeatedTouchBonus;
     shortScore += touchBonus;
@@ -679,8 +688,11 @@ function evaluateSignal(symbol, data, options = {}) {
     if (patternBreakoutMatch) tags.push('PATTERN_RETEST_CONTINUATION');
   } else if (retestStatus === 'PENDING') {
     // Retest ada tapi belum ada close confirmation — root cause dari banyak SL hit prematur
-    longScore -= retestPendingPenalty;
-    shortScore -= retestPendingPenalty;
+    const appliedRetestPendingPenalty = strongH4LevelSetup
+      ? Math.max(0, Math.floor(retestPendingPenalty / 2))
+      : retestPendingPenalty;
+    longScore -= appliedRetestPendingPenalty;
+    shortScore -= appliedRetestPendingPenalty;
     warnings.push('⏳ Retest belum terkonfirmasi (PENDING). Tunggu candle close di sisi yang benar sebelum entry.');
     tags.push('RETEST_PENDING');
   } else {
@@ -837,18 +849,18 @@ function evaluateSignal(symbol, data, options = {}) {
   // H4 SR stays the primary edge. D1 disagreement is allowed, but weak
   // structure and unconfirmed retests still get filtered out.
   if (bias === 'LONG' && pricePosition === 'near_resistance' && retestStatus !== 'CONFIRMED') {
-    finalScore -= 15;
+    finalScore -= strongH4LevelSetup ? 8 : 15;
     tags.push('RESISTANCE_ENTRY_UNCONFIRMED');
     warnings.push('🚫 LONG dekat resistance tanpa retest konfirmasi — tunggu breakout hold atau pullback ke support sebelum entry.');
   }
   if (bias === 'SHORT' && pricePosition === 'near_support' && retestStatus !== 'CONFIRMED') {
-    finalScore -= 15;
+    finalScore -= strongH4LevelSetup ? 8 : 15;
     tags.push('SUPPORT_ENTRY_UNCONFIRMED');
     warnings.push('🚫 SHORT dekat support tanpa retest konfirmasi — tunggu breakdown valid atau bounce ke resistance sebelum entry.');
   }
 
   if (pricePosition === 'middle' && !h1Structure.bos && retestStatus !== 'CONFIRMED') {
-    finalScore -= 12;
+    finalScore -= strongH4LevelSetup ? 6 : 12;
     tags.push('MIDDLE_ZONE_NO_EDGE');
     warnings.push('🚫 Price di middle zone, tidak ada BoS, dan retest belum konfirmasi. Tidak ada edge struktural — skip setup ini.');
   }
@@ -856,7 +868,7 @@ function evaluateSignal(symbol, data, options = {}) {
   // ─── VERTICAL ENTRY ───────────────────────────────────────
   const distFromLvl = bias === 'LONG' ? distToSupport : distToResistance;
   if (distFromLvl > 5.0) {
-    finalScore -= 10;
+    finalScore -= strongH4LevelSetup ? 5 : 10;
     tags.push('VERTICAL ENTRY');
     warnings.push(`✋ Price is ${distFromLvl.toFixed(1)}% away from key level (FOMO).`);
   }
