@@ -442,6 +442,41 @@ class SignalTracker {
       byReason: {},
     };
 
+    const normalizedReasons = {};
+    for (const entry of Object.values(bucket.byReason || {})) {
+      if (!entry) continue;
+      const inferredKey = resolveLessonReasonKey({
+        reasonKey: entry.key,
+        analysis: entry.lastAnalysis,
+        lessonReason: entry.lastAnalysis,
+        rejectionReason: entry.lastAnalysis,
+      });
+      const reasonKey = inferredKey === 'other' ? (entry.key || 'other') : inferredKey;
+      const reasonBucket = normalizedReasons[reasonKey] || {
+        key: reasonKey,
+        label: labelLessonReasonKey(reasonKey),
+        count: 0,
+        symbols: [],
+        lastTimestamp: 0,
+        lastAnalysis: '',
+      };
+
+      reasonBucket.count += Number(entry.count) || 0;
+      reasonBucket.lastTimestamp = Math.max(reasonBucket.lastTimestamp || 0, entry.lastTimestamp || 0);
+      if (entry.lastAnalysis && (!reasonBucket.lastAnalysis || (entry.lastTimestamp || 0) >= reasonBucket.lastTimestamp)) {
+        reasonBucket.lastAnalysis = String(entry.lastAnalysis).slice(0, 180);
+      }
+      for (const symbol of entry.symbols || []) {
+        if (!reasonBucket.symbols.includes(symbol)) {
+          reasonBucket.symbols.push(symbol);
+          reasonBucket.symbols = reasonBucket.symbols.slice(-3);
+        }
+      }
+
+      normalizedReasons[reasonKey] = reasonBucket;
+    }
+    bucket.byReason = normalizedReasons;
+
     const fallbackRejectLessons = this.getLessonsSince(resetTime).filter((lesson) => lesson.kind === 'reject');
     if (Object.keys(bucket.byReason || {}).length === 0 && fallbackRejectLessons.length > 0) {
       for (const lesson of fallbackRejectLessons) {
