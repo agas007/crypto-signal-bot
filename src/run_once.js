@@ -7,6 +7,7 @@ require('dotenv').config();
 const logger = require('./utils/logger');
 const { sendStatus } = require('./services/signal_delivery');
 const { runSignalCheck } = require('./services/run_signal_check');
+globalThis.__cryptoSignalGenerateChartImage = require('./modules/chart').generateChartImage;
 
 async function main() {
   const startMs = Date.now();

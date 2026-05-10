@@ -4,6 +4,7 @@ const next = require('next');
 const logger = require('./src/utils/logger');
 const { startScanner } = require('./src/modules/scanner');
 const { initTelegram } = require('./src/modules/telegram');
+globalThis.__cryptoSignalGenerateChartImage = require('./src/modules/chart').generateChartImage;
 const enableBackgroundRuntime = process.env.DISABLE_BACKGROUND_RUNTIME !== '1' && process.env.ENABLE_LEGACY_SCANNER !== '0';
 
 // Configure Next.js
