@@ -455,11 +455,11 @@ function evaluateSignal(symbol, data, options = {}) {
 
   // ─── CATEGORY 1: H4 regime & timing (Max: 25 pts) ───
   if (h4Trend.direction === 'bullish') {
-    longScore += 15;
-    longReasons.push(`H4 trend bullish (+15)`);
+    longScore += 18;
+    longReasons.push(`H4 trend bullish (+18)`);
   } else if (h4Trend.direction === 'bearish') {
-    shortScore += 15;
-    shortReasons.push(`H4 trend bearish (+15)`);
+    shortScore += 18;
+    shortReasons.push(`H4 trend bearish (+18)`);
   }
 
   // MTA Timing (M15)

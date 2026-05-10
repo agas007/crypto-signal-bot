@@ -176,12 +176,14 @@ function buildStrategyLessonText(symbol, result, scanReport = null, candidate = 
 function buildCycleLessonText(scanReport, sentCount) {
   const topErrors = Array.isArray(scanReport?.errors) ? scanReport.errors.slice(0, 2).join('; ') : '';
   const phases = scanReport?.phaseBreakdown || {};
+  const topFailurePhase = summarizeTopFailurePhase(phases);
   const summary = [
     `Scan ${scanReport?.status || 'UNKNOWN'} selesai`,
     `signal ${sentCount || 0}`,
     `candidate ${scanReport?.candidateCount || 0}`,
     `watchlist ${scanReport?.watchlistCount || 0}`,
     `error ${scanReport?.errorCount || 0}`,
+    topFailurePhase ? `top fail ${topFailurePhase}` : null,
     Number.isFinite(phases.preFilterRejected) ? `prefilter gagal ${phases.preFilterRejected}` : null,
     Number.isFinite(phases.strategyRejected) ? `strategy gagal ${phases.strategyRejected}` : null,
     Number.isFinite(phases.aiRejected) ? `AI gagal ${phases.aiRejected}` : null,
@@ -189,6 +191,19 @@ function buildCycleLessonText(scanReport, sentCount) {
   ].filter(Boolean).join('. ');
 
   return normalizeLessonText(summary);
+}
+
+function summarizeTopFailurePhase(phaseBreakdown = {}) {
+  const phases = [
+    { label: 'Pre-filter', count: Number(phaseBreakdown.preFilterRejected) || 0 },
+    { label: 'Strategy', count: Number(phaseBreakdown.strategyRejected) || 0 },
+    { label: 'AI', count: Number(phaseBreakdown.aiRejected) || 0 },
+    { label: 'Confirmation', count: Number(phaseBreakdown.confirmationRejected) || 0 },
+  ].sort((a, b) => b.count - a.count);
+
+  const top = phases[0];
+  if (!top || top.count <= 0) return null;
+  return `${top.label} (${top.count})`;
 }
 
 function recordStrategyLesson(tracker, symbol, result, scanReport, candidate = null, meta = {}) {
@@ -793,6 +808,7 @@ async function runScanCycle() {
       filtered: scanReport.filteredCount,
       rejected: scanReport.rejectedCount,
       errors: scanReport.errorCount,
+      topFailurePhase: summarizeTopFailurePhase(scanReport.phaseBreakdown),
     };
     scanReport.providerHealth = getProviderHealth ? getProviderHealth() : null;
     scanReport.lessonSummary = tracker.getDailyLessonSummary ? tracker.getDailyLessonSummary() : null;

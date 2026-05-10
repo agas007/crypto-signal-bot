@@ -27,6 +27,18 @@ function formatProviderFallbackMessage(report) {
 }
 
 function buildScanSummary(report) {
+  const phaseBreakdown = report?.phaseBreakdown || {};
+  const topFailurePhase = report?.summary?.topFailurePhase || (() => {
+    const phases = [
+      { label: 'Pre-filter', count: Number(phaseBreakdown.preFilterRejected) || 0 },
+      { label: 'Strategy', count: Number(phaseBreakdown.strategyRejected) || 0 },
+      { label: 'AI', count: Number(phaseBreakdown.aiRejected) || 0 },
+      { label: 'Confirmation', count: Number(phaseBreakdown.confirmationRejected) || 0 },
+    ].sort((a, b) => b.count - a.count);
+    const top = phases[0];
+    return top && top.count > 0 ? `${top.label} (${top.count})` : null;
+  })();
+
   const lines = [
     '🧭 Scan Summary',
     '',
@@ -52,21 +64,24 @@ function buildScanSummary(report) {
     );
   }
 
-  const phases = report?.phaseBreakdown || null;
-  if (phases) {
+  if (phaseBreakdown) {
     lines.push(
       '',
       '🧩 Phase Breakdown',
-      `• Pre-filter passed: ${phases.preFilterPassed ?? 0}`,
-      `• Pre-filter rejected: ${phases.preFilterRejected ?? 0}`,
-      `• Strategy candidate: ${phases.strategyCandidate ?? 0}`,
-      `• Strategy watchlist: ${phases.strategyWatchlist ?? 0}`,
-      `• Strategy rejected: ${phases.strategyRejected ?? 0}`,
-      `• AI watchlist: ${phases.aiWatchlist ?? 0}`,
-      `• AI rejected: ${phases.aiRejected ?? 0}`,
-      `• Confirmation rejected: ${phases.confirmationRejected ?? 0}`,
-      `• Delivered: ${phases.delivered ?? 0}`,
+      `• Pre-filter passed: ${phaseBreakdown.preFilterPassed ?? 0}`,
+      `• Pre-filter rejected: ${phaseBreakdown.preFilterRejected ?? 0}`,
+      `• Strategy candidate: ${phaseBreakdown.strategyCandidate ?? 0}`,
+      `• Strategy watchlist: ${phaseBreakdown.strategyWatchlist ?? 0}`,
+      `• Strategy rejected: ${phaseBreakdown.strategyRejected ?? 0}`,
+      `• AI watchlist: ${phaseBreakdown.aiWatchlist ?? 0}`,
+      `• AI rejected: ${phaseBreakdown.aiRejected ?? 0}`,
+      `• Confirmation rejected: ${phaseBreakdown.confirmationRejected ?? 0}`,
+      `• Delivered: ${phaseBreakdown.delivered ?? 0}`,
     );
+  }
+
+  if (topFailurePhase) {
+    lines.push('', `🔥 Top Failure Phase: ${topFailurePhase}`);
   }
 
   if (topRejectReasons.length > 0) {

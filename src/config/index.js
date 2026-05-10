@@ -72,7 +72,7 @@ const config = {
 
   strategy: {
     minRrRatio: parseFloat(process.env.MIN_RR_RATIO) || 2.0,
-    minFinalScore: parseInt(process.env.MIN_FINAL_SCORE, 10) || 25,
+    minFinalScore: parseInt(process.env.MIN_FINAL_SCORE, 10) || 22,
     accountBalance: parseFloat(process.env.ACCOUNT_BALANCE) || 1000,
     riskPercentage: parseFloat(process.env.RISK_PERCENTAGE) || 0.05,           // Risk X% of account balance per trade
     maxPositionPercentage: parseFloat(process.env.MAX_POSITION_PERCENTAGE) || 3.0, // Default to 300% total balance
@@ -82,14 +82,14 @@ const config = {
     repeatedLevelTouches: parseInt(process.env.REPEATED_LEVEL_TOUCHES, 10) || 2,
     standbyMinRr: parseFloat(process.env.STANDBY_MIN_RR) || 2.0,
     scoreWeights: {
-      noStructurePenalty: parseInt(process.env.NO_STRUCTURE_PENALTY, 10) || 4,
-      lowVolPenalty: parseInt(process.env.LOW_VOL_PENALTY, 10) || 6,
-      middleZonePenalty: parseInt(process.env.MIDDLE_ZONE_PENALTY, 10) || 4,
-      nearLevelDirectionalBias: parseInt(process.env.NEAR_LEVEL_BIAS, 10) || 9,
-      repeatedTouchBonus: parseInt(process.env.REPEATED_TOUCH_BONUS, 10) || 6,
-      strongRepeatedTouchBonus: parseInt(process.env.STRONG_REPEATED_TOUCH_BONUS, 10) || 8,
-      retestPendingPenalty: parseInt(process.env.RETEST_PENDING_PENALTY, 10) || 4,
-      rrBelowMinPenalty: parseInt(process.env.RR_BELOW_MIN_PENALTY, 10) || 10,
+      noStructurePenalty: parseInt(process.env.NO_STRUCTURE_PENALTY, 10) || 3,
+      lowVolPenalty: parseInt(process.env.LOW_VOL_PENALTY, 10) || 4,
+      middleZonePenalty: parseInt(process.env.MIDDLE_ZONE_PENALTY, 10) || 2,
+      nearLevelDirectionalBias: parseInt(process.env.NEAR_LEVEL_BIAS, 10) || 11,
+      repeatedTouchBonus: parseInt(process.env.REPEATED_TOUCH_BONUS, 10) || 8,
+      strongRepeatedTouchBonus: parseInt(process.env.STRONG_REPEATED_TOUCH_BONUS, 10) || 10,
+      retestPendingPenalty: parseInt(process.env.RETEST_PENDING_PENALTY, 10) || 2,
+      rrBelowMinPenalty: parseInt(process.env.RR_BELOW_MIN_PENALTY, 10) || 7,
     },
   },
 };
