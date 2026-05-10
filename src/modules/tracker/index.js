@@ -106,6 +106,44 @@ function labelLessonReasonKey(key) {
   return map[key] || map.other;
 }
 
+function createLessonStatsDayBucket(dayKey) {
+  return {
+    dayKey,
+    totalLessons: 0,
+    rejectCount: 0,
+    byReason: {},
+    updatedAt: Date.now(),
+  };
+}
+
+function accumulateLessonStatsBucket(bucket, lesson) {
+  if (!bucket || !lesson || lesson.kind !== 'reject') return bucket;
+
+  const reasonKey = resolveLessonReasonKey(lesson);
+  const reasonBucket = bucket.byReason[reasonKey] || {
+    key: reasonKey,
+    label: labelLessonReasonKey(reasonKey),
+    count: 0,
+    symbols: [],
+    lastTimestamp: 0,
+    lastAnalysis: '',
+  };
+
+  reasonBucket.count += 1;
+  reasonBucket.lastTimestamp = lesson.timestamp || Date.now();
+  reasonBucket.lastAnalysis = String(lesson.analysis || lesson.lessonReason || lesson.rejectionReason || '').slice(0, 180);
+  if (!reasonBucket.symbols.includes(lesson.symbol)) {
+    reasonBucket.symbols.push(lesson.symbol);
+    reasonBucket.symbols = reasonBucket.symbols.slice(-3);
+  }
+
+  bucket.byReason[reasonKey] = reasonBucket;
+  bucket.rejectCount += 1;
+  bucket.totalLessons += 1;
+  bucket.updatedAt = Date.now();
+  return bucket;
+}
+
 function clampNumber(value, min, max, fallback) {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
@@ -196,6 +234,8 @@ class SignalTracker {
     this.latestScanReport = this._loadScanReport();
     this.adaptiveTuning = this._loadAdaptiveTuning();
     this.manualResetAt = 0;
+
+    this._migrateLessonStatsFromLessons();
   }
 
   getEffectiveResetTime() {
@@ -229,10 +269,13 @@ class SignalTracker {
   _loadLessonStats() {
     try {
       if (fs.existsSync(LESSON_STATS_PATH)) {
-        return JSON.parse(fs.readFileSync(LESSON_STATS_PATH, 'utf8'));
+        const parsed = JSON.parse(fs.readFileSync(LESSON_STATS_PATH, 'utf8'));
+        if (!parsed || typeof parsed !== 'object') return { daily: {}, statsVersion: 2 };
+        if (!parsed.daily || typeof parsed.daily !== 'object') parsed.daily = {};
+        return parsed;
       }
     } catch (err) { logger.error('Failed to load lesson stats:', err.message); }
-    return { daily: {} };
+    return { daily: {}, statsVersion: 2 };
   }
 
   _loadHistory() {
@@ -391,13 +434,7 @@ class SignalTracker {
   _getLessonStatsDay(dayKey = getLessonDayKey()) {
     if (!this.lessonStats.daily) this.lessonStats.daily = {};
     if (!this.lessonStats.daily[dayKey]) {
-      this.lessonStats.daily[dayKey] = {
-        dayKey,
-        totalLessons: 0,
-        rejectCount: 0,
-        byReason: {},
-        updatedAt: Date.now(),
-      };
+      this.lessonStats.daily[dayKey] = createLessonStatsDayBucket(dayKey);
     }
     return this.lessonStats.daily[dayKey];
   }
@@ -407,30 +444,31 @@ class SignalTracker {
 
     const dayKey = getLessonDayKey(lesson.timestamp);
     const bucket = this._getLessonStatsDay(dayKey);
-    const reasonKey = resolveLessonReasonKey(lesson);
-    const reasonBucket = bucket.byReason[reasonKey] || {
-      key: reasonKey,
-      label: labelLessonReasonKey(reasonKey),
-      count: 0,
-      symbols: [],
-      lastTimestamp: 0,
-      lastAnalysis: '',
-    };
-
-    reasonBucket.count += 1;
-    reasonBucket.lastTimestamp = lesson.timestamp || Date.now();
-    reasonBucket.lastAnalysis = String(lesson.analysis || '').slice(0, 180);
-    if (!reasonBucket.symbols.includes(lesson.symbol)) {
-      reasonBucket.symbols.push(lesson.symbol);
-      reasonBucket.symbols = reasonBucket.symbols.slice(-3);
-    }
-
-    bucket.byReason[reasonKey] = reasonBucket;
-    bucket.rejectCount += 1;
-    bucket.totalLessons += 1;
-    bucket.updatedAt = Date.now();
+    accumulateLessonStatsBucket(bucket, lesson);
     this.lessonStats.daily[dayKey] = bucket;
     this._saveLessonStats();
+  }
+
+  _migrateLessonStatsFromLessons(force = false) {
+    if (!this.lessonStats) this.lessonStats = { daily: {}, statsVersion: 2 };
+    if (!force && Number(this.lessonStats.statsVersion || 1) >= 2) {
+      return false;
+    }
+
+    const rebuiltDaily = {};
+    for (const lesson of this.lessons || []) {
+      if (!lesson || lesson.kind !== 'reject') continue;
+      const dayKey = getLessonDayKey(lesson.timestamp || Date.now());
+      const bucket = rebuiltDaily[dayKey] || createLessonStatsDayBucket(dayKey);
+      rebuiltDaily[dayKey] = accumulateLessonStatsBucket(bucket, lesson);
+    }
+
+    this.lessonStats.daily = rebuiltDaily;
+    this.lessonStats.statsVersion = 2;
+    this.lessonStats.migratedFromLessonsAt = Date.now();
+    this._saveLessonStats();
+    logger.info(`🧠 [Tracker] Lesson stats migrated from ${Object.keys(rebuiltDaily).length} day buckets.`);
+    return true;
   }
 
   getDailyLessonSummary(resetTime = this.getEffectiveResetTime()) {
