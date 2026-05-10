@@ -350,8 +350,8 @@ function buildRejectionDiagnostics({
 }
 
 /**
- * Evaluate a symbol across multiple timeframes with Weighted Scoring v4.5.1.
- * Core edge comes from trend, support/resistance, structure, retest, and R:R.
+ * Evaluate a symbol with H4 support/resistance as the primary edge.
+ * D1 is kept for diagnostics only, not as a hard directional gate.
  */
 function evaluateSignal(symbol, data, options = {}) {
   const { D1, H4, H1, M15 } = data;
@@ -411,23 +411,6 @@ function evaluateSignal(symbol, data, options = {}) {
     { value: h4Pattern.upper?.currentValue, touches: h4Pattern.upper?.touches || 0, source: 'pattern_upper' },
   ], 'resistance');
 
-  const breakoutBias = h4Pattern.breakoutDirection === 'bullish'
-    ? 'LONG'
-    : h4Pattern.breakoutDirection === 'bearish'
-      ? 'SHORT'
-      : d1Trend.direction === 'bullish'
-        ? 'LONG'
-        : 'SHORT';
-  const breakoutLevel =
-    h4Pattern.breakout && h4Pattern.breakoutDirection === 'bullish' && Number.isFinite(h4Pattern.upper?.currentValue)
-      ? h4Pattern.upper.currentValue
-      : h4Pattern.breakout && h4Pattern.breakoutDirection === 'bearish' && Number.isFinite(h4Pattern.lower?.currentValue)
-        ? h4Pattern.lower.currentValue
-        : breakoutBias === 'LONG'
-          ? supportLevel.value
-          : resistanceLevel.value;
-  const retestStatus = detectRetest(H1, breakoutLevel, breakoutBias);
-
   const distToSupport = supportLevel.value && supportLevel.value < h4SR.currentPrice
     ? ((h4SR.currentPrice - supportLevel.value) / h4SR.currentPrice) * 100
     : Infinity;
@@ -437,6 +420,27 @@ function evaluateSignal(symbol, data, options = {}) {
   const pricePosition = classifyPricePosition(distToSupport, distToResistance);
   const supportTouches = supportLevel.touches || 0;
   const resistanceTouches = resistanceLevel.touches || 0;
+
+  const breakoutBias = h4Pattern.breakoutDirection === 'bullish'
+    ? 'LONG'
+    : h4Pattern.breakoutDirection === 'bearish'
+      ? 'SHORT'
+      : pricePosition === 'near_support'
+        ? 'LONG'
+        : pricePosition === 'near_resistance'
+          ? 'SHORT'
+          : h4Trend.direction === 'bullish'
+            ? 'LONG'
+            : 'SHORT';
+  const breakoutLevel =
+    h4Pattern.breakout && h4Pattern.breakoutDirection === 'bullish' && Number.isFinite(h4Pattern.upper?.currentValue)
+      ? h4Pattern.upper.currentValue
+      : h4Pattern.breakout && h4Pattern.breakoutDirection === 'bearish' && Number.isFinite(h4Pattern.lower?.currentValue)
+        ? h4Pattern.lower.currentValue
+        : breakoutBias === 'LONG'
+          ? supportLevel.value
+          : resistanceLevel.value;
+  const retestStatus = detectRetest(H1, breakoutLevel, breakoutBias);
 
   const atr = h1Spike.atr;
   const atrPercent = (atr / h4SR.currentPrice) * 100;
@@ -449,21 +453,13 @@ function evaluateSignal(symbol, data, options = {}) {
   const warnings = [];
   const tags = [];
 
-  // ─── CATEGORY 1: Macro Trend (D1/H4) & Timing (M15) (Max: 30 pts) ───
-  if (d1Trend.direction === 'bullish') {
-    longScore += d1Trend.strengthLabel === 'strong' ? 15 : 10;
-    longReasons.push(`D1 trend bullish (${d1Trend.strengthLabel}) (+15)`);
-  } else if (d1Trend.direction === 'bearish') {
-    shortScore += d1Trend.strengthLabel === 'strong' ? 15 : 10;
-    shortReasons.push(`D1 trend bearish (${d1Trend.strengthLabel}) (+15)`);
-  }
-
+  // ─── CATEGORY 1: H4 regime & timing (Max: 25 pts) ───
   if (h4Trend.direction === 'bullish') {
-    longScore += 10;
-    longReasons.push(`H4 trend bullish (+10)`);
+    longScore += 15;
+    longReasons.push(`H4 trend bullish (+15)`);
   } else if (h4Trend.direction === 'bearish') {
-    shortScore += 10;
-    shortReasons.push(`H4 trend bearish (+10)`);
+    shortScore += 15;
+    shortReasons.push(`H4 trend bearish (+15)`);
   }
 
   // MTA Timing (M15)
@@ -524,51 +520,6 @@ function evaluateSignal(symbol, data, options = {}) {
     }
   }
 
-  // Trend Conflict Kill-switch — D1 vs H4 berlawanan = hard rejection
-  // Root cause: SAHARAUSDT (D1 bearish + H4 bullish) lolos dengan -20 penalty saja
-  const trendConflict = d1Trend.direction !== 'neutral' && h4Trend.direction !== 'neutral' && d1Trend.direction !== h4Trend.direction;
-  if (trendConflict) {
-    const conflictReason = `Trend conflict D1 ${d1Trend.direction} vs H4 ${h4Trend.direction} — timeframe utama berlawanan, tidak ada edge.`;
-    return options.includeRejectionReason
-      ? {
-          signal: null,
-          rejectionReason: conflictReason,
-          diagnostics: buildRejectionDiagnostics({
-            bias: d1Trend.direction === 'bullish' ? 'LONG' : d1Trend.direction === 'bearish' ? 'SHORT' : null,
-            longScore,
-            shortScore,
-            reasons: [...longReasons, ...shortReasons],
-            warnings,
-            tags,
-            analysis: {
-              d1Trend,
-              h4SR,
-              h4Pattern,
-              h4Trend,
-              h1Trend,
-              m15Trend,
-              h1Structure,
-              h1Compression,
-              ema1321,
-              h4OB,
-              h1OB,
-              h1Engulfing,
-              h1Pin,
-              h1Stoch,
-              h4Stoch,
-            },
-            pricePosition,
-            d1Trend,
-            h4Trend,
-            h1Trend,
-            h1Structure,
-            h1Stoch,
-            h4Stoch,
-          }),
-        }
-      : null;
-  }
-
   // ─── CATEGORY 2: H1 Structure & Candles (Max: 20 pts) ───
   if (h1Structure.structure === 'bullish') {
     longScore += 10;
@@ -606,17 +557,17 @@ function evaluateSignal(symbol, data, options = {}) {
       warnings.push(`⚠️ ${h1Structure.pendingBosType === 'bullish_bos' ? 'Breakout atas' : 'Breakdown bawah'} belum confirmed. Tunggu ${bosConfirmationCandles} candle M15 closed dulu sebelum dianggap BoS valid.`);
   }
 
-  // Candlestick Bonus at Key Levels (Trend-Weighted Fix)
+  // Candlestick Bonus at Key Levels (H4-weighted fix)
   if (pricePosition !== 'middle') {
     if (longScore > shortScore && (h1Engulfing.bull || h1Pin.bullPin)) {
-      const bonus = d1Trend.direction === 'bullish' ? 10 : 2;
+      const bonus = h4Trend.direction === 'bullish' ? 10 : 2;
       longScore += bonus;
-      longReasons.push(`🕯️ Bullish PA (+${bonus}, trend-dictated)`);
+      longReasons.push(`🕯️ Bullish PA (+${bonus}, H4-dictated)`);
       if (bonus === 10) tags.push('PA CONFIRMED');
     } else if (shortScore > longScore && (h1Engulfing.bear || h1Pin.bearPin)) {
-      const bonus = d1Trend.direction === 'bearish' ? 10 : 2;
+      const bonus = h4Trend.direction === 'bearish' ? 10 : 2;
       shortScore += bonus;
-      shortReasons.push(`🕯️ Bearish PA (+${bonus}, trend-dictated)`);
+      shortReasons.push(`🕯️ Bearish PA (+${bonus}, H4-dictated)`);
       if (bonus === 10) tags.push('PA CONFIRMED');
     }
   }
@@ -883,10 +834,8 @@ function evaluateSignal(symbol, data, options = {}) {
   }
 
   // ─── POST-BIAS DIRECTIONAL BARRIERS ──────────────────────
-  // Root cause dari SL hits: LONG masuk tepat di resistance tanpa retest konfirmasi
-
-  // Fix A: LONG dekat resistance tanpa retest = hard penalty
-  // (IMXUSDT, ZECUSDT, PENGUUSDT masuk di resistance tanpa tunggu retest)
+  // H4 SR stays the primary edge. D1 disagreement is allowed, but weak
+  // structure and unconfirmed retests still get filtered out.
   if (bias === 'LONG' && pricePosition === 'near_resistance' && retestStatus !== 'CONFIRMED') {
     finalScore -= 15;
     tags.push('RESISTANCE_ENTRY_UNCONFIRMED');
@@ -898,8 +847,6 @@ function evaluateSignal(symbol, data, options = {}) {
     warnings.push('🚫 SHORT dekat support tanpa retest konfirmasi — tunggu breakdown valid atau bounce ke resistance sebelum entry.');
   }
 
-  // Fix B: Middle zone + tidak ada BoS + retest PENDING = blokir
-  // (ZAMAUSDT masuk di tengah range tanpa edge apapun)
   if (pricePosition === 'middle' && !h1Structure.bos && retestStatus !== 'CONFIRMED') {
     finalScore -= 12;
     tags.push('MIDDLE_ZONE_NO_EDGE');

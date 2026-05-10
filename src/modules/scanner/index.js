@@ -52,6 +52,15 @@ function classifyStrategyLessonReason(result = {}) {
   ].filter(Boolean).join(' ').toLowerCase();
 
   if (text.includes('trend conflict') || text.includes('timeframe utama berlawanan')) return 'trend_conflict';
+  if (text.includes('low volume') || text.includes('volume')) return 'low_volume';
+  if (text.includes('low volatility') || text.includes('atr terlalu kecil') || text.includes('market flat')) return 'low_volatility';
+  if (text.includes('weak trend') || text.includes('trend terlalu lemah')) return 'weak_trend';
+  if (text.includes('middle zone') || text.includes('tanpa edge struktural') || text.includes('tidak ada edge')) return 'middle_zone';
+  if (text.includes('support/resistance belum kuat') || text.includes('sudah dites') || text.includes('touch')) return 'level_touch_low';
+  if (text.includes('retest belum terkonfirmasi') || text.includes('retest pending')) return 'retest_pending';
+  if (text.includes('structure tidak terbentuk') || text.includes('struktur h1 belum valid') || text.includes('h1 structure tidak terbentuk')) return 'structure_weak';
+  if (text.includes('fomo') || text.includes('terlalu jauh dari key level')) return 'fomo';
+  if (text.includes('atr spike') || text.includes('candle abnormal')) return 'atr_spike';
   if (text.includes('poor r:r') || text.includes('need min 2.0') || text.includes('r:r ratio')) return 'poor_rr';
   if (text.includes('weighted score too low') || text.includes('score terlalu rendah')) return 'score_low';
   if (text.includes('standby')) return 'standby';
@@ -135,6 +144,15 @@ function buildStrategyLessonText(symbol, result, scanReport = null, candidate = 
 
   const reasonLeadMap = {
     trend_conflict: `Trend conflict ${diagnostics.trends?.d1 || 'n/a'} vs ${diagnostics.trends?.h4 || 'n/a'}`,
+    low_volume: 'Volume 24h terlalu kecil',
+    low_volatility: 'ATR terlalu kecil',
+    weak_trend: 'Trend terlalu lemah',
+    middle_zone: 'Middle zone / tanpa edge',
+    level_touch_low: 'Support/Resistance belum kuat',
+    retest_pending: 'Retest belum confirmed',
+    structure_weak: 'Struktur H1 belum valid',
+    fomo: 'Entry terlalu jauh dari level',
+    atr_spike: 'ATR spike / candle abnormal',
     poor_rr: `R:R terlalu kecil (${rrHint})`,
     score_low: `Score terlalu rendah (${scoreHint})`,
     standby: 'Setup masih standby',
@@ -157,12 +175,16 @@ function buildStrategyLessonText(symbol, result, scanReport = null, candidate = 
 
 function buildCycleLessonText(scanReport, sentCount) {
   const topErrors = Array.isArray(scanReport?.errors) ? scanReport.errors.slice(0, 2).join('; ') : '';
+  const phases = scanReport?.phaseBreakdown || {};
   const summary = [
     `Scan ${scanReport?.status || 'UNKNOWN'} selesai`,
     `signal ${sentCount || 0}`,
     `candidate ${scanReport?.candidateCount || 0}`,
     `watchlist ${scanReport?.watchlistCount || 0}`,
     `error ${scanReport?.errorCount || 0}`,
+    Number.isFinite(phases.preFilterRejected) ? `prefilter gagal ${phases.preFilterRejected}` : null,
+    Number.isFinite(phases.strategyRejected) ? `strategy gagal ${phases.strategyRejected}` : null,
+    Number.isFinite(phases.aiRejected) ? `AI gagal ${phases.aiRejected}` : null,
     topErrors || null,
   ].filter(Boolean).join('. ');
 
@@ -208,6 +230,17 @@ async function runScanCycle() {
     errorCount: 0,
     errors: [],
     checks: {},
+    phaseBreakdown: {
+      preFilterRejected: 0,
+      preFilterPassed: 0,
+      strategyRejected: 0,
+      strategyWatchlist: 0,
+      strategyCandidate: 0,
+      aiRejected: 0,
+      aiWatchlist: 0,
+      confirmationRejected: 0,
+      delivered: 0,
+    },
   };
   logger.info('═══════════════════════════════════════════════');
   logger.info('🔍 Starting scan cycle...');
@@ -324,34 +357,39 @@ async function runScanCycle() {
       const ticker = await fetch24hTicker(symbol);
       if (!ticker) {
         scanReport.checks.tickerUnavailable = (scanReport.checks.tickerUnavailable || 0) + 1;
+        scanReport.phaseBreakdown.preFilterRejected++;
         continue;
       }
 
-      // Fetch D1 candles for trend check (only D1 for pre-filter)
-      const d1Candles = await fetchOHLCV(symbol, config.timeframes.D1, 50);
+      // Fetch H4 candles for pre-filter so the early gate matches the actual
+      // H4 support/resistance strategy.
+      const h4Candles = await fetchOHLCV(symbol, config.timeframes.H4, 50);
 
-      if (!Array.isArray(d1Candles) || d1Candles.length === 0) {
+      if (!Array.isArray(h4Candles) || h4Candles.length === 0) {
         errors++;
-        pushScanError(`No D1 candles for ${symbol}`);
+        pushScanError(`No H4 candles for ${symbol}`);
+        scanReport.phaseBreakdown.preFilterRejected++;
         continue;
       }
 
       await sleep(config.binance.rateLimitMs);
 
-      const d1Trend = analyzeTrend(d1Candles, config.indicators.ema);
+      const h4Trend = analyzeTrend(h4Candles, config.indicators.ema);
       const filterResult = applyFilters({
         symbol,
         ticker,
-        trend: d1Trend,
-        candles: d1Candles,
+        trend: h4Trend,
+        candles: h4Candles,
       });
 
       if (!filterResult.pass) {
         filtered++;
         scanReport.filteredCount++;
+        scanReport.phaseBreakdown.preFilterRejected++;
         logAudit(symbol, 'PRE-FILTER', 'REJECTED', 0, filterResult.reasons.join(', '));
         continue;
       }
+      scanReport.phaseBreakdown.preFilterPassed++;
 
       // Passed filter → fetch multi-TF data for support/resistance + structure
       logger.info(`📊 ${symbol} passed pre-filters, fetching multi-TF data...`);
@@ -393,6 +431,7 @@ async function runScanCycle() {
 
       if (signal && signal.standbyOnly) {
         scanReport.watchlistCount++;
+        scanReport.phaseBreakdown.strategyWatchlist++;
         recordStrategyLesson(tracker, signal.symbol || symbol, {
           lessonReason: signal.standbyReason || 'Setup masih standby',
           rejectionReason: signal.standbyReason || 'Setup masih standby',
@@ -414,11 +453,13 @@ async function runScanCycle() {
         signal.candles = mtfData.H1; // Save candles for the chart later
         candidates.push(signal);
         scanReport.candidateCount++;
+        scanReport.phaseBreakdown.strategyCandidate++;
         logger.info(`✅ ${symbol}: ${signal.bias} (score: ${signal.score})`);
         logAudit(symbol, 'STRATEGY', 'PASSED', signal.score, signal.reasons.join(', '));
       } else {
         rejected++;
         scanReport.rejectedCount++;
+        scanReport.phaseBreakdown.strategyRejected++;
         const reason = isRejection ? result.rejectionReason : 'Technical requirements not met';
         logAudit(symbol, 'STRATEGY', 'REJECTED', 0, reason);
       }
@@ -479,11 +520,12 @@ async function runScanCycle() {
     try {
       const refined = await refineSignal(candidate, { btcTrend });
 
-      if (!refined) {
-        logger.info(`AI returned no response for ${candidate.symbol}`);
-        logAudit(candidate.symbol, 'AI', 'ERROR', candidate.score, 'Empty AI Response');
-        continue;
-      }
+        if (!refined) {
+          logger.info(`AI returned no response for ${candidate.symbol}`);
+          logAudit(candidate.symbol, 'AI', 'ERROR', candidate.score, 'Empty AI Response');
+          scanReport.phaseBreakdown.aiRejected++;
+          continue;
+        }
 
       // ─── Inherit Deterministic Risk/Reward ───
       if (refined.bias === 'LONG' || refined.bias === 'SHORT') {
@@ -501,6 +543,11 @@ async function runScanCycle() {
         logger.info(`${isWatchlist ? '👀' : '🚫'} ${candidate.symbol}: AI ${isWatchlist ? 'Watchlist' : 'Rejected'} — ${refined.reason}`);
         
         logAudit(candidate.symbol, 'AI', isWatchlist ? 'WATCHLIST' : 'REJECTED', candidate.score, refined.reason);
+        if (isWatchlist) {
+          scanReport.phaseBreakdown.aiWatchlist++;
+        } else {
+          scanReport.phaseBreakdown.aiRejected++;
+        }
         rejections.push({ 
             symbol: candidate.symbol, 
             score: candidate.score, 
@@ -573,9 +620,10 @@ async function runScanCycle() {
 
         // FIX: 0.5% dalam 3 menit adalah volatilitas abnormal (news/fakeout). Reject!
         if (slippage > 0.005) {
-            logger.warn(`🚫 [Live Confirmation Failed] ${candidate.symbol} price slipped ${(slippage*100).toFixed(2)}% during 3m window.`);
-            logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED', refined.confidence, `Price slipped ${(slippage*100).toFixed(1)}% in 3 mins.`);
-            continue;
+          logger.warn(`🚫 [Live Confirmation Failed] ${candidate.symbol} price slipped ${(slippage*100).toFixed(2)}% during 3m window.`);
+          logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED', refined.confidence, `Price slipped ${(slippage*100).toFixed(1)}% in 3 mins.`);
+          scanReport.phaseBreakdown.confirmationRejected++;
+          continue;
         }
       }
 
@@ -600,6 +648,7 @@ async function runScanCycle() {
         
         logger.warn(`🚫 [Fresh RR Check] ${candidate.symbol}: Signal invalidated after 3m confirmation (${reason})`);
         logAudit(candidate.symbol, 'CONFIRMATION', 'REJECTED_RR', refined.confidence, `Invalidated: ${reason} at fresh entry ${freshEntry.toFixed(5)}`);
+        scanReport.phaseBreakdown.confirmationRejected++;
         continue;
       }
 
@@ -651,6 +700,7 @@ async function runScanCycle() {
       if (!delivered) {
         await releaseSignalDedupe(dedupeKeyResult.key).catch(() => {});
         logger.warn(`⚠️ ${candidate.symbol}: delivery failed, dedupe key released for retry.`);
+        scanReport.phaseBreakdown.confirmationRejected++;
         continue;
       }
 
@@ -660,6 +710,7 @@ async function runScanCycle() {
       }, scanReport, candidate);
 
       tracker.track(refined);
+      scanReport.phaseBreakdown.delivered++;
       sentCount++;
 
     } catch (err) {
@@ -736,6 +787,7 @@ async function runScanCycle() {
       dailyCount,
       globalSlToday,
       pairs: scanReport.checks.pairs || 0,
+      preFilterPassed: scanReport.phaseBreakdown.preFilterPassed,
       candidates: scanReport.candidateCount,
       watchlist: scanReport.watchlistCount,
       filtered: scanReport.filteredCount,

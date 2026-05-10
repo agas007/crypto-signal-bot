@@ -45,6 +45,15 @@ function normalizeLessonReasonKey(value) {
 
   if (!text) return 'other';
   if (text.includes('trend conflict') || text.includes('timeframe utama berlawanan')) return 'trend_conflict';
+  if (text.includes('low volume') || text.includes('volume')) return 'low_volume';
+  if (text.includes('low volatility') || text.includes('atr terlalu kecil') || text.includes('market flat')) return 'low_volatility';
+  if (text.includes('weak trend') || text.includes('trend terlalu lemah')) return 'weak_trend';
+  if (text.includes('middle zone') || text.includes('tanpa edge struktural') || text.includes('tidak ada edge')) return 'middle_zone';
+  if (text.includes('support/resistance belum kuat') || text.includes('sudah dites') || text.includes('touch')) return 'level_touch_low';
+  if (text.includes('retest belum terkonfirmasi') || text.includes('retest pending')) return 'retest_pending';
+  if (text.includes('structure tidak terbentuk') || text.includes('struktur h1 belum valid') || text.includes('h1 structure tidak terbentuk')) return 'structure_weak';
+  if (text.includes('fomo') || text.includes('terlalu jauh dari key level')) return 'fomo';
+  if (text.includes('atr spike') || text.includes('candle abnormal')) return 'atr_spike';
   if (text.includes('poor r:r') || text.includes('need min 2.0') || text.includes('r:r ke') || text.includes('r:r ratio')) return 'poor_rr';
   if (text.includes('weighted score too low') || text.includes('score terlalu rendah') || text.includes('score 0/100')) return 'score_low';
   if (text.includes('standby')) return 'standby';
@@ -58,6 +67,15 @@ function normalizeLessonReasonKey(value) {
 function labelLessonReasonKey(key) {
   const map = {
     trend_conflict: 'Trend conflict D1/H4',
+    low_volume: 'Volume 24h terlalu kecil',
+    low_volatility: 'ATR terlalu kecil',
+    weak_trend: 'Trend terlalu lemah',
+    middle_zone: 'Middle zone / tanpa edge',
+    level_touch_low: 'Support/Resistance belum kuat',
+    retest_pending: 'Retest belum confirmed',
+    structure_weak: 'Struktur H1 belum valid',
+    fomo: 'Entry terlalu jauh dari level',
+    atr_spike: 'ATR spike / candle abnormal',
     poor_rr: 'R:R terlalu kecil',
     score_low: 'Weighted score terlalu rendah',
     standby: 'Setup standby',

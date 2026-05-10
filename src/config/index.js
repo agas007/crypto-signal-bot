@@ -65,7 +65,7 @@ const config = {
 
   // Filter thresholds
   filters: {
-    minVolume24hUsd: 750_000,       // $750K minimum daily volume
+    minVolume24hUsd: 1_000_000,     // $1M minimum daily volume
     minAtrPercent: 1.0,             // 1.0% minimum ATR — filter near-zero volatility pairs
     minTrendStrength: 0.3,          // 0.3 minimum — require a meaningful trend
   },
@@ -79,7 +79,7 @@ const config = {
     minRiskDollar: 0.25,             // Minimum $0.20 risk if 5% is lower
     maxSlAllowed: 0.08,              // Max 8% Stop Loss distance allowed
     bosConfirmationCandles: parseInt(process.env.BOS_CONFIRMATION_CANDLES, 10) || 2,
-    repeatedLevelTouches: parseInt(process.env.REPEATED_LEVEL_TOUCHES, 10) || 3,
+    repeatedLevelTouches: parseInt(process.env.REPEATED_LEVEL_TOUCHES, 10) || 2,
     standbyMinRr: parseFloat(process.env.STANDBY_MIN_RR) || 2.0,
     scoreWeights: {
       noStructurePenalty: parseInt(process.env.NO_STRUCTURE_PENALTY, 10) || 4,

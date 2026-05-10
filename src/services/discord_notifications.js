@@ -52,6 +52,23 @@ function buildScanSummary(report) {
     );
   }
 
+  const phases = report?.phaseBreakdown || null;
+  if (phases) {
+    lines.push(
+      '',
+      '🧩 Phase Breakdown',
+      `• Pre-filter passed: ${phases.preFilterPassed ?? 0}`,
+      `• Pre-filter rejected: ${phases.preFilterRejected ?? 0}`,
+      `• Strategy candidate: ${phases.strategyCandidate ?? 0}`,
+      `• Strategy watchlist: ${phases.strategyWatchlist ?? 0}`,
+      `• Strategy rejected: ${phases.strategyRejected ?? 0}`,
+      `• AI watchlist: ${phases.aiWatchlist ?? 0}`,
+      `• AI rejected: ${phases.aiRejected ?? 0}`,
+      `• Confirmation rejected: ${phases.confirmationRejected ?? 0}`,
+      `• Delivered: ${phases.delivered ?? 0}`,
+    );
+  }
+
   if (topRejectReasons.length > 0) {
     lines.push('', '📉 Top Reject Reasons Today');
     for (const reason of topRejectReasons.slice(0, 3)) {
