@@ -11,10 +11,15 @@ const { evaluateSignal, calculateRiskReward } = require('../strategy');
 const { refineSignal, analyzePostMortem } = require('../ai/openrouter');
 const { sendSignal, sendStatus } = require('../../services/signal_delivery');
 const { maybeSendDiscordNotifications } = require('../../services/discord_notifications');
-const { generateChartImage } = require('../chart');
 const tracker = require('../tracker');
 const { claimSignalDedupe, getSignalCandleTime, releaseSignalDedupe } = require('../../utils/signal_dedupe');
 const { logAudit, initAudit } = require('../../utils/audit');
+
+const IS_SERVERLESS = Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.AWS_LAMBDA_FUNCTION_NAME);
+
+function getGenerateChartImage() {
+  return require('../chart').generateChartImage;
+}
 
 function normalizeLessonText(text, maxLength = 500) {
   const normalized = String(text || '')
@@ -639,7 +644,8 @@ async function runScanCycle() {
       refined.candleTime = signalCandleTime;
       const chartCandles = refined.candles || candidate.candles || [];
       let chartImagePath = null;
-      if (Array.isArray(chartCandles) && chartCandles.length > 0) {
+      if (!IS_SERVERLESS && Array.isArray(chartCandles) && chartCandles.length > 0) {
+        const generateChartImage = getGenerateChartImage();
         chartImagePath = await generateChartImage(refined.symbol || candidate.symbol, chartCandles, refined);
         if (chartImagePath) {
           logger.info(`📷 Chart generated for ${candidate.symbol}`);
