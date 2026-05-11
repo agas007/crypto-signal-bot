@@ -60,6 +60,7 @@ function getHelpMessage(chatId) {
     `📐 /strategy - View current trading logic\n` +
     `📋 /watchlist - View last cycle high-alert watchlist\n` +
     `📋 /log - View last 15 scan audit logs\n` +
+    `📄 /scanlog - Send full scan audit log as .txt\n` +
     `❓ /help - Show this help menu\n\n` +
     `⚙️ /adjust SYMBOL TP SL - Manual level adjust\n\n` +
     `🛠 *Admin Commands:* \n` +
@@ -444,6 +445,32 @@ async function initTelegram() {
     } catch (err) {
         logger.error('Failed to read audit log:', err.message);
         bot.sendMessage(msg.chat.id, '❌ Failed to read audit log.');
+    }
+  });
+
+  // /scanlog command
+  bot.onText(/\/scanlog/, (msg) => {
+    const path = require('path');
+    const logPath = path.join(process.cwd(), 'scan_audit.log');
+    if (!fs.existsSync(logPath)) {
+      return bot.sendMessage(msg.chat.id, '📄 *Scan audit log is empty* or hasn\'t been created yet.');
+    }
+
+    try {
+      const stats = fs.statSync(logPath);
+      if (stats.size === 0) {
+        return bot.sendMessage(msg.chat.id, '📄 *Scan audit log is empty* or hasn\'t been created yet.');
+      }
+
+      return bot.sendDocument(msg.chat.id, fs.createReadStream(logPath), {
+        caption: `📄 Full scan audit log\n• Size: ${(stats.size / 1024).toFixed(1)} KB\n• Updated: ${new Date(stats.mtimeMs).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })} WIB`,
+      }).catch((err) => {
+        logger.error('Failed to send /scanlog document:', err.message);
+        bot.sendMessage(msg.chat.id, '❌ Failed to send scan audit log file.');
+      });
+    } catch (err) {
+      logger.error('Failed to read scan audit log for /scanlog:', err.message);
+      bot.sendMessage(msg.chat.id, '❌ Failed to read scan audit log.');
     }
   });
 

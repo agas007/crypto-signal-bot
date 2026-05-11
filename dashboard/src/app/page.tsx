@@ -561,7 +561,21 @@ export default function Dashboard() {
               <div className="bg-[#0D1117] border border-slate-800 rounded-2xl p-6 overflow-hidden relative">
                 <div className="flex justify-between items-center mb-4">
                    <h3 className="text-sm font-semibold text-slate-400 tracking-wider">SCAN AUDIT LOG (Recent 50 lines)</h3>
-                   <div className="flex gap-2">
+                   <div className="flex items-center gap-2">
+                       <a
+                         href="/api/logs/scan"
+                         target="_blank"
+                         rel="noreferrer"
+                         className="px-3 py-1.5 text-xs rounded-lg border border-slate-700 bg-slate-900/80 text-slate-200 hover:bg-slate-800 transition-colors"
+                       >
+                         Open full log
+                       </a>
+                       <a
+                         href="/api/logs/scan?download=1"
+                         className="px-3 py-1.5 text-xs rounded-lg border border-cyan-700 bg-cyan-950/70 text-cyan-200 hover:bg-cyan-900/80 transition-colors"
+                       >
+                         Download .txt
+                       </a>
                        <span className="w-3 h-3 rounded-full bg-rose-500"></span>
                        <span className="w-3 h-3 rounded-full bg-amber-500"></span>
                        <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
