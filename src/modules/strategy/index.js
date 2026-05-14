@@ -317,6 +317,8 @@ function buildRejectionDiagnostics({
   h4Trend = null,
   h1Trend = null,
   h1Structure = null,
+  ema1321 = null,
+  m15Ema1321 = null,
   h1Stoch = null,
   h4Stoch = null,
   m15Stoch = null,
@@ -356,8 +358,12 @@ function buildRejectionDiagnostics({
           bos: Boolean(h1Structure.bos),
           bosType: h1Structure.bosType || null,
           pendingBosType: h1Structure.pendingBosType || null,
-        }
+      }
       : null,
+    ema: {
+      h1: ema1321 ? { bias: ema1321.bias || null, goldenCross: Boolean(ema1321.goldenCross), deathCross: Boolean(ema1321.deathCross), ema13AboveEma21: Boolean(ema1321.ema13AboveEma21) } : null,
+      m15: m15Ema1321 ? { bias: m15Ema1321.bias || null, goldenCross: Boolean(m15Ema1321.goldenCross), deathCross: Boolean(m15Ema1321.deathCross), ema13AboveEma21: Boolean(m15Ema1321.ema13AboveEma21) } : null,
+    },
     stochastic: {
       h1: h1Stoch ? { signal: h1Stoch.signal || null, k: h1Stoch.k, d: h1Stoch.d, crossBullish: h1StochCross?.crossBullish || false, crossBearish: h1StochCross?.crossBearish || false, crossInZone: h1StochCross?.crossInZone || false } : null,
       h4: h4Stoch ? { signal: h4Stoch.signal || null, k: h4Stoch.k, d: h4Stoch.d, crossBullish: h4StochCross?.crossBullish || false, crossBearish: h4StochCross?.crossBearish || false, crossInZone: h4StochCross?.crossInZone || false } : null,
@@ -395,6 +401,10 @@ function evaluateSignal(symbol, data, options = {}) {
   const bearishStochCrossBonus = Number.isFinite(stochScreen.bearishCrossBonus) ? stochScreen.bearishCrossBonus : 5;
   const bullishStochZoneBonus = Number.isFinite(stochScreen.bullishZoneBonus) ? stochScreen.bullishZoneBonus : 2;
   const bearishStochZoneBonus = Number.isFinite(stochScreen.bearishZoneBonus) ? stochScreen.bearishZoneBonus : 2;
+  const emaCrossConfig = config.strategy.emaCross || {};
+  const m15EmaCrossBonus = Number.isFinite(emaCrossConfig.m15CrossBonus) ? emaCrossConfig.m15CrossBonus : 6;
+  const h1EmaCrossBonus = Number.isFinite(emaCrossConfig.h1CrossBonus) ? emaCrossConfig.h1CrossBonus : 4;
+  const emaAlignmentBonus = Number.isFinite(emaCrossConfig.alignmentBonus) ? emaCrossConfig.alignmentBonus : 4;
 
   // ─── 1. Technical Analysis ──────────────────────────────
   const d1Trend = analyzeTrend(D1, emaParams);
@@ -412,8 +422,6 @@ function evaluateSignal(symbol, data, options = {}) {
   const h1StochCross = detectStochCross(h1Stoch.kSeries, h1Stoch.dSeries);
   const h4StochCross = detectStochCross(h4Stoch.kSeries, h4Stoch.dSeries);
   const m15StochCross = m15Stoch ? detectStochCross(m15Stoch.kSeries, m15Stoch.dSeries) : { crossBullish: false, crossBearish: false, crossInZone: false };
-  const h1BullishStochBand = h1StochCross.crossBullish && Number.isFinite(h1Stoch.k) && h1Stoch.k >= bullishStochZoneMin && h1Stoch.k <= bullishStochZoneMax;
-  const h1BearishStochBand = h1StochCross.crossBearish && Number.isFinite(h1Stoch.k) && h1Stoch.k >= bearishStochZoneMin && h1Stoch.k <= bearishStochZoneMax;
   const h4BullishStochBand = h4StochCross.crossBullish && Number.isFinite(h4Stoch.k) && h4Stoch.k >= bullishStochZoneMin && h4Stoch.k <= bullishStochZoneMax;
   const h4BearishStochBand = h4StochCross.crossBearish && Number.isFinite(h4Stoch.k) && h4Stoch.k >= bearishStochZoneMin && h4Stoch.k <= bearishStochZoneMax;
   const m15BullishStochBand = m15StochCross.crossBullish && Number.isFinite(m15Stoch?.k) && m15Stoch.k >= bullishStochZoneMin && m15Stoch.k <= bullishStochZoneMax;
@@ -427,6 +435,7 @@ function evaluateSignal(symbol, data, options = {}) {
     breakoutBufferPct: 0.0015,
   });
   const ema1321 = detectEma1321(H1);
+  const m15Ema1321 = M15 ? detectEma1321(M15) : null;
   const h1OB = detectOrderBlocks(H1, { impulseMultiplier: 1.8, proximityPct: 0.025 });
   const h4OB = detectOrderBlocks(H4, { impulseMultiplier: 1.8, proximityPct: 0.03 });
 
@@ -618,12 +627,28 @@ function evaluateSignal(symbol, data, options = {}) {
   }
 
   // ─── CATEGORY 3: Indicators (Max: 15 pts) ───
-  if (ema1321.ema13AboveEma21) {
-    longScore += 6;
-    longReasons.push(`H1 EMA13 > EMA21 alignment (+6)`);
+  if (m15Ema1321?.goldenCross) {
+    longScore += m15EmaCrossBonus;
+    longReasons.push(`M15 EMA13 crossing above EMA21 — LONG trigger (+${m15EmaCrossBonus})`);
+    tags.push('EMA_M15_LONG_CROSS');
+  } else if (m15Ema1321?.deathCross) {
+    shortScore += m15EmaCrossBonus;
+    shortReasons.push(`M15 EMA13 crossing below EMA21 — SHORT trigger (+${m15EmaCrossBonus})`);
+    tags.push('EMA_M15_SHORT_CROSS');
+  }
+
+  if (ema1321.goldenCross) {
+    longScore += h1EmaCrossBonus;
+    longReasons.push(`H1 EMA13 crossing above EMA21 — bullish continuation trigger (+${h1EmaCrossBonus})`);
+  } else if (ema1321.deathCross) {
+    shortScore += h1EmaCrossBonus;
+    shortReasons.push(`H1 EMA13 crossing below EMA21 — bearish continuation trigger (+${h1EmaCrossBonus})`);
+  } else if (ema1321.ema13AboveEma21) {
+    longScore += emaAlignmentBonus;
+    longReasons.push(`H1 EMA13 > EMA21 alignment (+${emaAlignmentBonus})`);
   } else {
-    shortScore += 6;
-    shortReasons.push(`H1 EMA13 < EMA21 alignment (+6)`);
+    shortScore += emaAlignmentBonus;
+    shortReasons.push(`H1 EMA13 < EMA21 alignment (+${emaAlignmentBonus})`);
   }
 
   // Stochastic Momentum Scoring (H1 + H4)
@@ -839,7 +864,7 @@ function evaluateSignal(symbol, data, options = {}) {
         warnings,
         tags,
         analysis: {
-          d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
+          d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
         },
         riskReward,
         pricePosition,
@@ -847,6 +872,8 @@ function evaluateSignal(symbol, data, options = {}) {
         h4Trend,
         h1Trend,
         h1Structure,
+        ema1321,
+        m15Ema1321,
         h1Stoch,
         h4Stoch,
         m15Stoch,
@@ -874,7 +901,7 @@ function evaluateSignal(symbol, data, options = {}) {
           warnings,
           tags,
           analysis: {
-            d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
+            d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
           },
           riskReward,
           pricePosition,
@@ -882,6 +909,8 @@ function evaluateSignal(symbol, data, options = {}) {
           h4Trend,
           h1Trend,
           h1Structure,
+          ema1321,
+          m15Ema1321,
           h1Stoch,
           h4Stoch,
           m15Stoch,
@@ -906,7 +935,7 @@ function evaluateSignal(symbol, data, options = {}) {
       warnings,
       tags: [...tags, 'STANDBY_SETUP'],
       analysis: {
-        d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross
+        d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross, pricePosition
       },
       riskReward,
       isStrict: false,
@@ -958,6 +987,38 @@ function evaluateSignal(symbol, data, options = {}) {
     warnings.push(`☄️ Abnormal H1 ATR Spike (${h1Spike.ratio.toFixed(1)}x average). Avoid FOMO at price peaks.`);
   }
 
+  if (finalScore < minFinalScore) {
+    return options.includeRejectionReason ? {
+      signal: null,
+      rejectionReason: `Final score too low after entry barriers (${finalScore}/100). Need min ${minFinalScore}.`,
+      diagnostics: buildRejectionDiagnostics({
+        bias,
+        longScore,
+        shortScore,
+        finalScore,
+        reasons,
+        warnings,
+        tags,
+        analysis: {
+          d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
+        },
+        riskReward,
+        pricePosition,
+        d1Trend,
+        h4Trend,
+        h1Trend,
+        h1Structure,
+        ema1321,
+        m15Ema1321,
+        h1Stoch,
+        h4Stoch,
+        m15Stoch,
+        h1StochCross,
+        h4StochCross,
+        m15StochCross,
+      }),
+    } : null;
+  }
 
   // Rule 6: Technical score >= 70% first. AI is final sanity check.
   // Rule 3: Hanya hitung POSITIVE reasons untuk isStrict (menghindari false positive dari warnings)
@@ -972,7 +1033,7 @@ function evaluateSignal(symbol, data, options = {}) {
     warnings,
     tags,
     analysis: {
-      d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
+      d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross, pricePosition
     },
     riskReward,
     isStrict,

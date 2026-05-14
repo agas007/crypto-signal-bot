@@ -94,6 +94,11 @@ const config = {
       bullishZoneBonus: parseInt(process.env.STOCH_BULLISH_ZONE_BONUS, 10) || 2,
       bearishZoneBonus: parseInt(process.env.STOCH_BEARISH_ZONE_BONUS, 10) || 2,
     },
+    emaCross: {
+      m15CrossBonus: parseInt(process.env.EMA_M15_CROSS_BONUS, 10) || 6,
+      h1CrossBonus: parseInt(process.env.EMA_H1_CROSS_BONUS, 10) || 4,
+      alignmentBonus: parseInt(process.env.EMA_ALIGNMENT_BONUS, 10) || 4,
+    },
     scoreWeights: {
       noStructurePenalty: parseInt(process.env.NO_STRUCTURE_PENALTY, 10) || 1,
       lowVolPenalty: parseInt(process.env.LOW_VOL_PENALTY, 10) || 3,

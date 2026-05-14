@@ -85,7 +85,26 @@ You MUST respond with ONLY valid JSON (no markdown, no explanation, no fences).`
  */
 function buildPrompt(signal) {
   const { symbol, bias, score, reasons, analysis, riskReward } = signal;
-  const { d1Trend, h4SR, h4Stoch, h4Trend, h1Trend, h1Structure, h1Stoch, pricePosition } = analysis;
+  const {
+    d1Trend,
+    h4SR,
+    h4Stoch,
+    h4Trend,
+    h1Trend,
+    h1Structure,
+    h1Stoch,
+    m15Trend,
+    m15Stoch,
+    m15StochCross,
+    ema1321,
+    m15Ema1321,
+    pricePosition,
+  } = analysis;
+  const formatStochCross = (cross = {}) => {
+    if (cross.crossBullish) return 'bullish K>D cross';
+    if (cross.crossBearish) return 'bearish K<D cross';
+    return 'no fresh cross';
+  };
 
   const pairHistory = tracker.history.filter(t => t.symbol === symbol && t.status === 'COMPLETED');
   const wins = pairHistory.filter(t => t.close_reason === 'TP_HIT').length;
@@ -123,6 +142,12 @@ H1:
 - Standby minimum R:R: ${config.strategy.standbyMinRr || 2.0}
 - Trend: ${h1Trend.direction} (${h1Trend.strengthLabel})
 - Stochastic: K=${h1Stoch.k.toFixed(1)}, D=${h1Stoch.d.toFixed(1)} (${h1Stoch.signal})
+- EMA13/21: ${ema1321?.goldenCross ? 'golden cross' : ema1321?.deathCross ? 'death cross' : ema1321?.ema13AboveEma21 ? '13 above 21' : '13 below 21'}
+
+M15:
+- Trend: ${m15Trend?.direction || 'N/A'} (${m15Trend?.strengthLabel || 'N/A'})
+- Stochastic: K=${Number.isFinite(m15Stoch?.k) ? m15Stoch.k.toFixed(1) : 'N/A'}, D=${Number.isFinite(m15Stoch?.d) ? m15Stoch.d.toFixed(1) : 'N/A'} (${m15Stoch?.signal || 'N/A'}, ${formatStochCross(m15StochCross)})
+- EMA13/21: ${m15Ema1321?.goldenCross ? 'golden cross / LONG trigger' : m15Ema1321?.deathCross ? 'death cross / SHORT trigger' : m15Ema1321?.ema13AboveEma21 ? '13 above 21' : '13 below 21 or neutral'}
 
 TECHNICAL REASONS:
 ${reasons.map((r, i) => `${i + 1}. ${r}`).join('\n')}

@@ -210,6 +210,27 @@ function summarizeTopFailurePhase(phaseBreakdown = {}) {
   return `${top.label} (${top.count})`;
 }
 
+function buildStrategyRejectSample(symbol, result = {}) {
+  const diagnostics = result?.diagnostics || {};
+  const riskReward = diagnostics.riskReward || null;
+
+  return {
+    symbol,
+    reason: result?.rejectionReason || result?.lessonReason || 'Technical requirements not met',
+    bias: diagnostics.bias || null,
+    finalScore: Number.isFinite(diagnostics.finalScore) ? diagnostics.finalScore : null,
+    longScore: Number.isFinite(diagnostics.longScore) ? diagnostics.longScore : null,
+    shortScore: Number.isFinite(diagnostics.shortScore) ? diagnostics.shortScore : null,
+    pricePosition: diagnostics.pricePosition || null,
+    rr: Number.isFinite(riskReward?.rr) ? riskReward.rr : null,
+    trends: diagnostics.trends || null,
+    ema: diagnostics.ema || null,
+    stochastic: diagnostics.stochastic || null,
+    tags: Array.isArray(diagnostics.tags) ? diagnostics.tags.slice(0, 8) : [],
+    warnings: Array.isArray(diagnostics.warnings) ? diagnostics.warnings.slice(0, 4) : [],
+  };
+}
+
 function recordStrategyLesson(tracker, symbol, result, scanReport, candidate = null, meta = {}) {
   if (!tracker || typeof tracker.saveLesson !== 'function') return;
   const reasonKey = meta.reasonKey || result?.reasonKey || classifyStrategyLessonReason(result);
@@ -264,6 +285,7 @@ async function runScanCycle() {
     rejectedCount: 0,
     errorCount: 0,
     errors: [],
+    strategyRejectSamples: [],
     checks: {},
     phaseBreakdown: {
       preFilterRejected: 0,
@@ -498,6 +520,9 @@ async function runScanCycle() {
         scanReport.rejectedCount++;
         scanReport.phaseBreakdown.strategyRejected++;
         const reason = isRejection ? result.rejectionReason : 'Technical requirements not met';
+        if (isRejection && scanReport.strategyRejectSamples.length < 40) {
+          scanReport.strategyRejectSamples.push(buildStrategyRejectSample(symbol, result));
+        }
         logAudit(symbol, 'STRATEGY', 'REJECTED', 0, reason);
       }
 
@@ -510,8 +535,14 @@ async function runScanCycle() {
   }
 
   // 3. Selection & Batching
-  const qualityCandidates = candidates.filter((c) => c.isStrict);
-  const okCandidates = candidates.filter((c) => !c.isStrict);
+  const candidateRank = (candidate) => {
+    const score = Number(candidate?.score) || 0;
+    const rr = Number(candidate?.riskReward?.rr) || 0;
+    const strictBonus = candidate?.isStrict ? 1000 : 0;
+    return strictBonus + (score * 10) + rr;
+  };
+  const qualityCandidates = candidates.filter((c) => c.isStrict).sort((a, b) => candidateRank(b) - candidateRank(a));
+  const okCandidates = candidates.filter((c) => !c.isStrict).sort((a, b) => candidateRank(b) - candidateRank(a));
   scanReport.checks.qualityCandidates = qualityCandidates.length;
   scanReport.checks.okCandidates = okCandidates.length;
   const isDailyLimitReached = dailyCount >= 5;
