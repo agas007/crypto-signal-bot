@@ -170,6 +170,12 @@ export async function GET() {
     if (redisScanReport) {
       data.scanReport = redisScanReport;
       debugInfo.resolvedScanReportPath = 'redis:bot:scan_report';
+    } else {
+      const scanReportPath = resolvePath('scan_report.json');
+      if (scanReportPath) {
+        debugInfo.resolvedScanReportPath = scanReportPath;
+        try { data.scanReport = JSON.parse(fs.readFileSync(scanReportPath, 'utf8')); } catch (e: any) { debugInfo.errors.scanReport = e.message; }
+      }
     }
 
     const binanceSnapshotPath = resolvePath('binance_trade_snapshot.json');

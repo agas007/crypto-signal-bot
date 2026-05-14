@@ -319,6 +319,10 @@ function buildRejectionDiagnostics({
   h1Structure = null,
   h1Stoch = null,
   h4Stoch = null,
+  m15Stoch = null,
+  h1StochCross = null,
+  h4StochCross = null,
+  m15StochCross = null,
   standbyBias = null,
   standbyReason = null,
 }) {
@@ -355,8 +359,9 @@ function buildRejectionDiagnostics({
         }
       : null,
     stochastic: {
-      h1: h1Stoch ? { signal: h1Stoch.signal || null, k: h1Stoch.k, d: h1Stoch.d } : null,
-      h4: h4Stoch ? { signal: h4Stoch.signal || null, k: h4Stoch.k, d: h4Stoch.d } : null,
+      h1: h1Stoch ? { signal: h1Stoch.signal || null, k: h1Stoch.k, d: h1Stoch.d, crossBullish: h1StochCross?.crossBullish || false, crossBearish: h1StochCross?.crossBearish || false, crossInZone: h1StochCross?.crossInZone || false } : null,
+      h4: h4Stoch ? { signal: h4Stoch.signal || null, k: h4Stoch.k, d: h4Stoch.d, crossBullish: h4StochCross?.crossBullish || false, crossBearish: h4StochCross?.crossBearish || false, crossInZone: h4StochCross?.crossInZone || false } : null,
+      m15: m15Stoch ? { signal: m15Stoch.signal || null, k: m15Stoch.k, d: m15Stoch.d, crossBullish: m15StochCross?.crossBullish || false, crossBearish: m15StochCross?.crossBearish || false, crossInZone: m15StochCross?.crossInZone || false } : null,
     },
     standbyBias,
     standbyReason,
@@ -381,6 +386,15 @@ function evaluateSignal(symbol, data, options = {}) {
   const rrBelowMinPenalty = scoreWeights.rrBelowMinPenalty ?? 10;
   const emaParams = config.indicators.ema;
   const stochParams = config.indicators.stochastic;
+  const stochScreen = config.strategy.stochastic || {};
+  const bullishStochZoneMin = Number.isFinite(stochScreen.bullishZoneMin) ? stochScreen.bullishZoneMin : 10;
+  const bullishStochZoneMax = Number.isFinite(stochScreen.bullishZoneMax) ? stochScreen.bullishZoneMax : 30;
+  const bearishStochZoneMin = Number.isFinite(stochScreen.bearishZoneMin) ? stochScreen.bearishZoneMin : 70;
+  const bearishStochZoneMax = Number.isFinite(stochScreen.bearishZoneMax) ? stochScreen.bearishZoneMax : 90;
+  const bullishStochCrossBonus = Number.isFinite(stochScreen.bullishCrossBonus) ? stochScreen.bullishCrossBonus : 5;
+  const bearishStochCrossBonus = Number.isFinite(stochScreen.bearishCrossBonus) ? stochScreen.bearishCrossBonus : 5;
+  const bullishStochZoneBonus = Number.isFinite(stochScreen.bullishZoneBonus) ? stochScreen.bullishZoneBonus : 2;
+  const bearishStochZoneBonus = Number.isFinite(stochScreen.bearishZoneBonus) ? stochScreen.bearishZoneBonus : 2;
 
   // ─── 1. Technical Analysis ──────────────────────────────
   const d1Trend = analyzeTrend(D1, emaParams);
@@ -394,7 +408,16 @@ function evaluateSignal(symbol, data, options = {}) {
   const h1Structure = analyzeStructure(H1, 3, { confirmationCandles: M15, confirmationCount: bosConfirmationCandles });
   const h1Stoch = calculateStochastic(H1, stochParams);
   const h4Stoch = calculateStochastic(H4, stochParams);
+  const m15Stoch = M15 ? calculateStochastic(M15, stochParams) : null;
   const h1StochCross = detectStochCross(h1Stoch.kSeries, h1Stoch.dSeries);
+  const h4StochCross = detectStochCross(h4Stoch.kSeries, h4Stoch.dSeries);
+  const m15StochCross = m15Stoch ? detectStochCross(m15Stoch.kSeries, m15Stoch.dSeries) : { crossBullish: false, crossBearish: false, crossInZone: false };
+  const h1BullishStochBand = h1StochCross.crossBullish && Number.isFinite(h1Stoch.k) && h1Stoch.k >= bullishStochZoneMin && h1Stoch.k <= bullishStochZoneMax;
+  const h1BearishStochBand = h1StochCross.crossBearish && Number.isFinite(h1Stoch.k) && h1Stoch.k >= bearishStochZoneMin && h1Stoch.k <= bearishStochZoneMax;
+  const h4BullishStochBand = h4StochCross.crossBullish && Number.isFinite(h4Stoch.k) && h4Stoch.k >= bullishStochZoneMin && h4Stoch.k <= bullishStochZoneMax;
+  const h4BearishStochBand = h4StochCross.crossBearish && Number.isFinite(h4Stoch.k) && h4Stoch.k >= bearishStochZoneMin && h4Stoch.k <= bearishStochZoneMax;
+  const m15BullishStochBand = m15StochCross.crossBullish && Number.isFinite(m15Stoch?.k) && m15Stoch.k >= bullishStochZoneMin && m15Stoch.k <= bullishStochZoneMax;
+  const m15BearishStochBand = m15StochCross.crossBearish && Number.isFinite(m15Stoch?.k) && m15Stoch.k >= bearishStochZoneMin && m15Stoch.k <= bearishStochZoneMax;
   const h1Spike = detectAtSpike(H1, 14);
   const h1Compression = detectCompression(H1, {
     recentWindow: 12,
@@ -629,6 +652,35 @@ function evaluateSignal(symbol, data, options = {}) {
     shortReasons.push(`H1 Stoch bearish cross in overbought zone (+3)`);
   }
 
+  // Explicit stochastic screener: M15 K/D cross in the preferred band.
+  if (m15BullishStochBand) {
+    longScore += bullishStochCrossBonus;
+    longReasons.push(`M15 Stoch bullish cross di band ${bullishStochZoneMin}-${bullishStochZoneMax} (K=${m15Stoch.k.toFixed(1)}, D=${m15Stoch.d.toFixed(1)}) (+${bullishStochCrossBonus})`);
+    if (m15Stoch.k >= 10 && m15Stoch.k <= 20) {
+      longScore += bullishStochZoneBonus;
+      longReasons.push(`M15 Stoch masuk area 10-20, reversal setup lebih matang (+${bullishStochZoneBonus})`);
+    }
+    tags.push('STOCH_LONG_SETUP');
+  } else if (m15BearishStochBand) {
+    shortScore += bearishStochCrossBonus;
+    shortReasons.push(`M15 Stoch bearish cross di band ${bearishStochZoneMin}-${bearishStochZoneMax} (K=${m15Stoch.k.toFixed(1)}, D=${m15Stoch.d.toFixed(1)}) (+${bearishStochCrossBonus})`);
+    if (m15Stoch.k >= 80 && m15Stoch.k <= 90) {
+      shortScore += bearishStochZoneBonus;
+      shortReasons.push(`M15 Stoch masuk area 80-90, reversal setup lebih matang (+${bearishStochZoneBonus})`);
+    }
+    tags.push('STOCH_SHORT_SETUP');
+  }
+
+  if (h4BullishStochBand) {
+    const bonus = Math.max(2, Math.floor(bullishStochCrossBonus / 2));
+    longScore += bonus;
+    longReasons.push(`H4 Stoch bullish cross di band ${bullishStochZoneMin}-${bullishStochZoneMax} (+${bonus})`);
+  } else if (h4BearishStochBand) {
+    const bonus = Math.max(2, Math.floor(bearishStochCrossBonus / 2));
+    shortScore += bonus;
+    shortReasons.push(`H4 Stoch bearish cross di band ${bearishStochZoneMin}-${bearishStochZoneMax} (+${bonus})`);
+  }
+
   // Low Volatility Filter
   const minVol = config.filters.minAtrPercent || 0.5;
   if (atrPercent < minVol) {
@@ -787,7 +839,7 @@ function evaluateSignal(symbol, data, options = {}) {
         warnings,
         tags,
         analysis: {
-          d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch,
+          d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
         },
         riskReward,
         pricePosition,
@@ -797,6 +849,10 @@ function evaluateSignal(symbol, data, options = {}) {
         h1Structure,
         h1Stoch,
         h4Stoch,
+        m15Stoch,
+        h1StochCross,
+        h4StochCross,
+        m15StochCross,
       }),
     } : null;
   }
@@ -818,7 +874,7 @@ function evaluateSignal(symbol, data, options = {}) {
           warnings,
           tags,
           analysis: {
-            d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch,
+            d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
           },
           riskReward,
           pricePosition,
@@ -828,6 +884,10 @@ function evaluateSignal(symbol, data, options = {}) {
           h1Structure,
           h1Stoch,
           h4Stoch,
+          m15Stoch,
+          h1StochCross,
+          h4StochCross,
+          m15StochCross,
         }),
       } : null;
   }
@@ -846,7 +906,7 @@ function evaluateSignal(symbol, data, options = {}) {
       warnings,
       tags: [...tags, 'STANDBY_SETUP'],
       analysis: {
-        d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch
+        d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross
       },
       riskReward,
       isStrict: false,

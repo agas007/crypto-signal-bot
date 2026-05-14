@@ -84,6 +84,16 @@ const config = {
     repeatedLevelTouches: parseInt(process.env.REPEATED_LEVEL_TOUCHES, 10) || 2,
     pricePositionThresholdPct: parseFloat(process.env.PRICE_POSITION_THRESHOLD_PCT) || 4.0,
     standbyMinRr: parseFloat(process.env.STANDBY_MIN_RR) || 2.0,
+    stochastic: {
+      bullishZoneMin: parseFloat(process.env.STOCH_BULLISH_ZONE_MIN) || 10,
+      bullishZoneMax: parseFloat(process.env.STOCH_BULLISH_ZONE_MAX) || 30,
+      bearishZoneMin: parseFloat(process.env.STOCH_BEARISH_ZONE_MIN) || 70,
+      bearishZoneMax: parseFloat(process.env.STOCH_BEARISH_ZONE_MAX) || 90,
+      bullishCrossBonus: parseInt(process.env.STOCH_BULLISH_CROSS_BONUS, 10) || 5,
+      bearishCrossBonus: parseInt(process.env.STOCH_BEARISH_CROSS_BONUS, 10) || 5,
+      bullishZoneBonus: parseInt(process.env.STOCH_BULLISH_ZONE_BONUS, 10) || 2,
+      bearishZoneBonus: parseInt(process.env.STOCH_BEARISH_ZONE_BONUS, 10) || 2,
+    },
     scoreWeights: {
       noStructurePenalty: parseInt(process.env.NO_STRUCTURE_PENALTY, 10) || 1,
       lowVolPenalty: parseInt(process.env.LOW_VOL_PENALTY, 10) || 3,

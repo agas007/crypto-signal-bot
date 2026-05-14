@@ -48,12 +48,30 @@ interface Lesson {
   timestamp?: number;
 }
 
+interface ScanReport {
+  status?: string;
+  signalCount?: number;
+  watchlistCount?: number;
+  candidateCount?: number;
+  errorCount?: number;
+  durationMs?: number;
+  startedAt?: number;
+  finishedAt?: number;
+  summary?: {
+    topFailurePhase?: string;
+  };
+  phaseBreakdown?: Record<string, number>;
+  errors?: string[];
+  [key: string]: unknown;
+}
+
 interface BotData {
   signals: Signal[];
   history: Trade[];
   lessons: Lesson[];
   logs: string;
   watchlist?: Signal[];
+  scanReport?: ScanReport | null;
   binanceSnapshot?: {
     period?: string;
     market?: string;
@@ -98,9 +116,9 @@ function getOutcomeLabel(trade?: Trade | BinanceTrade | null) {
 }
 
 export default function Dashboard() {
-  const [data, setData] = useState<BotData>({ signals: [], history: [], lessons: [], logs: "" });
+  const [data, setData] = useState<BotData>({ signals: [], history: [], lessons: [], logs: "", scanReport: null });
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'signals' | 'history' | 'lessons' | 'logs'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'signals' | 'history' | 'lessons' | 'logs' | 'raw'>('overview');
 
   useEffect(() => {
     fetch(`/api/bot-data?t=${Date.now()}`)
@@ -113,6 +131,7 @@ export default function Dashboard() {
             lessons: res.lessons ? res.lessons.reverse() : [],
             logs: res.logs || "",
             watchlist: res.watchlist || [],
+            scanReport: res.scanReport || null,
             binanceSnapshot: res.binanceSnapshot || null,
             livePrices: res.livePrices || {}
           });
@@ -151,6 +170,8 @@ export default function Dashboard() {
   const recentBinanceTrades = Array.isArray(data.binanceSnapshot?.tradeLog) ? data.binanceSnapshot.tradeLog : [];
   const recentOutcomes = recentBinanceTrades.length > 0 ? recentBinanceTrades : history;
   const latestLesson = lessons[0];
+  const rawScanReport = data.scanReport || null;
+  const rawScanReportJson = rawScanReport ? JSON.stringify(rawScanReport, null, 2) : '';
   const signalHealthLabel = signals.length === 0
     ? 'Tidak ada signal aktif'
     : watchlistSignals.length > 0
@@ -173,7 +194,7 @@ export default function Dashboard() {
             <p className="text-slate-400 mt-2 text-sm">Signal aktif, performa terakhir, dan catatan yang benar-benar bisa dipakai.</p>
           </div>
           <div className="flex flex-wrap bg-slate-900/50 p-1 rounded-xl border border-slate-800/60 gap-1">
-            {(['overview', 'signals', 'history', 'lessons', 'logs'] as const).map((tab) => (
+            {(['overview', 'signals', 'history', 'lessons', 'logs', 'raw'] as const).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -570,11 +591,11 @@ export default function Dashboard() {
                        >
                          Open full log
                        </a>
-                       <a
-                         href="/api/logs/scan?download=1"
-                         className="px-3 py-1.5 text-xs rounded-lg border border-cyan-700 bg-cyan-950/70 text-cyan-200 hover:bg-cyan-900/80 transition-colors"
-                       >
-                         Download .txt
+                        <a
+                          href="/api/logs/scan?download=1"
+                          className="px-3 py-1.5 text-xs rounded-lg border border-cyan-700 bg-cyan-950/70 text-cyan-200 hover:bg-cyan-900/80 transition-colors"
+                        >
+                          Download .txt
                        </a>
                        <span className="w-3 h-3 rounded-full bg-rose-500"></span>
                        <span className="w-3 h-3 rounded-full bg-amber-500"></span>
@@ -585,6 +606,67 @@ export default function Dashboard() {
                     <pre className="text-xs font-mono text-slate-300 whitespace-pre-wrap">
                     {data.logs || "No logs available."}
                     </pre>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'raw' && (
+              <div className="space-y-4">
+                <div className="rounded-3xl border border-slate-800/80 bg-slate-900/50 p-6">
+                  <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.24em] text-slate-500">RAW SCAN REPORT</p>
+                      <h3 className="mt-2 text-2xl font-bold text-slate-100">Download latest scanReport mentah</h3>
+                      <p className="mt-2 text-sm text-slate-400">
+                        Ini isi `scan_report.json` terakhir yang disimpan bot. Cocok buat audit, analisa reject, dan debugging rule.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <a
+                        href="/api/logs/scan-report"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 text-xs rounded-lg border border-slate-700 bg-slate-900/80 text-slate-200 hover:bg-slate-800 transition-colors"
+                      >
+                        Open raw JSON
+                      </a>
+                      <a
+                        href="/api/logs/scan-report?download=1"
+                        className="px-3 py-1.5 text-xs rounded-lg border border-cyan-700 bg-cyan-950/70 text-cyan-200 hover:bg-cyan-900/80 transition-colors"
+                      >
+                        Download JSON
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Status</p>
+                      <p className="mt-2 text-lg font-bold text-slate-100">{rawScanReport?.status || 'n/a'}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Signals</p>
+                      <p className="mt-2 text-lg font-bold text-emerald-300">{Number(rawScanReport?.signalCount ?? 0)}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Candidates</p>
+                      <p className="mt-2 text-lg font-bold text-cyan-300">{Number(rawScanReport?.candidateCount ?? 0)}</p>
+                    </div>
+                    <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+                      <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">Watchlist</p>
+                      <p className="mt-2 text-lg font-bold text-amber-300">{Number(rawScanReport?.watchlistCount ?? 0)}</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/60 overflow-hidden">
+                    <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-slate-800">
+                      <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Pretty JSON Preview</p>
+                      <span className="text-xs text-slate-500">Latest scan_report.json</span>
+                    </div>
+                    <pre className="max-h-[620px] overflow-auto p-4 text-xs leading-6 text-slate-300 whitespace-pre-wrap">
+{rawScanReportJson || 'No scan report available yet.'}
+                    </pre>
+                  </div>
                 </div>
               </div>
             )}
