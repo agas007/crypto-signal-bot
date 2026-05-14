@@ -74,7 +74,7 @@ const config = {
 
   strategy: {
     minRrRatio: parseFloat(process.env.MIN_RR_RATIO) || 2.0,
-    minFinalScore: parseInt(process.env.MIN_FINAL_SCORE, 10) || 20,
+    minFinalScore: parseInt(process.env.MIN_FINAL_SCORE, 10) || 18,
     accountBalance: parseFloat(process.env.ACCOUNT_BALANCE) || 1000,
     riskPercentage: parseFloat(process.env.RISK_PERCENTAGE) || 0.05,           // Risk X% of account balance per trade
     maxPositionPercentage: parseFloat(process.env.MAX_POSITION_PERCENTAGE) || 3.0, // Default to 300% total balance
@@ -82,17 +82,17 @@ const config = {
     maxSlAllowed: 0.08,              // Max 8% Stop Loss distance allowed
     bosConfirmationCandles: parseInt(process.env.BOS_CONFIRMATION_CANDLES, 10) || 2,
     repeatedLevelTouches: parseInt(process.env.REPEATED_LEVEL_TOUCHES, 10) || 2,
-    pricePositionThresholdPct: parseFloat(process.env.PRICE_POSITION_THRESHOLD_PCT) || 5.0,
+    pricePositionThresholdPct: parseFloat(process.env.PRICE_POSITION_THRESHOLD_PCT) || 4.0,
     standbyMinRr: parseFloat(process.env.STANDBY_MIN_RR) || 2.0,
     scoreWeights: {
-      noStructurePenalty: parseInt(process.env.NO_STRUCTURE_PENALTY, 10) || 2,
-      lowVolPenalty: parseInt(process.env.LOW_VOL_PENALTY, 10) || 4,
+      noStructurePenalty: parseInt(process.env.NO_STRUCTURE_PENALTY, 10) || 1,
+      lowVolPenalty: parseInt(process.env.LOW_VOL_PENALTY, 10) || 3,
       middleZonePenalty: parseInt(process.env.MIDDLE_ZONE_PENALTY, 10) || 1,
       nearLevelDirectionalBias: parseInt(process.env.NEAR_LEVEL_BIAS, 10) || 12,
       repeatedTouchBonus: parseInt(process.env.REPEATED_TOUCH_BONUS, 10) || 10,
       strongRepeatedTouchBonus: parseInt(process.env.STRONG_REPEATED_TOUCH_BONUS, 10) || 12,
       retestPendingPenalty: parseInt(process.env.RETEST_PENDING_PENALTY, 10) || 1,
-      rrBelowMinPenalty: parseInt(process.env.RR_BELOW_MIN_PENALTY, 10) || 5,
+      rrBelowMinPenalty: parseInt(process.env.RR_BELOW_MIN_PENALTY, 10) || 4,
     },
     tuning: {
       enabled: process.env.ENABLE_AI_TUNING !== '0',

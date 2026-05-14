@@ -867,18 +867,18 @@ function evaluateSignal(symbol, data, options = {}) {
   // H4 SR stays the primary edge. D1 disagreement is allowed, but weak
   // structure and unconfirmed retests still get filtered out.
   if (bias === 'LONG' && pricePosition === 'near_resistance' && retestStatus !== 'CONFIRMED') {
-    finalScore -= strongH4LevelSetup ? 8 : 15;
+    finalScore -= strongH4LevelSetup ? 6 : 12;
     tags.push('RESISTANCE_ENTRY_UNCONFIRMED');
     warnings.push('🚫 LONG dekat resistance tanpa retest konfirmasi — tunggu breakout hold atau pullback ke support sebelum entry.');
   }
   if (bias === 'SHORT' && pricePosition === 'near_support' && retestStatus !== 'CONFIRMED') {
-    finalScore -= strongH4LevelSetup ? 8 : 15;
+    finalScore -= strongH4LevelSetup ? 6 : 12;
     tags.push('SUPPORT_ENTRY_UNCONFIRMED');
     warnings.push('🚫 SHORT dekat support tanpa retest konfirmasi — tunggu breakdown valid atau bounce ke resistance sebelum entry.');
   }
 
   if (pricePosition === 'middle' && !h1Structure.bos && retestStatus !== 'CONFIRMED') {
-    finalScore -= strongH4LevelSetup ? 6 : 12;
+    finalScore -= strongH4LevelSetup ? 4 : 8;
     tags.push('MIDDLE_ZONE_NO_EDGE');
     warnings.push('🚫 Price di middle zone, tidak ada BoS, dan retest belum konfirmasi. Tidak ada edge struktural — skip setup ini.');
   }
@@ -886,7 +886,7 @@ function evaluateSignal(symbol, data, options = {}) {
   // ─── VERTICAL ENTRY ───────────────────────────────────────
   const distFromLvl = bias === 'LONG' ? distToSupport : distToResistance;
   if (distFromLvl > 5.0) {
-    finalScore -= strongH4LevelSetup ? 5 : 10;
+    finalScore -= strongH4LevelSetup ? 4 : 8;
     tags.push('VERTICAL ENTRY');
     warnings.push(`✋ Price is ${distFromLvl.toFixed(1)}% away from key level (FOMO).`);
   }

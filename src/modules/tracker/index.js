@@ -144,6 +144,16 @@ function accumulateLessonStatsBucket(bucket, lesson) {
   return bucket;
 }
 
+function buildRejectLessonBucket(dayKey, lessons = []) {
+  const bucket = createLessonStatsDayBucket(dayKey);
+
+  for (const lesson of lessons || []) {
+    accumulateLessonStatsBucket(bucket, lesson);
+  }
+
+  return bucket;
+}
+
 function clampNumber(value, min, max, fallback) {
   const num = Number(value);
   if (!Number.isFinite(num)) return fallback;
@@ -473,12 +483,8 @@ class SignalTracker {
 
   getDailyLessonSummary(resetTime = this.getEffectiveResetTime()) {
     const dayKey = getLessonDayKey(resetTime);
-    const bucket = this.lessonStats.daily?.[dayKey] || {
-      dayKey,
-      totalLessons: 0,
-      rejectCount: 0,
-      byReason: {},
-    };
+    const todaysRejectLessons = this.getLessonsSince(resetTime).filter((lesson) => lesson.kind === 'reject');
+    const bucket = buildRejectLessonBucket(dayKey, todaysRejectLessons);
 
     const normalizedReasons = {};
     for (const entry of Object.values(bucket.byReason || {})) {
@@ -515,31 +521,6 @@ class SignalTracker {
     }
     bucket.byReason = normalizedReasons;
 
-    const fallbackRejectLessons = this.getLessonsSince(resetTime).filter((lesson) => lesson.kind === 'reject');
-    if (Object.keys(bucket.byReason || {}).length === 0 && fallbackRejectLessons.length > 0) {
-      for (const lesson of fallbackRejectLessons) {
-        const reasonKey = resolveLessonReasonKey(lesson);
-        const reasonBucket = bucket.byReason[reasonKey] || {
-          key: reasonKey,
-          label: labelLessonReasonKey(reasonKey),
-          count: 0,
-          symbols: [],
-          lastTimestamp: 0,
-          lastAnalysis: '',
-        };
-        reasonBucket.count += 1;
-        reasonBucket.lastTimestamp = lesson.timestamp || Date.now();
-        reasonBucket.lastAnalysis = String(lesson.analysis || '').slice(0, 180);
-        if (!reasonBucket.symbols.includes(lesson.symbol)) {
-          reasonBucket.symbols.push(lesson.symbol);
-          reasonBucket.symbols = reasonBucket.symbols.slice(-3);
-        }
-        bucket.byReason[reasonKey] = reasonBucket;
-      }
-      bucket.rejectCount = fallbackRejectLessons.length;
-      bucket.totalLessons = fallbackRejectLessons.length;
-    }
-
     const topRejectReasons = Object.values(bucket.byReason || {})
       .sort((a, b) => b.count - a.count || b.lastTimestamp - a.lastTimestamp)
       .slice(0, 3)
@@ -565,10 +546,12 @@ class SignalTracker {
     const baseMinRr = config.strategy.minRrRatio || 2.0;
     const baseStandbyMinRr = config.strategy.standbyMinRr || baseMinRr;
     const baseMinScore = config.strategy.minFinalScore || 25;
+    const baseWeights = config.strategy.scoreWeights || {};
     const thresholds = {
       minRrRatio: baseMinRr,
       standbyMinRr: baseStandbyMinRr,
       minFinalScore: baseMinScore,
+      scoreWeights: {},
     };
 
     if (!Array.isArray(topRejectReasons) || rejectCount < 5) {
@@ -589,6 +572,25 @@ class SignalTracker {
     if (dominant?.key === 'score_low' && dominantShare >= 0.35) {
       const drop = rejectCount >= 12 ? 5 : 3;
       thresholds.minFinalScore = Math.max(20, baseMinScore - drop);
+    }
+
+    if (dominant?.key === 'middle_zone' && dominantShare >= 0.35) {
+      const drop = rejectCount >= 12 ? 4 : 2;
+      thresholds.minFinalScore = Math.max(18, baseMinScore - drop);
+      thresholds.scoreWeights.middleZonePenalty = Math.max(0, (baseWeights.middleZonePenalty ?? 1) - 1);
+      thresholds.scoreWeights.noStructurePenalty = Math.max(1, (baseWeights.noStructurePenalty ?? 2) - 1);
+    }
+
+    if (dominant?.key === 'low_volatility' && dominantShare >= 0.35) {
+      const drop = rejectCount >= 12 ? 3 : 2;
+      thresholds.minFinalScore = Math.max(18, baseMinScore - drop);
+      thresholds.scoreWeights.lowVolPenalty = Math.max(2, (baseWeights.lowVolPenalty ?? 4) - 1);
+    }
+
+    if (dominant?.key === 'weak_trend' && dominantShare >= 0.35) {
+      const drop = rejectCount >= 12 ? 2 : 1;
+      thresholds.minFinalScore = Math.max(18, baseMinScore - drop);
+      thresholds.scoreWeights.nearLevelDirectionalBias = Math.min(14, (baseWeights.nearLevelDirectionalBias ?? 12) + 1);
     }
 
     if (
@@ -980,6 +982,7 @@ class SignalTracker {
       minFinalScore: tuning.thresholds?.minFinalScore ?? base.minFinalScore,
       scoreWeights: {
         ...(config.strategy.scoreWeights || {}),
+        ...(base.scoreWeights || {}),
         ...(tuning.scoreWeights || {}),
       },
     };
