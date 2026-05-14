@@ -566,7 +566,7 @@ async function runScanCycle() {
   }
 
   // 4. Validation & Delivery
-  let sentCount = 0;
+  sentCount = 0;
   const rejections = [...technicalWatchlist];
 
   // Inform user about technical candidates found
@@ -829,6 +829,18 @@ async function runScanCycle() {
       const rr = bestAlt.riskReward;
       const rrRatio = rr ? rr.rr.toFixed(2) : (bestAlt.score > 80 ? 'High' : 'Low');
       logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${rrRatio})`);
+      await sendStatus(
+        `💡 *BEST ALTERNATIVE (Advisory)*\n\n` +
+        `*Symbol:* \`${bestAlt.symbol}\`\n` +
+        `*Bias:* \`${bestAlt.bias || 'N/A'}\`\n` +
+        `*Score:* \`${bestAlt.score ?? 'N/A'}\`\n` +
+        `*R:R:* \`${rrRatio}\`\n` +
+        `*Entry:* \`${rr?.entry ?? bestAlt.entry ?? 'N/A'}\`\n` +
+        `*SL:* \`${rr?.sl ?? bestAlt.sl ?? bestAlt.stop_loss ?? 'N/A'}\`\n` +
+        `*TP:* \`${rr?.tp ?? bestAlt.tp ?? bestAlt.take_profit ?? 'N/A'}\`\n\n` +
+        `Ini bukan signal resmi. Setup teknikal terbaik dari scan cycle ini — butuh konfirmasi manual.\n` +
+        `📝 *Alasan:* ${bestAlt.reason || 'Setup teknikal terbaik dari kandidat yang tersedia.'}`
+      );
     } else {
       logger.info('⛔ No Best Alternative found (all candidates failed R:R or quality checks).');
     }

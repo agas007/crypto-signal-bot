@@ -64,8 +64,13 @@ function applyFilters(input) {
   }
 
   // 3. Trend clarity check
-  if (trend.direction === 'neutral' || trend.strength < config.filters.minTrendStrength) {
-    reasons.push(`Weak trend: ${trend.direction} (strength ${trend.strength.toFixed(2)} < ${config.filters.minTrendStrength})`);
+  const MAJOR_PAIRS = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'SOLUSDT', 'XRPUSDT'];
+  const effectiveMinStrength = MAJOR_PAIRS.includes(symbol.toUpperCase())
+    ? config.filters.minTrendStrength
+    : config.filters.minTrendStrength * 0.7;
+
+  if (trend.direction === 'neutral' || trend.strength < effectiveMinStrength) {
+    reasons.push(`Weak trend: ${trend.direction} (strength ${trend.strength.toFixed(2)} < ${effectiveMinStrength.toFixed(2)})`);
     reasonKeys.push('weak_trend');
     pass = false;
   }

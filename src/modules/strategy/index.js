@@ -141,8 +141,11 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // Cap at Max Position Size (5% of account)
     const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
     
-    // Rule: Ensure it meets Binance MIN_NOTIONAL (often 5-100 USDT)
-    const minRequired = options.minNotional || 5.0;
+    // Rule: Ensure it meets Binance MIN_NOTIONAL, with a small-account override.
+    const rawMinNotional = options.minNotional || 5.0;
+    const minRequired = ACCOUNT_BALANCE < 20
+      ? Math.min(rawMinNotional, ACCOUNT_BALANCE * 0.4)
+      : rawMinNotional;
 
     if (notionalValue < minRequired) {
         notionalValue = minRequired;
@@ -219,8 +222,11 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     let notionalValue = quantity * entry;
     const maxNotional = ACCOUNT_BALANCE * MAX_POS_PCT;
 
-    // Rule: Ensure it meets Binance MIN_NOTIONAL
-    const minRequired = options.minNotional || 5.0;
+    // Rule: Ensure it meets Binance MIN_NOTIONAL, with a small-account override.
+    const rawMinNotional = options.minNotional || 5.0;
+    const minRequired = ACCOUNT_BALANCE < 20
+      ? Math.min(rawMinNotional, ACCOUNT_BALANCE * 0.4)
+      : rawMinNotional;
 
     if (notionalValue < minRequired) {
         notionalValue = minRequired;
@@ -389,7 +395,6 @@ function evaluateSignal(symbol, data, options = {}) {
   const repeatedTouchBonus = scoreWeights.repeatedTouchBonus ?? 6;
   const strongRepeatedTouchBonus = scoreWeights.strongRepeatedTouchBonus ?? 8;
   const retestPendingPenalty = scoreWeights.retestPendingPenalty ?? 4;
-  const rrBelowMinPenalty = scoreWeights.rrBelowMinPenalty ?? 10;
   const emaParams = config.indicators.ema;
   const stochParams = config.indicators.stochastic;
   const stochScreen = config.strategy.stochastic || {};
@@ -836,10 +841,6 @@ function evaluateSignal(symbol, data, options = {}) {
       longScore += 5;
       shortScore += 5;
       longReasons.push(`Good R:R Ratio (${riskReward.rr.toFixed(1)}) (+5)`);
-    } else {
-        // Rule: R:R must be 2.0+ or it's a weak setup
-        longScore -= rrBelowMinPenalty;
-        shortScore -= rrBelowMinPenalty;
     }
   }
 
@@ -967,7 +968,6 @@ function evaluateSignal(symbol, data, options = {}) {
   }
 
   if (pricePosition === 'middle' && !h1Structure.bos && retestStatus !== 'CONFIRMED') {
-    finalScore -= strongH4LevelSetup ? 4 : 8;
     tags.push('MIDDLE_ZONE_NO_EDGE');
     warnings.push('🚫 Price di middle zone, tidak ada BoS, dan retest belum konfirmasi. Tidak ada edge struktural — skip setup ini.');
   }
