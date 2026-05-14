@@ -10,6 +10,11 @@ const COMMANDS = [
     type: 1,
   },
   {
+    name: 'scan-raw',
+    description: 'Download latest raw scan report as JSON',
+    type: 1,
+  },
+  {
     name: 'active',
     description: 'List currently active trades',
     type: 1,

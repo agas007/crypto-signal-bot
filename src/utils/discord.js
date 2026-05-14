@@ -9,6 +9,7 @@
  */
 
 const fs = require('fs');
+const path = require('path');
 const logger = require('./logger');
 const config = require('../config');
 
@@ -77,23 +78,34 @@ async function postWebhook(url, payload) {
   }
 }
 
-async function postWebhookWithFile(url, payload, imagePath, options = {}) {
-  const cleanupImage = options.cleanupImage !== false;
-  if (!url || !fs.existsSync(imagePath)) return postWebhook(url, payload);
+async function postWebhookWithFile(url, payload, filePath, options = {}) {
+  const cleanupFile = options.cleanupFile ?? options.cleanupImage ?? true;
+  if (!url || !filePath || !fs.existsSync(filePath)) return postWebhook(url, payload);
 
   const { FormData, Blob } = globalThis;
   const form = new FormData();
   form.append('payload_json', JSON.stringify(payload));
-  const buf = fs.readFileSync(imagePath);
-  form.append('file[0]', new Blob([buf], { type: 'image/png' }), 'chart.png');
+  const buf = fs.readFileSync(filePath);
+  const filename = options.filename || path.basename(filePath) || 'attachment.bin';
+  const contentType = options.contentType || (filename.toLowerCase().endsWith('.png') ? 'image/png' : 'application/octet-stream');
+  const fieldName = options.fieldName || 'file[0]';
+  form.append(fieldName, new Blob([buf], { type: contentType }), filename);
 
-  const res = await fetch(url, { method: 'POST', body: form });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Discord (file) ${res.status}: ${text}`);
+  try {
+    const res = await fetch(url, { method: 'POST', body: form });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Discord (file) ${res.status}: ${text}`);
+    }
+  } finally {
+    if (cleanupFile) {
+      try {
+        fs.unlinkSync(filePath);
+      } catch (_) {
+        // best effort
+      }
+    }
   }
-
-  if (cleanupImage) fs.unlinkSync(imagePath);
 }
 
 // ─── Signal Embed Builder ─────────────────────────────────────────────────────
@@ -237,4 +249,4 @@ async function sendStatus(text) {
   }
 }
 
-module.exports = { sendSignal, sendStatus };
+module.exports = { sendSignal, sendStatus, postWebhook, postWebhookWithFile };

@@ -9,6 +9,7 @@ const { aggregatePositionHistory } = require('../../utils/trade_aggregation');
 const { analyzePerformanceSummary } = require('../ai/openrouter');
 const tracker = require('../tracker');
 const binancePerformance = require('../tracker/binance_performance');
+const { buildLatestScanReportExport, cleanupExportFile } = require('../../services/scan_export');
 
 let bot = null;
 let startTime = Date.now();
@@ -61,6 +62,7 @@ function getHelpMessage(chatId) {
     `📋 /watchlist - View last cycle high-alert watchlist\n` +
     `📋 /log - View last 15 scan audit logs\n` +
     `📄 /scanlog - Send full scan audit log as .txt\n` +
+    `📄 /scanraw - Send latest raw scan report as .json\n` +
     `❓ /help - Show this help menu\n\n` +
     `⚙️ /adjust SYMBOL TP SL - Manual level adjust\n\n` +
     `🛠 *Admin Commands:* \n` +
@@ -471,6 +473,35 @@ async function initTelegram() {
     } catch (err) {
       logger.error('Failed to read scan audit log for /scanlog:', err.message);
       bot.sendMessage(msg.chat.id, '❌ Failed to read scan audit log.');
+    }
+  });
+
+  // /scanraw command
+  bot.onText(/\/scanraw/, async (msg) => {
+    const exportData = buildLatestScanReportExport(tracker);
+    if (!exportData) {
+      return bot.sendMessage(msg.chat.id, '📄 *Raw scan report belum ada.* \nJalankan scan dulu baru bisa download JSON-nya.', { parse_mode: 'Markdown' });
+    }
+
+    const scanReport = exportData.payload?.scanReport || {};
+    const phaseBreakdown = scanReport.phaseBreakdown || {};
+    const caption = [
+      '📄 Raw scan report JSON',
+      `• Status: ${scanReport.status || 'unknown'}`,
+      `• Signals: ${scanReport.signalCount ?? 0} | Watchlist: ${scanReport.watchlistCount ?? 0} | Candidates: ${scanReport.candidateCount ?? 0}`,
+      `• Phase: pre-filter ${phaseBreakdown.preFilterPassed ?? 0}/${phaseBreakdown.preFilterRejected ?? 0} | strategy rejected ${phaseBreakdown.strategyRejected ?? 0}`,
+      `• Exported: ${exportData.payload?.meta?.exportedAtJakarta || 'unknown'} WIB`,
+    ].join('\n');
+
+    try {
+      await bot.sendDocument(msg.chat.id, fs.createReadStream(exportData.filePath), {
+        caption,
+      });
+    } catch (err) {
+      logger.error('Failed to send /scanraw document:', err.message);
+      bot.sendMessage(msg.chat.id, '❌ Failed to send raw scan report file.');
+    } finally {
+      cleanupExportFile(exportData.filePath);
     }
   });
 

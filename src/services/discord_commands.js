@@ -3,6 +3,8 @@ const tracker = require('../modules/tracker');
 const binancePerformance = require('../modules/tracker/binance_performance');
 const { formatJakartaTime, getNextJakartaReset } = require('../utils/time');
 const { isEnabled: isRedisEnabled } = require('../utils/redis');
+const { postWebhookWithFile } = require('../utils/discord');
+const { buildLatestScanReportExport } = require('./scan_export');
 const { COMMANDS } = require('./discord_command_definitions');
 
 function truncate(text, max = 1800) {
@@ -276,12 +278,47 @@ function buildLogResponse() {
   return lines.join('\n');
 }
 
+async function sendRawScanReportToDiscord(context = {}) {
+  const logger = context.logger || console;
+  const exportData = buildLatestScanReportExport(tracker);
+
+  if (!exportData) {
+    throw new Error('No scan report available yet');
+  }
+
+  const scanReport = exportData.payload?.scanReport || {};
+  const phaseBreakdown = scanReport.phaseBreakdown || {};
+  const webhookUrl = process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL;
+
+  if (!webhookUrl) {
+    throw new Error('Discord webhook is not configured');
+  }
+
+  const caption = [
+    '📄 Raw scan report JSON',
+    `• Status: ${scanReport.status || 'unknown'}`,
+    `• Signals: ${scanReport.signalCount ?? 0} | Watchlist: ${scanReport.watchlistCount ?? 0} | Candidates: ${scanReport.candidateCount ?? 0}`,
+    `• Phase: pre-filter ${phaseBreakdown.preFilterPassed ?? 0}/${phaseBreakdown.preFilterRejected ?? 0} | strategy rejected ${phaseBreakdown.strategyRejected ?? 0}`,
+    `• Exported: ${exportData.payload?.meta?.exportedAtJakarta || 'unknown'} WIB`,
+  ].join('\n');
+
+  await postWebhookWithFile(webhookUrl, { content: caption }, exportData.filePath, {
+    filename: exportData.fileName,
+    contentType: 'application/json',
+    cleanupFile: true,
+  });
+
+  logger.info?.(`[discord/scan-raw] exported ${exportData.fileName} (${Math.round(exportData.size / 1024)} KB)`);
+  return exportData;
+}
+
 function buildHelpResponse() {
   const lines = [
     '🤖 **Discord Commands**',
     '',
     '• `/status` - bot health dan status scan',
     '• `/scan-now` - trigger scan sekali',
+    '• `/scan-raw` - download latest raw scan report as JSON',
     '• `/active` - list active trades',
     '• `/watchlist` - latest watchlist',
     '• `/performance` - cached performance summary',
@@ -349,6 +386,19 @@ async function handleInteraction(interaction, context = {}) {
     );
   }
 
+  if (commandName === 'scan-raw' || commandName === 'scanraw') {
+    const logger = context.logger || console;
+    void sendRawScanReportToDiscord({ logger })
+      .catch((err) => {
+        logger.error?.(`[discord/scan-raw] failed: ${err.message}`);
+      });
+
+    return buildInteractionResponse(
+      '✅ Raw scan report lagi dikirim ke channel sebagai file JSON.',
+      { ephemeral: true }
+    );
+  }
+
   if (commandName === 'status') return buildInteractionResponse(buildStatusResponse(), { ephemeral: true });
   if (commandName === 'active') return buildInteractionResponse(buildActiveResponse(), { ephemeral: true });
   if (commandName === 'watchlist') return buildInteractionResponse(buildWatchlistResponse(), { ephemeral: true });
@@ -407,6 +457,7 @@ module.exports = {
   getCheckSignalUrl,
   handleInteraction,
   hydrateTracker,
+  sendRawScanReportToDiscord,
   verifyDiscordRequest,
   triggerRemoteScan,
 };
