@@ -15,6 +15,20 @@ function roundStep(quantity, stepSize) {
     return parseFloat((Math.floor(quantity / stepSize) * stepSize).toFixed(precision));
 }
 
+function calculateAdaptiveTolerance(atrPercent) {
+  // Adapt tolerance based on market volatility
+  // Low volatility (< 1%): tight tolerance (5%)
+  // High volatility (> 3%): generous tolerance (25%)
+  // Linear interpolation between 1-3% range
+
+  if (atrPercent < 1.0) return 0.05;       // 5% tolerance for low vol
+  if (atrPercent > 3.0) return 0.25;       // 25% tolerance for high vol
+
+  // Linear interpolation for 1-3% range
+  const ratio = (atrPercent - 1.0) / 2.0;  // 0 at 1%, 1 at 3%
+  return 0.05 + (0.20 * ratio);            // 5% + (20% * ratio)
+}
+
 function normalizeSlBounds(symbol, minSlPct, maxSlPct) {
   if (Number.isFinite(minSlPct) && Number.isFinite(maxSlPct) && minSlPct > maxSlPct) {
     const oldMaxSlPct = maxSlPct;
@@ -26,9 +40,10 @@ function normalizeSlBounds(symbol, minSlPct, maxSlPct) {
   return { minSlPct, maxSlPct, normalized: false, oldMaxSlPct: maxSlPct };
 }
 
-function buildSlBoundsDebug(symbol, slPct, minSlPct, maxSlPct) {
+function buildSlBoundsDebug(symbol, slPct, minSlPct, maxSlPct, atrDistPercent = 0) {
   const normalizedBounds = normalizeSlBounds(symbol, minSlPct, maxSlPct);
-  const slBoundTolerance = config.strategy?.slBoundTolerance ?? 0.15;
+  // Use adaptive tolerance based on volatility, fallback to config if not provided
+  const slBoundTolerance = calculateAdaptiveTolerance(atrDistPercent * 100) ?? (config.strategy?.slBoundTolerance ?? 0.15);
   const toleratedMinSlPct = normalizedBounds.minSlPct * (1 - slBoundTolerance);
   const toleratedMaxSlPct = normalizedBounds.maxSlPct * (1 + slBoundTolerance);
 
@@ -185,7 +200,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     const minSlDistance = hasBullishBosAnchor
       ? Math.max(0.0035, atrDistPercent * 0.35)
       : Math.max(MIN_SL_DISTANCE, atrDistPercent);
-    const slBoundsDebug = buildSlBoundsDebug(symbol, slDistPercent, minSlDistance, rawMaxSlAllowed);
+    const slBoundsDebug = buildSlBoundsDebug(symbol, slDistPercent, minSlDistance, rawMaxSlAllowed, atrDistPercent);
     const riskPerUnit = entry - sl;
     const rewardPerUnit = tp - entry;
     const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
@@ -379,7 +394,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     const minSlDistance = hasBearishBosAnchor
       ? Math.max(0.0035, atrDistPercent * 0.35)
       : Math.max(MIN_SL_DISTANCE, atrDistPercent);
-    const slBoundsDebug = buildSlBoundsDebug(symbol, slDistPercent, minSlDistance, rawMaxSlAllowed);
+    const slBoundsDebug = buildSlBoundsDebug(symbol, slDistPercent, minSlDistance, rawMaxSlAllowed, atrDistPercent);
     const riskPerUnit = sl - entry;
     const rewardPerUnit = entry - tp;
     const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
