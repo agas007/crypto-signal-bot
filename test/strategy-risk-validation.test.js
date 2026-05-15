@@ -165,7 +165,7 @@ test('high-priced symbol with coarse step size reports min tradable notional ins
     });
 
     assert.equal(result.failureType, 'NOTIONAL_BELOW_MIN_AFTER_CAP');
-    assert.match(result.failureReason, /Min quantity exceeds max position cap/);
+    assert.match(result.failureReason, /Min tradable unit exceeds max position cap/);
     assert.equal(result.debug.calculatedNotional > 0, true);
     assert.equal(result.debug.calculatedNotional.toFixed(2), '28.93');
     assert.equal(Number.isFinite(result.rr), true);
