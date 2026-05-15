@@ -336,9 +336,11 @@ async function runScanCycle() {
   let sentCount = 0;
   let dailyCount = 0;
   let globalSlToday = 0;
+  const maxErrorsInReport = config.scanner?.maxErrorsInReport ?? 30;
   const pushScanError = (message) => {
     scanReport.errorCount++;
-    if (scanReport.errors.length < 8) {
+    // Avoid duplicate errors: check if same message was already recorded
+    if (!scanReport.errors.includes(message) && scanReport.errors.length < maxErrorsInReport) {
       scanReport.errors.push(message);
     }
   };
