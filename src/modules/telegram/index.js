@@ -532,7 +532,8 @@ async function initTelegram() {
     
     topList.forEach((s, i) => {
       const type = s.quality === 'WATCHLIST' ? '📋' : '🚫';
-      const rrRatio = s.riskReward?.rr ? s.riskReward.rr.toFixed(2) : 'N/A';
+      const rr = Number(s.riskReward?.rr);
+      const rrRatio = Number.isFinite(rr) ? rr.toFixed(2) : 'N/A';
       
       // Limit reason length to avoid Telegram character limit issues
       let reason = (s.reason || 'No specific reason').replace(/[*_`]/g, '');

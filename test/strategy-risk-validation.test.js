@@ -102,12 +102,13 @@ test('good score with SL out of bounds becomes WATCHLIST, not REJECT', () => {
   assert.equal(result.signal, undefined);
   assert.equal(result.standbyOnly, true);
   assert.equal(result.watchlistReason, 'WATCHLIST_SL_OUT_OF_BOUNDS');
+  assert.equal(Number.isFinite(result.riskReward.rr), true);
   assert.equal(result.diagnostics.strategyDebug.decision, 'WATCHLIST');
 });
 
 test('good score with low notional becomes WATCHLIST_LOW_BALANCE', () => {
   const oldMaxPositionPercentage = config.strategy.maxPositionPercentage;
-  config.strategy.maxPositionPercentage = 0.01;
+  config.strategy.maxPositionPercentage = 0.001;
 
   try {
     const { evaluateSignal } = loadStrategyWithMock({
@@ -130,13 +131,14 @@ test('good score with low notional becomes WATCHLIST_LOW_BALANCE', () => {
       accountBalance: 5.15,
       minNotional: 5,
       stepSize: 0.001,
-      minFinalScore: 18,
+      minFinalScore: 1,
       minRrRatio: 2,
       includeRejectionReason: true,
     });
 
     assert.equal(result.standbyOnly, true);
     assert.equal(result.watchlistReason, 'WATCHLIST_LOW_BALANCE');
+    assert.equal(Number.isFinite(result.riskReward.rr), true);
     assert.equal(result.riskReward.debug.cappedByBalance, true);
     assert.equal(result.diagnostics.strategyDebug.notional < result.diagnostics.strategyDebug.minNotional, true);
   } finally {

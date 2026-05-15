@@ -186,6 +186,10 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       ? Math.max(0.0035, atrDistPercent * 0.35)
       : Math.max(MIN_SL_DISTANCE, atrDistPercent);
     const slBoundsDebug = buildSlBoundsDebug(symbol, slDistPercent, minSlDistance, rawMaxSlAllowed);
+    const riskPerUnit = entry - sl;
+    const rewardPerUnit = tp - entry;
+    const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
+
     if (!options.sl && (slDistPercent < slBoundsDebug.toleratedMinSlPct || slDistPercent > slBoundsDebug.toleratedMaxSlPct)) {
       logger.debug(`[RR] LONG ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(slBoundsDebug.minSlPct*100).toFixed(2)}% - ${(slBoundsDebug.maxSlPct*100).toFixed(0)}%)`);
       return makeFailure(
@@ -194,14 +198,11 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
           failureType: 'SL_OUT_OF_BOUNDS',
           sl,
           tp,
+          rr,
           debug: slBoundsDebug,
         }
       );
     }
-
-    const riskPerUnit = entry - sl;
-    const rewardPerUnit = tp - entry;
-    const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
 
     // FIX 3: Prevent Inflated R:R using unreachable historical TP
     if (rr > 8) {
@@ -248,6 +249,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
           failureType: 'NOTIONAL_BELOW_MIN_AFTER_CAP',
           sl,
           tp,
+          rr,
           debug: {
             balance: ACCOUNT_BALANCE,
             calculatedNotional: notionalValue,
@@ -268,6 +270,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
         failureType: 'MARGIN_ABOVE_BALANCE',
         sl,
         tp,
+        rr,
         debug: {
           balance: ACCOUNT_BALANCE,
           calculatedNotional: notionalValue,
@@ -309,6 +312,10 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       ? Math.max(0.0035, atrDistPercent * 0.35)
       : Math.max(MIN_SL_DISTANCE, atrDistPercent);
     const slBoundsDebug = buildSlBoundsDebug(symbol, slDistPercent, minSlDistance, rawMaxSlAllowed);
+    const riskPerUnit = sl - entry;
+    const rewardPerUnit = entry - tp;
+    const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
+
     if (!options.sl && (slDistPercent < slBoundsDebug.toleratedMinSlPct || slDistPercent > slBoundsDebug.toleratedMaxSlPct)) {
       logger.debug(`[RR] SHORT ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(slBoundsDebug.minSlPct*100).toFixed(2)}% - ${(slBoundsDebug.maxSlPct*100).toFixed(0)}%)`);
       return makeFailure(
@@ -317,14 +324,11 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
           failureType: 'SL_OUT_OF_BOUNDS',
           sl,
           tp,
+          rr,
           debug: slBoundsDebug,
         }
       );
     }
-
-    const riskPerUnit = sl - entry;
-    const rewardPerUnit = entry - tp;
-    const rr = riskPerUnit > 0 ? rewardPerUnit / riskPerUnit : 0;
 
     // FIX 3: Prevent Inflated R:R using unreachable historical TP
     if (rr > 8) {
@@ -367,6 +371,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
           failureType: 'NOTIONAL_BELOW_MIN_AFTER_CAP',
           sl,
           tp,
+          rr,
           debug: {
             balance: ACCOUNT_BALANCE,
             calculatedNotional: notionalValue,
@@ -387,6 +392,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
         failureType: 'MARGIN_ABOVE_BALANCE',
         sl,
         tp,
+        rr,
         debug: {
           balance: ACCOUNT_BALANCE,
           calculatedNotional: notionalValue,
@@ -1080,7 +1086,7 @@ function evaluateSignal(symbol, data, options = {}) {
     } : null;
   }
 
-  if (!riskReward || riskReward.rr < minRrRatio) {
+  if (!riskReward || riskReward.failureReason || riskReward.rr < minRrRatio) {
       const rrLabel = riskReward?.rr != null ? riskReward.rr.toFixed(1) : 'N/A';
       const rrReason = riskReward?.failureReason
         ? `Invalid R:R setup (${riskReward.failureReason})`

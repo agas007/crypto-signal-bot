@@ -175,6 +175,115 @@ Respond with ONLY this JSON format:
 }`;
 }
 
+function buildCompactPrompt(signal) {
+  const { symbol, bias, score, reasons = [], analysis = {}, riskReward = {} } = signal;
+  const h4Trend = analysis.h4Trend?.direction || 'N/A';
+  const h1Trend = analysis.h1Trend?.direction || 'N/A';
+  const m15Trend = analysis.m15Trend?.direction || 'N/A';
+  const h1Structure = analysis.h1Structure?.structure || 'N/A';
+  const pricePosition = analysis.pricePosition || 'N/A';
+  const rr = Number.isFinite(riskReward?.rr) ? riskReward.rr.toFixed(2) : 'N/A';
+
+  return `Validate this crypto futures candidate. Return ONLY valid JSON.
+
+Symbol: ${symbol}
+Bias: ${bias}
+Score: ${score}
+R:R: ${rr}
+H4 trend: ${h4Trend}
+H1 trend: ${h1Trend}
+M15 trend: ${m15Trend}
+H1 structure: ${h1Structure}
+Price position: ${pricePosition}
+Reasons:
+${reasons.slice(0, 8).map((r, i) => `${i + 1}. ${r}`).join('\n')}
+
+Choose one:
+- APPROVE as LONG/SHORT only if confluence is clear and risk is acceptable.
+- WATCHLIST if setup is developing or needs confirmation.
+- NO TRADE if conflict or unsafe.
+
+JSON schema:
+{
+  "symbol": "${symbol}",
+  "bias": "LONG" | "SHORT" | "WATCHLIST" | "NO TRADE",
+  "confidence": 0-100,
+  "quality": "LOW" | "MEDIUM" | "WATCHLIST" | "HIGH",
+  "trading_type": "SCALPING" | "DAY TRADING" | "SWING" | "MOMENTUM SCALP" | "MONITORING",
+  "risk_warning": "Bahasa Indonesia",
+  "reason": "Bahasa Indonesia"
+}`;
+}
+
+function normalizeAiContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        if (typeof part?.content === 'string') return part.content;
+        return '';
+      })
+      .join('')
+      .trim();
+  }
+  return '';
+}
+
+function parseAiJson(content) {
+  const cleaned = normalizeAiContent(content)
+    .replace(/```json\n?/g, '')
+    .replace(/```\n?/g, '')
+    .trim();
+
+  if (!cleaned) return null;
+
+  try {
+    return JSON.parse(cleaned);
+  } catch (err) {
+    const start = cleaned.indexOf('{');
+    const end = cleaned.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      return JSON.parse(cleaned.slice(start, end + 1));
+    }
+    throw err;
+  }
+}
+
+async function requestAiValidation(prompt, options = {}) {
+  const payload = {
+    model: config.openRouter.model,
+    messages: [
+      { role: 'system', content: buildSystemPrompt(options) },
+      { role: 'user', content: prompt },
+    ],
+    temperature: options.temperature ?? 0.3,
+    max_tokens: options.maxTokens || 700,
+  };
+
+  if (options.responseFormat !== false) {
+    payload.response_format = { type: 'json_object' };
+  }
+
+  const { data } = await client.post('/chat/completions', payload);
+  return data;
+}
+
+function buildAiFailureWatchlist(signal, reason) {
+  return {
+    symbol: signal.symbol,
+    bias: 'WATCHLIST',
+    confidence: 40,
+    quality: 'WATCHLIST',
+    trading_type: 'MONITORING',
+    risk_warning: 'AI validator gagal memberi output valid. Jangan eksekusi otomatis.',
+    reason: `AI validator gagal (${reason}). Setup tidak dibuang, tapi masuk watchlist untuk review manual.`,
+    aiError: true,
+    aiErrorReason: reason,
+  };
+}
+
 /**
  * Send a candidate signal to OpenRouter AI for validation.
  *
@@ -185,44 +294,36 @@ Respond with ONLY this JSON format:
  * } | null>}
  */
 async function refineSignal(signal, options = {}) {
-  const systemPrompt = buildSystemPrompt(options);
   const prompt = buildPrompt(signal);
 
   try {
-    const { data } = await client.post('/chat/completions', {
-      model: config.openRouter.model,
-      messages: [
-        { 
-          role: 'system', 
-          content: [
-            {
-              type: 'text',
-              text: systemPrompt,
-              cache_control: { type: 'ephemeral' }
-            }
-          ] 
-        },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.3,
-      max_tokens: 500,
-      response_format: { type: 'json_object' },
-    });
+    let data = await requestAiValidation(prompt, { ...options, maxTokens: 700, responseFormat: true });
+    let content = normalizeAiContent(data.choices?.[0]?.message?.content);
 
-    const content = data.choices?.[0]?.message?.content;
     if (!content) {
-      logger.warn(`AI returned empty response for ${signal.symbol}. Status: ${data.choices?.[0]?.finish_reason}. Full data: ${JSON.stringify(data)}`);
-      return null;
+      logger.warn(`AI returned empty response for ${signal.symbol}. Retrying compact prompt. Finish: ${data.choices?.[0]?.finish_reason || 'unknown'}`);
+      data = await requestAiValidation(buildCompactPrompt(signal), {
+        ...options,
+        maxTokens: 500,
+        responseFormat: false,
+        temperature: 0.2,
+      });
+      content = normalizeAiContent(data.choices?.[0]?.message?.content);
     }
 
-    const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+    if (!content) {
+      const finishReason = data.choices?.[0]?.finish_reason || 'empty_content';
+      logger.warn(`AI returned empty response after retry for ${signal.symbol}. Finish: ${finishReason}`);
+      return buildAiFailureWatchlist(signal, finishReason);
+    }
+
+    const parsed = parseAiJson(content);
 
     const requiredFields = ['symbol', 'bias', 'confidence', 'reason'];
     for (const field of requiredFields) {
       if (parsed[field] === undefined) {
-        logger.warn(`AI response missing field "${field}" for ${signal.symbol}`);
-        return null;
+        logger.warn(`AI response missing field "${field}" for ${signal.symbol}. Falling back to WATCHLIST.`);
+        return buildAiFailureWatchlist(signal, `missing_${field}`);
       }
     }
 
@@ -256,10 +357,11 @@ async function refineSignal(signal, options = {}) {
   } catch (err) {
     if (err.response) {
       logger.error(`AI API error for ${signal.symbol}: ${err.response.status} - ${JSON.stringify(err.response.data)}`);
+      return buildAiFailureWatchlist(signal, `api_${err.response.status}`);
     } else {
       logger.error(`AI request failed for ${signal.symbol}:`, err.message);
+      return buildAiFailureWatchlist(signal, err.message);
     }
-    return null;
   }
 }
 

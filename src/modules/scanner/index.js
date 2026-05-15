@@ -231,6 +231,11 @@ function buildTopBottlenecks(...maps) {
     .sort((a, b) => b.count - a.count);
 }
 
+function formatRrValue(value) {
+  const rr = Number(value);
+  return Number.isFinite(rr) ? rr.toFixed(2) : 'N/A';
+}
+
 function buildStrategyRejectSample(symbol, result = {}) {
   const diagnostics = result?.diagnostics || {};
   const riskReward = diagnostics.riskReward || null;
@@ -615,7 +620,7 @@ async function runScanCycle() {
     if (watchlist.length > 0) {
       const msg = `📡 *𝐑𝐞𝐬𝐮𝐥𝐭: 𝐇𝐢𝐠𝐡 𝐀𝐥𝐞𝐫𝐭 𝐖𝐚𝐭𝐜𝐡𝐥𝐢𝐬𝐭*\n\n` +
                   watchlist.map(r => {
-                    const rr = r.riskReward?.rr ? r.riskReward.rr.toFixed(2) : 'N/A';
+                    const rr = formatRrValue(r.riskReward?.rr);
                     return `• *${r.symbol}* (Score ${r.score}) 📋 WATCHLIST | R:R: \`${rr}\`\n  _${r.reason}_`;
                   }).join('\n\n') +
                   `\n\n🛡️ *Status:* Standing by. Waiting for Market Regime shift or better RR Ratio.`;
@@ -649,7 +654,8 @@ async function runScanCycle() {
       // AI said NO TRADE or WATCHLIST
       if (refined.bias === 'NO TRADE' || refined.bias === 'NO_TRADE' || refined.bias === 'WATCHLIST') {
         const isWatchlist = refined.bias === 'WATCHLIST';
-        logger.info(`${isWatchlist ? '👀' : '🚫'} ${candidate.symbol}: AI ${isWatchlist ? 'Watchlist' : 'Rejected'} — ${refined.reason}`);
+        const aiStatus = refined.aiError ? 'Watchlist (AI fallback)' : (isWatchlist ? 'Watchlist' : 'Rejected');
+        logger.info(`${isWatchlist ? '👀' : '🚫'} ${candidate.symbol}: AI ${aiStatus} — ${refined.reason}`);
         
         logAudit(candidate.symbol, 'AI', isWatchlist ? 'WATCHLIST' : 'REJECTED', candidate.score, refined.reason);
         if (isWatchlist) {
@@ -867,7 +873,7 @@ async function runScanCycle() {
 
     if (bestAlt) {
       const rr = bestAlt.riskReward;
-      const rrRatio = rr ? rr.rr.toFixed(2) : (bestAlt.score > 80 ? 'High' : 'Low');
+      const rrRatio = rr ? formatRrValue(rr.rr) : (bestAlt.score > 80 ? 'High' : 'Low');
       logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${rrRatio})`);
       await sendStatus(
         `💡 *BEST ALTERNATIVE (Advisory)*\n\n` +
