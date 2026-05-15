@@ -289,6 +289,76 @@ function recordPreFilterLesson(tracker, symbol, reasonText, scanReport = null, r
 }
 
 /**
+ * Check global daily limits and killswitch status.
+ * Returns {status, shouldAbort} where status is the abort reason or null, shouldAbort is boolean.
+ */
+function checkGlobalLimits(tracker, scanReport) {
+  const dailyCount = tracker.getDailyTradeCount();
+  const globalSlToday = tracker.getGlobalSLCountToday();
+  scanReport.checks.dailyCount = dailyCount;
+  scanReport.checks.globalSlToday = globalSlToday;
+
+  // Hard killswitch: 3 SL hits in a day
+  if (globalSlToday >= 3) {
+    logger.info(`🚫 Global Killswitch Active: ${globalSlToday}/3 Stop Loss hits today. Scanning suspended until 00:00 WIB reset.`);
+    scanReport.status = 'GLOBAL_KILLSWITCH';
+    scanReport.checks.killswitch = true;
+    return { status: 'GLOBAL_KILLSWITCH', shouldAbort: true, dailyCount, globalSlToday };
+  }
+
+  logger.info(`📈 Daily Status: ${dailyCount}/5 total trades, ${globalSlToday}/3 SL hits.`);
+  return { status: null, shouldAbort: false, dailyCount, globalSlToday };
+}
+
+/**
+ * Fetch initial market data needed for scan cycle.
+ * Returns {balance, exchangeSpecs, pairs, btcTrend, effectiveBalance}
+ */
+async function fetchInitialMarketData(config, scanReport, pushScanError) {
+  await primePublicProviderChain();
+  const [balance, exchangeSpecs] = await Promise.all([
+    fetchFuturesBalance(),
+    fetchExchangeSpecs()
+  ]);
+
+  const effectiveBalance = balance > 0 ? balance : config.strategy.accountBalance;
+  scanReport.checks.balance = balance > 0 ? balance : null;
+  if (balance > 0) {
+    logger.info(`💰 Current Futures Balance: $${balance.toFixed(2)} USDT`);
+  } else {
+    logger.warn(`⚠️ Could not fetch real balance, using fallback: $${config.strategy.accountBalance}`);
+    pushScanError('Futures balance unavailable; fallback balance used.');
+  }
+
+  const hitSymbols = await checkActiveTrades();
+  scanReport.checks.hitSymbols = hitSymbols.length;
+
+  const pairs = await fetchTopPairs();
+  if (!pairs.length) {
+    logger.warn('No pairs fetched, aborting cycle');
+    pushScanError('No pairs fetched');
+    return null;
+  }
+  scanReport.checks.pairs = pairs.length;
+
+  let btcTrend = 'NEUTRAL';
+  try {
+    const btcCandles = await fetchOHLCV('BTCUSDT', config.timeframes.D1, 50);
+    if (Array.isArray(btcCandles) && btcCandles.length > 0) {
+      const trend = analyzeTrend(btcCandles);
+      btcTrend = trend.direction;
+      logger.info(`🌐 Market Regime: BTC D1 is ${btcTrend}`);
+    }
+  } catch (err) {
+    logger.error('Failed to fetch BTC trend for market regime:', err.message);
+    pushScanError(`BTC regime fetch failed: ${err.message}`);
+  }
+  scanReport.checks.btcTrend = btcTrend;
+
+  return { balance: effectiveBalance, exchangeSpecs, pairs, btcTrend, hitSymbols };
+}
+
+/**
  * Run a single scan cycle:
  * 1. Monitor active trades for TP/SL
  * 2. Fetch top pairs
@@ -346,70 +416,27 @@ async function runScanCycle() {
   };
 
   try {
-    // ─── -1. Global Daily Limit Check ───
-    dailyCount = tracker.getDailyTradeCount();
-    globalSlToday = tracker.getGlobalSLCountToday();
-    scanReport.checks.dailyCount = dailyCount;
-    scanReport.checks.globalSlToday = globalSlToday;
-
-    // ─── 0. Early Exit Check (Hard Killswitch) ───
-    // Rule: Stop all trades if we hit 3 SLs globally in a day (Resets 00:00 WIB)
-    if (globalSlToday >= 3) {
-      logger.info(`🚫 Global Killswitch Active: ${globalSlToday}/3 Stop Loss hits today. Scanning suspended until 00:00 WIB reset.`);
-      scanReport.status = 'GLOBAL_KILLSWITCH';
-      scanReport.checks.killswitch = true;
+    // ─── 0. Check Global Limits & Killswitch ───
+    const limits = checkGlobalLimits(tracker, scanReport);
+    dailyCount = limits.dailyCount;
+    globalSlToday = limits.globalSlToday;
+    if (limits.shouldAbort) {
       await checkActiveTrades(); // Still check existing trades for accuracy
       return 0;
     }
 
-    logger.info(`📈 Daily Status: ${dailyCount}/5 total trades, ${globalSlToday}/3 SL hits.`);
-
-    // ─── 0. Fetch Real Balance & Exchange Specs ───
-    // We fetch specs to ensure Lot Size (Step size) and Min Notional compliance
-    await primePublicProviderChain();
-    const [balance, exchangeSpecs] = await Promise.all([
-        fetchFuturesBalance(),
-        fetchExchangeSpecs()
-    ]);
-    
-    const effectiveBalance = balance > 0 ? balance : config.strategy.accountBalance;
-    scanReport.checks.balance = balance > 0 ? balance : null;
-    if (balance > 0) {
-      logger.info(`💰 Current Futures Balance: $${balance.toFixed(2)} USDT`);
-    } else {
-      logger.warn(`⚠️ Could not fetch real balance, using fallback: $${config.strategy.accountBalance}`);
-      pushScanError('Futures balance unavailable; fallback balance used.');
-    }
-
-    // ─── 1. Monitor Active Trades ──────────────────────────
-    // Now returns symbols that hit TP/SL to prevent re-tracking in SAME cycle
-    const hitSymbols = await checkActiveTrades();
-    scanReport.checks.hitSymbols = hitSymbols.length;
-
-    // ─── 1. Fetch top pairs by volume ──────────────────────
-    const pairs = await fetchTopPairs();
-    if (!pairs.length) {
-      logger.warn('No pairs fetched, aborting cycle');
+    // ─── 1. Fetch Initial Market Data ───
+    const marketData = await fetchInitialMarketData(config, scanReport, pushScanError);
+    if (!marketData) {
       scanReport.status = 'NO_PAIRS';
-      scanReport.errors.push('No pairs fetched');
+      scanReport.finishedAt = Date.now();
+      scanReport.durationMs = scanReport.finishedAt - startTime;
+      tracker.saveScanReport(scanReport);
+      logger.warn('Market data fetch failed, aborting cycle');
       return 0;
     }
-    scanReport.checks.pairs = pairs.length;
 
-    // ─── Market Regime: Fetch BTC Trend ───
-    let btcTrend = 'NEUTRAL';
-    try {
-        const btcCandles = await fetchOHLCV('BTCUSDT', config.timeframes.D1, 50);
-        if (Array.isArray(btcCandles) && btcCandles.length > 0) {
-            const trend = analyzeTrend(btcCandles);
-            btcTrend = trend.direction;
-            logger.info(`🌐 Market Regime: BTC D1 is ${btcTrend}`);
-        }
-    } catch (err) {
-      logger.error('Failed to fetch BTC trend for market regime:', err.message);
-      pushScanError(`BTC regime fetch failed: ${err.message}`);
-    }
-    scanReport.checks.btcTrend = btcTrend;
+    const { balance: effectiveBalance, exchangeSpecs, pairs, btcTrend, hitSymbols } = marketData;
     const lessonSummary = tracker.getDailyLessonSummary ? tracker.getDailyLessonSummary() : null;
     scanReport.adaptiveThresholds = lessonSummary?.thresholds || {
       minRrRatio: config.strategy.minRrRatio,
