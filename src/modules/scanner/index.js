@@ -58,6 +58,10 @@ function classifyStrategyLessonReason(result = {}) {
   if (text.includes('middle zone') || text.includes('tanpa edge struktural') || text.includes('tidak ada edge')) return 'middle_zone';
   if (text.includes('support/resistance belum kuat') || text.includes('sudah dites') || text.includes('touch')) return 'level_touch_low';
   if (text.includes('retest belum terkonfirmasi') || text.includes('retest pending')) return 'retest_pending';
+  if (text.includes('watchlist_sl_out_of_bounds') || text.includes('sl distance out of bounds')) return 'sl_out_of_bounds';
+  if (text.includes('watchlist_low_balance') || text.includes('notional below min after cap') || text.includes('margin above balance')) return 'low_balance';
+  if (text.includes('watchlist_rr_invalid')) return 'rr_invalid';
+  if (text.includes('watchlist_retest_pending')) return 'retest_pending';
   if (text.includes('structure tidak terbentuk') || text.includes('struktur h1 belum valid') || text.includes('h1 structure tidak terbentuk')) return 'structure_weak';
   if (text.includes('dekat resistance tanpa retest') || text.includes('dekat support tanpa retest') || text.includes('entry unconfirmed')) return 'entry_unconfirmed';
   if (text.includes('fomo') || text.includes('terlalu jauh dari key level')) return 'fomo';
@@ -210,6 +214,23 @@ function summarizeTopFailurePhase(phaseBreakdown = {}) {
   return `${top.label} (${top.count})`;
 }
 
+function incrementCounter(map, key) {
+  const normalized = key || 'other';
+  map[normalized] = (map[normalized] || 0) + 1;
+}
+
+function buildTopBottlenecks(...maps) {
+  const combined = {};
+  for (const map of maps) {
+    for (const [key, count] of Object.entries(map || {})) {
+      combined[key] = (combined[key] || 0) + count;
+    }
+  }
+  return Object.entries(combined)
+    .map(([reason, count]) => ({ reason, count }))
+    .sort((a, b) => b.count - a.count);
+}
+
 function buildStrategyRejectSample(symbol, result = {}) {
   const diagnostics = result?.diagnostics || {};
   const riskReward = diagnostics.riskReward || null;
@@ -228,6 +249,7 @@ function buildStrategyRejectSample(symbol, result = {}) {
     stochastic: diagnostics.stochastic || null,
     tags: Array.isArray(diagnostics.tags) ? diagnostics.tags.slice(0, 8) : [],
     warnings: Array.isArray(diagnostics.warnings) ? diagnostics.warnings.slice(0, 4) : [],
+    strategyDebug: diagnostics.strategyDebug || null,
   };
 }
 
@@ -286,6 +308,10 @@ async function runScanCycle() {
     errorCount: 0,
     errors: [],
     strategyRejectSamples: [],
+    strategyDebugSamples: [],
+    rejectionReasons: {},
+    watchlistReasons: {},
+    topBottlenecks: [],
     checks: {},
     phaseBreakdown: {
       preFilterRejected: 0,
@@ -480,30 +506,43 @@ async function runScanCycle() {
       //   Rejection: { signal: null, rejectionReason: '...' }
       const isRejection = result && result.signal === null && result.rejectionReason;
       const signal = isRejection ? null : result;
+      const strategyDebug = result?.diagnostics?.strategyDebug || signal?.diagnostics?.strategyDebug || null;
+
+      if (strategyDebug && scanReport.strategyDebugSamples.length < 80) {
+        scanReport.strategyDebugSamples.push(strategyDebug);
+      }
 
       if (isRejection) {
+        const reasonKey = result.reasonKey || classifyStrategyLessonReason(result);
+        incrementCounter(scanReport.rejectionReasons, reasonKey);
         recordStrategyLesson(tracker, symbol, {
           ...result,
           lessonReason: result.rejectionReason,
+          reasonKey,
         }, scanReport);
       }
 
       if (signal && signal.standbyOnly) {
+        const watchlistReason = signal.watchlistReason || 'STANDBY_SETUP';
+        incrementCounter(scanReport.watchlistReasons, watchlistReason);
         scanReport.watchlistCount++;
         scanReport.phaseBreakdown.strategyWatchlist++;
         recordStrategyLesson(tracker, signal.symbol || symbol, {
           lessonReason: signal.standbyReason || 'Setup masih standby',
           rejectionReason: signal.standbyReason || 'Setup masih standby',
-          diagnostics: buildOutcomeLessonDiagnostics(signal),
-        });
+          diagnostics: signal.diagnostics || buildOutcomeLessonDiagnostics(signal),
+          reasonKey: watchlistReason,
+        }, scanReport, null, { kind: 'watchlist', reasonKey: watchlistReason });
         technicalWatchlist.push({
           symbol: signal.symbol,
           score: signal.score,
           reason: signal.standbyReason,
-          bias: 'WATCHLIST',
+          bias: signal.bias || 'WATCHLIST',
           entry: signal.riskReward?.entry,
           riskReward: signal.riskReward,
           quality: 'WATCHLIST',
+          watchlistReason,
+          diagnostics: signal.diagnostics || null,
           trading_type: signal.trading_type || 'MONITORING',
         });
         logger.info(`👀 ${symbol}: standby setup only (R:R ${signal.riskReward?.rr?.toFixed(2) || 'N/A'})`);
@@ -520,6 +559,7 @@ async function runScanCycle() {
         scanReport.rejectedCount++;
         scanReport.phaseBreakdown.strategyRejected++;
         const reason = isRejection ? result.rejectionReason : 'Technical requirements not met';
+        if (!isRejection) incrementCounter(scanReport.rejectionReasons, 'technical_requirements_not_met');
         if (isRejection && scanReport.strategyRejectSamples.length < 40) {
           scanReport.strategyRejectSamples.push(buildStrategyRejectSample(symbol, result));
         }
@@ -864,11 +904,20 @@ async function runScanCycle() {
     scanReport.finishedAt = Date.now();
     scanReport.durationMs = scanReport.finishedAt - startTime;
     scanReport.signalCount = sentCount;
+    scanReport.topBottlenecks = buildTopBottlenecks(scanReport.rejectionReasons, scanReport.watchlistReasons);
     scanReport.summary = {
       dailyCount,
       globalSlToday,
+      totalScanned: scanReport.checks.pairs || 0,
       pairs: scanReport.checks.pairs || 0,
       preFilterPassed: scanReport.phaseBreakdown.preFilterPassed,
+      strategyRejected: scanReport.phaseBreakdown.strategyRejected,
+      strategyWatchlisted: scanReport.phaseBreakdown.strategyWatchlist,
+      strategyCandidates: scanReport.phaseBreakdown.strategyCandidate,
+      signalCount: scanReport.signalCount,
+      rejectionReasons: scanReport.rejectionReasons,
+      watchlistReasons: scanReport.watchlistReasons,
+      topBottlenecks: scanReport.topBottlenecks,
       candidates: scanReport.candidateCount,
       watchlist: scanReport.watchlistCount,
       filtered: scanReport.filteredCount,

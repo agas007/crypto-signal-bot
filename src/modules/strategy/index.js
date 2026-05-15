@@ -15,6 +15,74 @@ function roundStep(quantity, stepSize) {
     return parseFloat((Math.floor(quantity / stepSize) * stepSize).toFixed(precision));
 }
 
+function normalizeSlBounds(symbol, minSlPct, maxSlPct) {
+  if (Number.isFinite(minSlPct) && Number.isFinite(maxSlPct) && minSlPct > maxSlPct) {
+    const oldMaxSlPct = maxSlPct;
+    const newMaxSlPct = minSlPct * 1.25;
+    logger.warn('SL bounds normalized', { symbol, minSlPct, oldMaxSlPct, newMaxSlPct });
+    return { minSlPct, maxSlPct: newMaxSlPct, normalized: true, oldMaxSlPct };
+  }
+
+  return { minSlPct, maxSlPct, normalized: false, oldMaxSlPct: maxSlPct };
+}
+
+function buildSlBoundsDebug(symbol, slPct, minSlPct, maxSlPct) {
+  const normalizedBounds = normalizeSlBounds(symbol, minSlPct, maxSlPct);
+  const slBoundTolerance = config.strategy?.slBoundTolerance ?? 0.15;
+  const toleratedMinSlPct = normalizedBounds.minSlPct * (1 - slBoundTolerance);
+  const toleratedMaxSlPct = normalizedBounds.maxSlPct * (1 + slBoundTolerance);
+
+  return {
+    slPct,
+    minSlPct: normalizedBounds.minSlPct,
+    maxSlPct: normalizedBounds.maxSlPct,
+    oldMaxSlPct: normalizedBounds.oldMaxSlPct,
+    normalized: normalizedBounds.normalized,
+    slBoundTolerance,
+    toleratedMinSlPct,
+    toleratedMaxSlPct,
+  };
+}
+
+function buildStrategyDebug({
+  symbol,
+  decision,
+  finalScore = null,
+  reasons = [],
+  failedChecks = [],
+  riskReward = null,
+  minRR = null,
+}) {
+  const riskDebug = riskReward?.debug || {};
+  return {
+    symbol,
+    phase: 'strategy',
+    decision,
+    finalScore,
+    reasons: Array.isArray(reasons) ? reasons : [],
+    failedChecks: Array.isArray(failedChecks) ? failedChecks : [],
+    slPct: riskDebug.slPct ?? null,
+    minSlPct: riskDebug.minSlPct ?? null,
+    maxSlPct: riskDebug.maxSlPct ?? null,
+    toleratedMinSlPct: riskDebug.toleratedMinSlPct ?? null,
+    toleratedMaxSlPct: riskDebug.toleratedMaxSlPct ?? null,
+    rr: Number.isFinite(riskReward?.rr) ? riskReward.rr : null,
+    minRR,
+    notional: riskReward?.positionSize?.notional ?? riskDebug.calculatedNotional ?? null,
+    minNotional: riskDebug.minNotional ?? null,
+  };
+}
+
+function getWatchlistReasonForRiskFailure(riskReward, minRrRatio) {
+  if (!riskReward) return 'WATCHLIST_RR_INVALID';
+  if (riskReward.failureType === 'SL_OUT_OF_BOUNDS') return 'WATCHLIST_SL_OUT_OF_BOUNDS';
+  if (riskReward.failureType === 'NOTIONAL_BELOW_MIN_AFTER_CAP' || riskReward.failureType === 'MARGIN_ABOVE_BALANCE') {
+    return 'WATCHLIST_LOW_BALANCE';
+  }
+  if (riskReward.rr == null || riskReward.rr < minRrRatio) return 'WATCHLIST_RR_INVALID';
+  return null;
+}
+
 /**
  * Classify price position relative to support/resistance.
  * Relaxed version: wider threshold (default 5% instead of 2%).
@@ -44,6 +112,7 @@ function classifyPricePosition(distToSupport, distToResistance, threshold = conf
  * @returns {{ entry: number, sl: number, tp: number, rr: number }}
  */
 function calculateRiskReward(bias, currentPrice, levels, options = {}) {
+  const symbol = options.symbol || 'UNKNOWN';
   const makeFailure = (failureReason, extra = {}) => ({
     entry: currentPrice,
     sl: null,
@@ -55,7 +124,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
   });
 
   const baseMaxSl = config.strategy.maxSlAllowed || 0.08;
-  const MAX_SL_ALLOWED = options.atr ? Math.min(baseMaxSl, (options.atr * 2) / currentPrice) : baseMaxSl;
+  const rawMaxSlAllowed = options.atr ? Math.min(baseMaxSl, (options.atr * 2) / currentPrice) : baseMaxSl;
   
   // FIX 2: SL minimum = 1.5x ATR atau 0.8%, ambil yang lebih besar
   const atrBasedMinSl = options.atr ? (options.atr * 1.5) / currentPrice : 0.008;
@@ -116,10 +185,17 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     const minSlDistance = hasBullishBosAnchor
       ? Math.max(0.0035, atrDistPercent * 0.35)
       : Math.max(MIN_SL_DISTANCE, atrDistPercent);
-    if (!options.sl && (slDistPercent < minSlDistance || slDistPercent > MAX_SL_ALLOWED)) {
-      logger.debug(`[RR] LONG ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(minSlDistance*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
+    const slBoundsDebug = buildSlBoundsDebug(symbol, slDistPercent, minSlDistance, rawMaxSlAllowed);
+    if (!options.sl && (slDistPercent < slBoundsDebug.toleratedMinSlPct || slDistPercent > slBoundsDebug.toleratedMaxSlPct)) {
+      logger.debug(`[RR] LONG ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(slBoundsDebug.minSlPct*100).toFixed(2)}% - ${(slBoundsDebug.maxSlPct*100).toFixed(0)}%)`);
       return makeFailure(
-        `SL distance out of bounds (${(slDistPercent * 100).toFixed(2)}%, need ${(minSlDistance * 100).toFixed(2)}%-${(MAX_SL_ALLOWED * 100).toFixed(0)}%)`
+        `SL distance out of bounds (${(slDistPercent * 100).toFixed(2)}%, need ${(slBoundsDebug.minSlPct * 100).toFixed(2)}%-${(slBoundsDebug.maxSlPct * 100).toFixed(0)}%)`,
+        {
+          failureType: 'SL_OUT_OF_BOUNDS',
+          sl,
+          tp,
+          debug: slBoundsDebug,
+        }
       );
     }
 
@@ -130,7 +206,13 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // FIX 3: Prevent Inflated R:R using unreachable historical TP
     if (rr > 8) {
       logger.debug(`LONG: R:R ${rr.toFixed(1)} too high, likely historical TP. Capping.`);
-      return makeFailure(`R:R too high / likely unrealistic TP (${rr.toFixed(2)})`);
+      return makeFailure(`R:R too high / likely unrealistic TP (${rr.toFixed(2)})`, {
+        failureType: 'RR_INVALID',
+        sl,
+        tp,
+        rr,
+        debug: slBoundsDebug,
+      });
     }
 
     // Position Sizing
@@ -162,17 +244,43 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       // If after capping it's below minNotional, it's untradeable
       if (notionalValue < minRequired) {
         logger.debug(`[RR] LONG: Notional ${notionalValue} < min ${minRequired} after cap`);
-        return makeFailure(`Notional below min after cap (${notionalValue.toFixed(2)} < ${minRequired.toFixed(2)})`);
+        return makeFailure(`Notional below min after cap (${notionalValue.toFixed(2)} < ${minRequired.toFixed(2)})`, {
+          failureType: 'NOTIONAL_BELOW_MIN_AFTER_CAP',
+          sl,
+          tp,
+          debug: {
+            balance: ACCOUNT_BALANCE,
+            calculatedNotional: notionalValue,
+            minNotional: rawMinNotional,
+            effectiveMinNotional: minRequired,
+            riskPct: RISK_PCT,
+            leverage: LEVERAGE,
+            cappedByBalance: true,
+          },
+        });
       }
     }
 
     const margin = notionalValue / LEVERAGE;
     if (margin > ACCOUNT_BALANCE) {
       logger.debug(`[RR] LONG: Margin ${margin} > balance ${ACCOUNT_BALANCE}`);
-      return makeFailure(`Margin above balance (${margin.toFixed(2)} > ${ACCOUNT_BALANCE.toFixed(2)})`);
+      return makeFailure(`Margin above balance (${margin.toFixed(2)} > ${ACCOUNT_BALANCE.toFixed(2)})`, {
+        failureType: 'MARGIN_ABOVE_BALANCE',
+        sl,
+        tp,
+        debug: {
+          balance: ACCOUNT_BALANCE,
+          calculatedNotional: notionalValue,
+          minNotional: rawMinNotional,
+          effectiveMinNotional: minRequired,
+          riskPct: RISK_PCT,
+          leverage: LEVERAGE,
+          cappedByBalance: true,
+        },
+      });
     }
 
-    return { entry, sl, tp, rr, isScaled: scaled, positionSize: { risk: (Math.abs(entry - sl) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
+    return { entry, sl, tp, rr, isScaled: scaled, debug: { ...slBoundsDebug, calculatedNotional: notionalValue, minNotional: rawMinNotional, effectiveMinNotional: minRequired }, positionSize: { risk: (Math.abs(entry - sl) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
   } else {
     // [CONSERVATIVE] SL at Wick Resistance, TP at Body Support
     const trendSupport = levels?.trend?.support?.currentValue;
@@ -200,10 +308,17 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     const minSlDistance = hasBearishBosAnchor
       ? Math.max(0.0035, atrDistPercent * 0.35)
       : Math.max(MIN_SL_DISTANCE, atrDistPercent);
-    if (!options.sl && (slDistPercent < minSlDistance || slDistPercent > MAX_SL_ALLOWED)) {
-      logger.debug(`[RR] SHORT ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(minSlDistance*100).toFixed(2)}% - ${(MAX_SL_ALLOWED*100).toFixed(0)}%)`);
+    const slBoundsDebug = buildSlBoundsDebug(symbol, slDistPercent, minSlDistance, rawMaxSlAllowed);
+    if (!options.sl && (slDistPercent < slBoundsDebug.toleratedMinSlPct || slDistPercent > slBoundsDebug.toleratedMaxSlPct)) {
+      logger.debug(`[RR] SHORT ${currentPrice}: SL distance (${(slDistPercent*100).toFixed(2)}%) out of bounds (${(slBoundsDebug.minSlPct*100).toFixed(2)}% - ${(slBoundsDebug.maxSlPct*100).toFixed(0)}%)`);
       return makeFailure(
-        `SL distance out of bounds (${(slDistPercent * 100).toFixed(2)}%, need ${(minSlDistance * 100).toFixed(2)}%-${(MAX_SL_ALLOWED * 100).toFixed(0)}%)`
+        `SL distance out of bounds (${(slDistPercent * 100).toFixed(2)}%, need ${(slBoundsDebug.minSlPct * 100).toFixed(2)}%-${(slBoundsDebug.maxSlPct * 100).toFixed(0)}%)`,
+        {
+          failureType: 'SL_OUT_OF_BOUNDS',
+          sl,
+          tp,
+          debug: slBoundsDebug,
+        }
       );
     }
 
@@ -214,7 +329,13 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     // FIX 3: Prevent Inflated R:R using unreachable historical TP
     if (rr > 8) {
       logger.debug(`SHORT: R:R ${rr.toFixed(1)} too high, likely historical TP. Capping.`);
-      return makeFailure(`R:R too high / likely unrealistic TP (${rr.toFixed(2)})`);
+      return makeFailure(`R:R too high / likely unrealistic TP (${rr.toFixed(2)})`, {
+        failureType: 'RR_INVALID',
+        sl,
+        tp,
+        rr,
+        debug: slBoundsDebug,
+      });
     }
 
     let quantity = riskDollar / riskPerUnit;
@@ -242,17 +363,43 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       notionalValue = quantity * entry;
       if (notionalValue < minRequired) {
         logger.debug(`[RR] SHORT: Notional ${notionalValue} < min ${minRequired} after cap`);
-        return makeFailure(`Notional below min after cap (${notionalValue.toFixed(2)} < ${minRequired.toFixed(2)})`);
+        return makeFailure(`Notional below min after cap (${notionalValue.toFixed(2)} < ${minRequired.toFixed(2)})`, {
+          failureType: 'NOTIONAL_BELOW_MIN_AFTER_CAP',
+          sl,
+          tp,
+          debug: {
+            balance: ACCOUNT_BALANCE,
+            calculatedNotional: notionalValue,
+            minNotional: rawMinNotional,
+            effectiveMinNotional: minRequired,
+            riskPct: RISK_PCT,
+            leverage: LEVERAGE,
+            cappedByBalance: true,
+          },
+        });
       }
     }
 
     const margin = notionalValue / LEVERAGE;
     if (margin > ACCOUNT_BALANCE) {
       logger.debug(`[RR] SHORT: Margin ${margin} > balance ${ACCOUNT_BALANCE}`);
-      return makeFailure(`Margin above balance (${margin.toFixed(2)} > ${ACCOUNT_BALANCE.toFixed(2)})`);
+      return makeFailure(`Margin above balance (${margin.toFixed(2)} > ${ACCOUNT_BALANCE.toFixed(2)})`, {
+        failureType: 'MARGIN_ABOVE_BALANCE',
+        sl,
+        tp,
+        debug: {
+          balance: ACCOUNT_BALANCE,
+          calculatedNotional: notionalValue,
+          minNotional: rawMinNotional,
+          effectiveMinNotional: minRequired,
+          riskPct: RISK_PCT,
+          leverage: LEVERAGE,
+          cappedByBalance: true,
+        },
+      });
     }
 
-    return { entry, sl, tp, rr, isScaled: scaled, positionSize: { risk: (Math.abs(sl - entry) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
+    return { entry, sl, tp, rr, isScaled: scaled, debug: { ...slBoundsDebug, calculatedNotional: notionalValue, minNotional: rawMinNotional, effectiveMinNotional: minRequired }, positionSize: { risk: (Math.abs(sl - entry) * quantity), leverage: LEVERAGE, quantity, margin, notional: notionalValue } };
   }
 }
 
@@ -333,6 +480,7 @@ function buildRejectionDiagnostics({
   m15StochCross = null,
   standbyBias = null,
   standbyReason = null,
+  strategyDebug = null,
 }) {
   return {
     bias,
@@ -351,6 +499,9 @@ function buildRejectionDiagnostics({
           tp: riskReward.tp,
           rr: riskReward.rr,
           isScaled: riskReward.isScaled,
+          failureReason: riskReward.failureReason,
+          failureType: riskReward.failureType,
+          debug: riskReward.debug || null,
         }
       : null,
     trends: {
@@ -377,6 +528,7 @@ function buildRejectionDiagnostics({
     },
     standbyBias,
     standbyReason,
+    strategyDebug,
   };
 }
 
@@ -385,7 +537,7 @@ function buildRejectionDiagnostics({
  * D1 is kept for diagnostics only, not as a hard directional gate.
  */
 function evaluateSignal(symbol, data, options = {}) {
-  const { D1, H4, H1, M15 } = data;
+  const { D1, H4, H1, M15 } = data || {};
   const fundingRate = options.fundingRate || 0;
   const scoreWeights = options.scoreWeights || config.strategy.scoreWeights || {};
   const noStructurePenalty = scoreWeights.noStructurePenalty ?? 4;
@@ -410,6 +562,36 @@ function evaluateSignal(symbol, data, options = {}) {
   const m15EmaCrossBonus = Number.isFinite(emaCrossConfig.m15CrossBonus) ? emaCrossConfig.m15CrossBonus : 6;
   const h1EmaCrossBonus = Number.isFinite(emaCrossConfig.h1CrossBonus) ? emaCrossConfig.h1CrossBonus : 4;
   const emaAlignmentBonus = Number.isFinite(emaCrossConfig.alignmentBonus) ? emaCrossConfig.alignmentBonus : 4;
+  const invalidTimeframes = ['D1', 'H4', 'H1']
+    .filter((tf) => !Array.isArray(data?.[tf]) || data[tf].length === 0);
+
+  if (invalidTimeframes.length > 0) {
+    const rejectionReason = `Invalid candle data: missing ${invalidTimeframes.join(', ')}`;
+    const strategyDebug = buildStrategyDebug({
+      symbol,
+      decision: 'REJECT',
+      finalScore: null,
+      reasons: [rejectionReason],
+      failedChecks: ['INVALID_CANDLE_DATA'],
+    });
+
+    return options.includeRejectionReason ? {
+      signal: null,
+      rejectionReason,
+      reasonKey: 'invalid_data',
+      diagnostics: {
+        bias: null,
+        longScore: null,
+        shortScore: null,
+        finalScore: null,
+        reasons: [rejectionReason],
+        warnings: [],
+        tags: ['INVALID_CANDLE_DATA'],
+        riskReward: null,
+        strategyDebug,
+      },
+    } : null;
+  }
 
   // ─── 1. Technical Analysis ──────────────────────────────
   const d1Trend = analyzeTrend(D1, emaParams);
@@ -825,6 +1007,7 @@ function evaluateSignal(symbol, data, options = {}) {
         : null;
   const breakoutContext = patternBreakoutContext || compressionBreakoutContext || structuralBreakoutContext;
   const riskReward = calculateRiskReward(bias, h4SR.currentPrice, h4SR, { 
+    symbol,
     atr,
     accountBalance: options.accountBalance || config.strategy.accountBalance,
     stepSize: options.stepSize,
@@ -847,6 +1030,42 @@ function evaluateSignal(symbol, data, options = {}) {
   const minFinalScore = Number.isFinite(options.minFinalScore) ? options.minFinalScore : (config.strategy.minFinalScore || 25);
   const minRrRatio = Number.isFinite(options.minRrRatio) ? options.minRrRatio : 2.0;
   const standbyMinRr = Number.isFinite(options.standbyMinRr) ? options.standbyMinRr : (config.strategy.standbyMinRr || minRrRatio);
+  const analysisContext = {
+    d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
+  };
+  const buildDiagnostics = (decision, failedChecks = []) => buildRejectionDiagnostics({
+    bias,
+    longScore,
+    shortScore,
+    finalScore,
+    reasons,
+    warnings,
+    tags,
+    analysis: analysisContext,
+    riskReward,
+    pricePosition,
+    d1Trend,
+    h4Trend,
+    h1Trend,
+    h1Structure,
+    ema1321,
+    m15Ema1321,
+    h1Stoch,
+    h4Stoch,
+    m15Stoch,
+    h1StochCross,
+    h4StochCross,
+    m15StochCross,
+    strategyDebug: buildStrategyDebug({
+      symbol,
+      decision,
+      finalScore,
+      reasons,
+      failedChecks,
+      riskReward,
+      minRR: minRrRatio,
+    }),
+  });
 
   // ─── FINAL SELECTION ──────────────────────────────────
   let finalScore = longScore > shortScore ? longScore : shortScore;
@@ -856,32 +1075,8 @@ function evaluateSignal(symbol, data, options = {}) {
     return options.includeRejectionReason ? {
       signal: null,
       rejectionReason: `Weighted score too low (${finalScore}/100). Need min ${minFinalScore}.`,
-      diagnostics: buildRejectionDiagnostics({
-        bias,
-        longScore,
-        shortScore,
-        finalScore,
-        reasons,
-        warnings,
-        tags,
-        analysis: {
-          d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
-        },
-        riskReward,
-        pricePosition,
-        d1Trend,
-        h4Trend,
-        h1Trend,
-        h1Structure,
-        ema1321,
-        m15Ema1321,
-        h1Stoch,
-        h4Stoch,
-        m15Stoch,
-        h1StochCross,
-        h4StochCross,
-        m15StochCross,
-      }),
+      reasonKey: 'score_low',
+      diagnostics: buildDiagnostics('REJECT', ['SCORE_BELOW_MIN']),
     } : null;
   }
 
@@ -890,36 +1085,26 @@ function evaluateSignal(symbol, data, options = {}) {
       const rrReason = riskReward?.failureReason
         ? `Invalid R:R setup (${riskReward.failureReason})`
         : `Poor R:R Ratio (${rrLabel}). Need min ${minRrRatio.toFixed(1)}.`;
-      return options.includeRejectionReason ? {
-        signal: null,
-        rejectionReason: rrReason,
-        diagnostics: buildRejectionDiagnostics({
-          bias,
-          longScore,
-          shortScore,
-          finalScore,
-          reasons,
-          warnings,
-          tags,
-          analysis: {
-            d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
-          },
-          riskReward,
-          pricePosition,
-          d1Trend,
-          h4Trend,
-          h1Trend,
-          h1Structure,
-          ema1321,
-          m15Ema1321,
-          h1Stoch,
-          h4Stoch,
-          m15Stoch,
-          h1StochCross,
-          h4StochCross,
-          m15StochCross,
-        }),
-      } : null;
+      const watchlistReason = getWatchlistReasonForRiskFailure(riskReward, minRrRatio) || 'WATCHLIST_RR_INVALID';
+      return {
+        symbol,
+        bias,
+        score: finalScore,
+        reasons,
+        warnings,
+        tags: [...tags, watchlistReason],
+        analysis: { ...analysisContext, pricePosition },
+        riskReward,
+        isStrict: false,
+        lowConfidence: true,
+        fundingRate: (fundingRate * 100).toFixed(4) + '%',
+        trading_type: 'MONITORING',
+        standbyOnly: true,
+        watchlistOnly: true,
+        watchlistReason,
+        standbyReason: `${rrReason} Setup masuk watchlist karena score ${finalScore} >= ${minFinalScore}, tapi risk validation belum aman untuk signal resmi.`,
+        diagnostics: buildDiagnostics('WATCHLIST', [watchlistReason]),
+      };
   }
 
   const standbyOnly = Boolean(standbyBias && bias === standbyBias && riskReward && riskReward.rr < standbyMinRr);
@@ -938,6 +1123,7 @@ function evaluateSignal(symbol, data, options = {}) {
       analysis: {
         d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross, pricePosition
       },
+      diagnostics: buildDiagnostics('WATCHLIST', ['STANDBY_SETUP']),
       riskReward,
       isStrict: false,
       lowConfidence: true,
@@ -991,33 +1177,32 @@ function evaluateSignal(symbol, data, options = {}) {
     return options.includeRejectionReason ? {
       signal: null,
       rejectionReason: `Final score too low after entry barriers (${finalScore}/100). Need min ${minFinalScore}.`,
-      diagnostics: buildRejectionDiagnostics({
-        bias,
-        longScore,
-        shortScore,
-        finalScore,
-        reasons,
-        warnings,
-        tags,
-        analysis: {
-          d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross,
-        },
-        riskReward,
-        pricePosition,
-        d1Trend,
-        h4Trend,
-        h1Trend,
-        h1Structure,
-        ema1321,
-        m15Ema1321,
-        h1Stoch,
-        h4Stoch,
-        m15Stoch,
-        h1StochCross,
-        h4StochCross,
-        m15StochCross,
-      }),
+      reasonKey: 'score_low',
+      diagnostics: buildDiagnostics('REJECT', ['SCORE_BELOW_MIN_AFTER_BARRIERS']),
     } : null;
+  }
+
+  if (retestStatus !== 'CONFIRMED' && tags.includes('RETEST_PENDING')) {
+    const watchlistReason = 'WATCHLIST_RETEST_PENDING';
+    return {
+      symbol,
+      bias,
+      score: finalScore,
+      reasons,
+      warnings,
+      tags: [...tags, watchlistReason],
+      analysis: { ...analysisContext, pricePosition },
+      riskReward,
+      isStrict: false,
+      lowConfidence: true,
+      fundingRate: (fundingRate * 100).toFixed(4) + '%',
+      trading_type: 'MONITORING',
+      standbyOnly: true,
+      watchlistOnly: true,
+      watchlistReason,
+      standbyReason: `${symbol} score cukup (${finalScore}/${minFinalScore}) dan risk valid, tapi retest belum confirmed. Masuk watchlist dulu, bukan signal resmi.`,
+      diagnostics: buildDiagnostics('WATCHLIST', [watchlistReason]),
+    };
   }
 
   // Rule 6: Technical score >= 70% first. AI is final sanity check.
@@ -1036,6 +1221,7 @@ function evaluateSignal(symbol, data, options = {}) {
       d1Trend, h4SR, h4Pattern, h4Trend, h1Trend, m15Trend, h1Structure, h1Compression, ema1321, m15Ema1321, h4OB, h1OB, h1Engulfing, h1Pin, h1Stoch, h4Stoch, m15Stoch, h1StochCross, h4StochCross, m15StochCross, pricePosition
     },
     riskReward,
+    diagnostics: buildDiagnostics(isStrict ? 'SIGNAL' : 'CANDIDATE', []),
     isStrict,
     lowConfidence: !isStrict,
     fundingRate: (fundingRate * 100).toFixed(4) + '%',
