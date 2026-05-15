@@ -78,7 +78,7 @@ const config = {
     accountBalance: parseFloat(process.env.ACCOUNT_BALANCE) || 1000,
     riskPercentage: parseFloat(process.env.RISK_PERCENTAGE) || 0.05,           // Risk X% of account balance per trade
     maxPositionPercentage: parseFloat(process.env.MAX_POSITION_PERCENTAGE) || 3.0, // Default to 300% total balance
-    minRiskDollar: 0.25,             // Minimum $0.20 risk if 5% is lower
+    minRiskDollar: 0.50,             // Minimum $0.50 risk if 5% is lower
     maxSlAllowed: 0.08,              // Max 8% Stop Loss distance allowed
     slBoundTolerance: parseFloat(process.env.SL_BOUND_TOLERANCE) || 0.15,
     bosConfirmationCandles: parseInt(process.env.BOS_CONFIRMATION_CANDLES, 10) || 2,

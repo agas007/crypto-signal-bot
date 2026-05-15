@@ -124,7 +124,7 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
   });
 
   const baseMaxSl = config.strategy.maxSlAllowed || 0.08;
-  const rawMaxSlAllowed = options.atr ? Math.min(baseMaxSl, (options.atr * 2) / currentPrice) : baseMaxSl;
+  const rawMaxSlAllowed = baseMaxSl;
   
   // FIX 2: SL minimum = 1.5x ATR atau 0.8%, ambil yang lebih besar
   const atrBasedMinSl = options.atr ? (options.atr * 1.5) / currentPrice : 0.008;
@@ -152,8 +152,8 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
       logger.info(`🛡️ High Volatility Detected (${(atrDistPercent*100).toFixed(1)}%). Reducing risk by 50%.`);
   }
 
-  // Calculate Risk in Dollar (5% of balance * riskFactor or $0.25 minimum)
-  const riskDollar = Math.max(ACCOUNT_BALANCE * RISK_PCT * riskFactor, config.strategy.minRiskDollar || 0.25);
+  // Calculate Risk in Dollar (5% of balance * riskFactor or $0.50 minimum)
+  const riskDollar = Math.max(ACCOUNT_BALANCE * RISK_PCT * riskFactor, config.strategy.minRiskDollar || 0.50);
 
   if (bias === 'LONG') {
     // [CONSERVATIVE] SL at Wick Support, TP at Body Resistance
