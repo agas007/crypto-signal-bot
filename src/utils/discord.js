@@ -13,8 +13,8 @@ const path = require('path');
 const logger = require('./logger');
 const config = require('../config');
 
-const SIGNAL_WEBHOOK = process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL;
-const STATUS_WEBHOOK = process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.DISCORD_WEBHOOK_URL || process.env.DISCORD_SIGNAL_WEBHOOK_URL;
+const SIGNAL_WEBHOOK = config.discord?.signalWebhookUrl || process.env.DISCORD_SIGNAL_WEBHOOK_URL || process.env.discord_signal_webhook;
+const STATUS_WEBHOOK = config.discord?.statusWebhookUrl || process.env.DISCORD_STATUS_WEBHOOK_URL || process.env.discord_status_webhook || SIGNAL_WEBHOOK;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -218,7 +218,7 @@ async function sendSignal(signal, imagePath = null, options = {}) {
     // Fallback: plain text
     try {
       const mentionPayload = buildSignalMentionPayload();
-      await postWebhook(STATUS_WEBHOOK, {
+      await postWebhook(SIGNAL_WEBHOOK, {
         ...mentionPayload,
         content: `🚨 **${signal.symbol} ${signal.bias}** | Entry: \`${signal.entry}\` | TP: \`${signal.take_profit}\` | SL: \`${signal.stop_loss}\``,
       });
@@ -249,4 +249,20 @@ async function sendStatus(text) {
   }
 }
 
-module.exports = { sendSignal, sendStatus, postWebhook, postWebhookWithFile };
+async function sendSignalStatus(text) {
+  try {
+    const content = tgToDiscord(text);
+    const chunks = [];
+    for (let i = 0; i < content.length; i += 1900) chunks.push(content.slice(i, i + 1900));
+
+    for (const chunk of chunks) {
+      await postWebhook(SIGNAL_WEBHOOK, { content: chunk });
+    }
+    return true;
+  } catch (err) {
+    logger.error(`[Discord] sendSignalStatus failed: ${err.message}`);
+    return false;
+  }
+}
+
+module.exports = { sendSignal, sendStatus, sendSignalStatus, postWebhook, postWebhookWithFile };

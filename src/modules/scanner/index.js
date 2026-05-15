@@ -9,7 +9,7 @@ const { analyzeTrend } = require('../indicators');
 const { applyFilters } = require('../filter');
 const { evaluateSignal, calculateRiskReward } = require('../strategy');
 const { refineSignal, analyzePostMortem, generateAdaptiveTuningSuggestion } = require('../ai/openrouter');
-const { sendSignal, sendStatus } = require('../../services/signal_delivery');
+const { sendSignal, sendStatus, sendSignalStatus } = require('../../services/signal_delivery');
 const { maybeSendDiscordNotifications } = require('../../services/discord_notifications');
 const tracker = require('../tracker');
 const { claimSignalDedupe, getSignalCandleTime, releaseSignalDedupe } = require('../../utils/signal_dedupe');
@@ -875,7 +875,7 @@ async function runScanCycle() {
       const rr = bestAlt.riskReward;
       const rrRatio = rr ? formatRrValue(rr.rr) : (bestAlt.score > 80 ? 'High' : 'Low');
       logger.info(`💡 Found Best Alternative: ${bestAlt.symbol} (Score: ${bestAlt.score}, RR: ${rrRatio})`);
-      await sendStatus(
+      await sendSignalStatus(
         `💡 *BEST ALTERNATIVE (Advisory)*\n\n` +
         `*Symbol:* \`${bestAlt.symbol}\`\n` +
         `*Bias:* \`${bestAlt.bias || 'N/A'}\`\n` +

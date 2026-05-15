@@ -215,7 +215,13 @@ async function sendStatus(text) {
   return delivery.delivered;
 }
 
+async function sendSignalStatus(text) {
+  const delivery = await fanout('sendSignalStatus', [text]);
+  return delivery.delivered;
+}
+
 module.exports = {
   sendSignal,
   sendStatus,
+  sendSignalStatus,
 };
