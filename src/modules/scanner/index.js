@@ -359,6 +359,165 @@ async function fetchInitialMarketData(config, scanReport, pushScanError) {
 }
 
 /**
+ * Evaluate all pairs through prefilter and strategy phases.
+ * Returns {candidates, technicalWatchlist} where candidates pass strategy checks.
+ */
+async function evaluatePairCandidates(pairs, hitSymbols, exchangeSpecs, effectiveBalance, scanReport, pushScanError, config, tracker) {
+  const candidates = [];
+  const technicalWatchlist = [];
+  let filtered = 0;
+  let rejected = 0;
+  let errors = 0;
+
+  for (const symbol of pairs) {
+    if (hitSymbols.includes(symbol.toUpperCase())) {
+      logger.info(`⏭️ Skipping ${symbol} - just hit TP/SL in this cycle.`);
+      continue;
+    }
+
+    const sym = symbol.toUpperCase();
+    const stats = tracker.getPairStats(sym, 'ANY');
+
+    if (stats.slHits >= 2) {
+      logger.info(`🚫 Skipping ${sym}: Base Asset (${stats.baseAsset}) on cooldown (2 SL hits in 24h)`);
+      logAudit(sym, 'PRE-FILTER', 'REJECTED', 0, 'Asset SL Cooldown (2 hits in 24h)');
+      continue;
+    }
+
+    try {
+      const ticker = await fetch24hTicker(symbol);
+      if (!ticker) {
+        scanReport.checks.tickerUnavailable = (scanReport.checks.tickerUnavailable || 0) + 1;
+        scanReport.phaseBreakdown.preFilterRejected++;
+        continue;
+      }
+
+      const h4Candles = await fetchOHLCV(symbol, config.timeframes.H4, 50);
+      if (!Array.isArray(h4Candles) || h4Candles.length === 0) {
+        errors++;
+        pushScanError(`No H4 candles for ${symbol}`);
+        scanReport.phaseBreakdown.preFilterRejected++;
+        continue;
+      }
+
+      await sleep(config.binance.rateLimitMs);
+
+      const h4Trend = analyzeTrend(h4Candles, config.indicators.ema);
+      const filterResult = applyFilters({
+        symbol,
+        ticker,
+        trend: h4Trend,
+        candles: h4Candles,
+      });
+
+      if (!filterResult.pass) {
+        filtered++;
+        scanReport.filteredCount++;
+        scanReport.phaseBreakdown.preFilterRejected++;
+        recordPreFilterLesson(tracker, symbol, filterResult.reasons.join(', '), scanReport, filterResult.reasonKeys);
+        logAudit(symbol, 'PRE-FILTER', 'REJECTED', 0, filterResult.reasons.join(', '));
+        continue;
+      }
+      scanReport.phaseBreakdown.preFilterPassed++;
+
+      logger.info(`📊 ${symbol} passed pre-filters, fetching multi-TF data...`);
+      logAudit(symbol, 'PRE-FILTER', 'PASSED', 0, 'Trend / support / resistance confirmed');
+      const mtfData = await fetchMultiTimeframe(symbol);
+
+      if (!mtfData) {
+        errors++;
+        pushScanError(`Multi-timeframe fetch failed for ${symbol}`);
+        continue;
+      }
+
+      const futuresSym = toFuturesSymbol(symbol);
+      const specs = exchangeSpecs[futuresSym] || { stepSize: 0.001, minNotional: 5.0 };
+
+      const result = evaluateSignal(symbol, mtfData, {
+          accountBalance: effectiveBalance,
+          stepSize: specs.stepSize,
+          minNotional: specs.minNotional,
+          minRrRatio: scanReport.adaptiveThresholds?.minRrRatio,
+          minFinalScore: scanReport.adaptiveThresholds?.minFinalScore,
+          standbyMinRr: scanReport.adaptiveThresholds?.standbyMinRr,
+          scoreWeights: scanReport.adaptiveThresholds?.scoreWeights,
+          includeRejectionReason: true
+      });
+
+      const isRejection = result && result.signal === null && result.rejectionReason;
+      const signal = isRejection ? null : result;
+      const strategyDebug = result?.diagnostics?.strategyDebug || signal?.diagnostics?.strategyDebug || null;
+
+      if (strategyDebug && scanReport.strategyDebugSamples.length < 80) {
+        scanReport.strategyDebugSamples.push(strategyDebug);
+      }
+
+      if (isRejection) {
+        const reasonKey = result.reasonKey || classifyStrategyLessonReason(result);
+        incrementCounter(scanReport.rejectionReasons, reasonKey);
+        recordStrategyLesson(tracker, symbol, {
+          ...result,
+          lessonReason: result.rejectionReason,
+          reasonKey,
+        }, scanReport);
+      }
+
+      if (signal && signal.standbyOnly) {
+        const watchlistReason = signal.watchlistReason || 'STANDBY_SETUP';
+        incrementCounter(scanReport.watchlistReasons, watchlistReason);
+        scanReport.watchlistCount++;
+        scanReport.phaseBreakdown.strategyWatchlist++;
+        recordStrategyLesson(tracker, signal.symbol || symbol, {
+          lessonReason: signal.standbyReason || 'Setup masih standby',
+          rejectionReason: signal.standbyReason || 'Setup masih standby',
+          diagnostics: signal.diagnostics || buildOutcomeLessonDiagnostics(signal),
+          reasonKey: watchlistReason,
+        }, scanReport, null, { kind: 'watchlist', reasonKey: watchlistReason });
+        technicalWatchlist.push({
+          symbol: signal.symbol,
+          score: signal.score,
+          reason: signal.standbyReason,
+          bias: signal.bias || 'WATCHLIST',
+          entry: signal.riskReward?.entry,
+          riskReward: signal.riskReward,
+          quality: 'WATCHLIST',
+          watchlistReason,
+          diagnostics: signal.diagnostics || null,
+          trading_type: signal.trading_type || 'MONITORING',
+        });
+        logger.info(`👀 ${symbol}: standby setup only (R:R ${signal.riskReward?.rr?.toFixed(2) || 'N/A'})`);
+        logAudit(symbol, 'STRATEGY', 'WATCHLIST', signal.score, signal.standbyReason);
+      } else if (signal) {
+        signal.candles = mtfData.H1;
+        candidates.push(signal);
+        scanReport.candidateCount++;
+        scanReport.phaseBreakdown.strategyCandidate++;
+        logger.info(`✅ ${symbol}: ${signal.bias} (score: ${signal.score})`);
+        logAudit(symbol, 'STRATEGY', 'PASSED', signal.score, signal.reasons.join(', '));
+      } else {
+        rejected++;
+        scanReport.rejectedCount++;
+        scanReport.phaseBreakdown.strategyRejected++;
+        const reason = isRejection ? result.rejectionReason : 'Technical requirements not met';
+        if (!isRejection) incrementCounter(scanReport.rejectionReasons, 'technical_requirements_not_met');
+        if (isRejection && scanReport.strategyRejectSamples.length < 40) {
+          scanReport.strategyRejectSamples.push(buildStrategyRejectSample(symbol, result));
+        }
+        logAudit(symbol, 'STRATEGY', 'REJECTED', 0, reason);
+      }
+
+      await sleep(config.binance.rateLimitMs);
+    } catch (err) {
+      logger.error(`Error processing ${symbol}:`, err.message);
+      errors++;
+      pushScanError(`${symbol}: ${err.message}`);
+    }
+  }
+
+  return { candidates, technicalWatchlist, filtered, rejected, errors };
+}
+
+/**
  * Run a single scan cycle:
  * 1. Monitor active trades for TP/SL
  * 2. Fetch top pairs
@@ -445,168 +604,8 @@ async function runScanCycle() {
     };
 
     // 2. Filter + evaluate each pair
-    const candidates = [];
-    const technicalWatchlist = [];
-    let filtered = 0;
-    let rejected = 0;
-    let errors = 0;
-
-    for (const symbol of pairs) {
-    // Skip if just hit TP/SL in this cycle to avoid duplicate signals
-    if (hitSymbols.includes(symbol.toUpperCase())) {
-      logger.info(`⏭️ Skipping ${symbol} - just hit TP/SL in this cycle.`);
-      continue;
-    }
-
-    // ─── Pair-Specific Constraints Check ───
-    const sym = symbol.toUpperCase();
-    const stats = tracker.getPairStats(sym, 'ANY'); 
-    
-    // Rule: After 2 SL on BASE ASSET -> 24h no trade
-    if (stats.slHits >= 2) {
-      logger.info(`🚫 Skipping ${sym}: Base Asset (${stats.baseAsset}) on cooldown (2 SL hits in 24h)`);
-      logAudit(sym, 'PRE-FILTER', 'REJECTED', 0, 'Asset SL Cooldown (2 hits in 24h)');
-      continue;
-    }
-
-    try {
-      // Quick filter: fetch ticker first (cheap API call)
-      const ticker = await fetch24hTicker(symbol);
-      if (!ticker) {
-        scanReport.checks.tickerUnavailable = (scanReport.checks.tickerUnavailable || 0) + 1;
-        scanReport.phaseBreakdown.preFilterRejected++;
-        continue;
-      }
-
-      // Fetch H4 candles for pre-filter so the early gate matches the actual
-      // H4 support/resistance strategy.
-      const h4Candles = await fetchOHLCV(symbol, config.timeframes.H4, 50);
-
-      if (!Array.isArray(h4Candles) || h4Candles.length === 0) {
-        errors++;
-        pushScanError(`No H4 candles for ${symbol}`);
-        scanReport.phaseBreakdown.preFilterRejected++;
-        continue;
-      }
-
-      await sleep(config.binance.rateLimitMs);
-
-      const h4Trend = analyzeTrend(h4Candles, config.indicators.ema);
-      const filterResult = applyFilters({
-        symbol,
-        ticker,
-        trend: h4Trend,
-        candles: h4Candles,
-      });
-
-      if (!filterResult.pass) {
-        filtered++;
-        scanReport.filteredCount++;
-        scanReport.phaseBreakdown.preFilterRejected++;
-        recordPreFilterLesson(tracker, symbol, filterResult.reasons.join(', '), scanReport, filterResult.reasonKeys);
-        logAudit(symbol, 'PRE-FILTER', 'REJECTED', 0, filterResult.reasons.join(', '));
-        continue;
-      }
-      scanReport.phaseBreakdown.preFilterPassed++;
-
-      // Passed filter → fetch multi-TF data for support/resistance + structure
-      logger.info(`📊 ${symbol} passed pre-filters, fetching multi-TF data...`);
-      logAudit(symbol, 'PRE-FILTER', 'PASSED', 0, 'Trend / support / resistance confirmed');
-      const mtfData = await fetchMultiTimeframe(symbol);
-      
-      if (!mtfData) {
-        errors++;
-        pushScanError(`Multi-timeframe fetch failed for ${symbol}`);
-        continue;
-      }
-
-      // Run strategy evaluation (includes hard kill-switches + R:R check)
-      const futuresSym = toFuturesSymbol(symbol);
-      const specs = exchangeSpecs[futuresSym] || { stepSize: 0.001, minNotional: 5.0 };
-
-      const result = evaluateSignal(symbol, mtfData, { 
-          accountBalance: effectiveBalance,
-          stepSize: specs.stepSize,
-          minNotional: specs.minNotional,
-          minRrRatio: scanReport.adaptiveThresholds?.minRrRatio,
-          minFinalScore: scanReport.adaptiveThresholds?.minFinalScore,
-          standbyMinRr: scanReport.adaptiveThresholds?.standbyMinRr,
-          scoreWeights: scanReport.adaptiveThresholds?.scoreWeights,
-          includeRejectionReason: true
-      });
-      
-      // evaluateSignal returns:
-      //   Success: raw signal object { symbol, bias, score, ... }
-      //   Rejection: { signal: null, rejectionReason: '...' }
-      const isRejection = result && result.signal === null && result.rejectionReason;
-      const signal = isRejection ? null : result;
-      const strategyDebug = result?.diagnostics?.strategyDebug || signal?.diagnostics?.strategyDebug || null;
-
-      if (strategyDebug && scanReport.strategyDebugSamples.length < 80) {
-        scanReport.strategyDebugSamples.push(strategyDebug);
-      }
-
-      if (isRejection) {
-        const reasonKey = result.reasonKey || classifyStrategyLessonReason(result);
-        incrementCounter(scanReport.rejectionReasons, reasonKey);
-        recordStrategyLesson(tracker, symbol, {
-          ...result,
-          lessonReason: result.rejectionReason,
-          reasonKey,
-        }, scanReport);
-      }
-
-      if (signal && signal.standbyOnly) {
-        const watchlistReason = signal.watchlistReason || 'STANDBY_SETUP';
-        incrementCounter(scanReport.watchlistReasons, watchlistReason);
-        scanReport.watchlistCount++;
-        scanReport.phaseBreakdown.strategyWatchlist++;
-        recordStrategyLesson(tracker, signal.symbol || symbol, {
-          lessonReason: signal.standbyReason || 'Setup masih standby',
-          rejectionReason: signal.standbyReason || 'Setup masih standby',
-          diagnostics: signal.diagnostics || buildOutcomeLessonDiagnostics(signal),
-          reasonKey: watchlistReason,
-        }, scanReport, null, { kind: 'watchlist', reasonKey: watchlistReason });
-        technicalWatchlist.push({
-          symbol: signal.symbol,
-          score: signal.score,
-          reason: signal.standbyReason,
-          bias: signal.bias || 'WATCHLIST',
-          entry: signal.riskReward?.entry,
-          riskReward: signal.riskReward,
-          quality: 'WATCHLIST',
-          watchlistReason,
-          diagnostics: signal.diagnostics || null,
-          trading_type: signal.trading_type || 'MONITORING',
-        });
-        logger.info(`👀 ${symbol}: standby setup only (R:R ${signal.riskReward?.rr?.toFixed(2) || 'N/A'})`);
-        logAudit(symbol, 'STRATEGY', 'WATCHLIST', signal.score, signal.standbyReason);
-      } else if (signal) {
-        signal.candles = mtfData.H1; // Save candles for the chart later
-        candidates.push(signal);
-        scanReport.candidateCount++;
-        scanReport.phaseBreakdown.strategyCandidate++;
-        logger.info(`✅ ${symbol}: ${signal.bias} (score: ${signal.score})`);
-        logAudit(symbol, 'STRATEGY', 'PASSED', signal.score, signal.reasons.join(', '));
-      } else {
-        rejected++;
-        scanReport.rejectedCount++;
-        scanReport.phaseBreakdown.strategyRejected++;
-        const reason = isRejection ? result.rejectionReason : 'Technical requirements not met';
-        if (!isRejection) incrementCounter(scanReport.rejectionReasons, 'technical_requirements_not_met');
-        if (isRejection && scanReport.strategyRejectSamples.length < 40) {
-          scanReport.strategyRejectSamples.push(buildStrategyRejectSample(symbol, result));
-        }
-        logAudit(symbol, 'STRATEGY', 'REJECTED', 0, reason);
-      }
-
-      await sleep(config.binance.rateLimitMs);
-    } catch (err) {
-      logger.error(`Error processing ${symbol}:`, err.message);
-      errors++;
-      pushScanError(`${symbol}: ${err.message}`);
-    }
-  }
+    const pairEvalResult = await evaluatePairCandidates(pairs, hitSymbols, exchangeSpecs, effectiveBalance, scanReport, pushScanError, config, tracker);
+    const { candidates, technicalWatchlist, filtered, rejected, errors } = pairEvalResult;
 
   // 3. Selection & Batching
   const candidateRank = (candidate) => {
