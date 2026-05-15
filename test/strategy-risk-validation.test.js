@@ -146,6 +146,34 @@ test('good score with low notional becomes WATCHLIST_LOW_BALANCE', () => {
   }
 });
 
+test('high-priced symbol with coarse step size reports min tradable notional instead of zero', () => {
+  const oldMaxPositionPercentage = config.strategy.maxPositionPercentage;
+  config.strategy.maxPositionPercentage = 3.0;
+
+  try {
+    const { calculateRiskReward } = loadStrategyWithMock();
+    const result = calculateRiskReward('SHORT', 289.33, {
+      wick: { support: 249.0, resistance: 304.0 },
+      body: { support: 249.0, resistance: 304.0 },
+      trend: {},
+    }, {
+      symbol: 'TAOUSDT',
+      atr: 5,
+      accountBalance: 5.15,
+      minNotional: 5,
+      stepSize: 0.1,
+    });
+
+    assert.equal(result.failureType, 'NOTIONAL_BELOW_MIN_AFTER_CAP');
+    assert.match(result.failureReason, /Min quantity exceeds max position cap/);
+    assert.equal(result.debug.calculatedNotional > 0, true);
+    assert.equal(result.debug.calculatedNotional.toFixed(2), '28.93');
+    assert.equal(Number.isFinite(result.rr), true);
+  } finally {
+    config.strategy.maxPositionPercentage = oldMaxPositionPercentage;
+  }
+});
+
 test('low score still gets hard rejected', () => {
   const { evaluateSignal } = loadStrategyWithMock();
   const result = evaluateSignal('LOWSCOREUSDT', {

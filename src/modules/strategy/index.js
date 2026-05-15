@@ -241,7 +241,29 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     if (notionalValue > maxNotional) {
       notionalValue = maxNotional;
       quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
+      if (quantity === 0 && options.stepSize) quantity = options.stepSize;
       notionalValue = quantity * entry;
+      if (notionalValue > maxNotional) {
+        logger.debug(`[RR] LONG: Min quantity notional ${notionalValue} > max cap ${maxNotional}`);
+        return makeFailure(`Min quantity exceeds max position cap (${notionalValue.toFixed(2)} > ${maxNotional.toFixed(2)})`, {
+          failureType: 'NOTIONAL_BELOW_MIN_AFTER_CAP',
+          sl,
+          tp,
+          rr,
+          debug: {
+            balance: ACCOUNT_BALANCE,
+            calculatedNotional: notionalValue,
+            minNotional: rawMinNotional,
+            effectiveMinNotional: minRequired,
+            maxNotional,
+            minTradableNotional: notionalValue,
+            stepSize: options.stepSize,
+            riskPct: RISK_PCT,
+            leverage: LEVERAGE,
+            cappedByBalance: true,
+          },
+        });
+      }
       // If after capping it's below minNotional, it's untradeable
       if (notionalValue < minRequired) {
         logger.debug(`[RR] LONG: Notional ${notionalValue} < min ${minRequired} after cap`);
@@ -364,7 +386,29 @@ function calculateRiskReward(bias, currentPrice, levels, options = {}) {
     if (notionalValue > maxNotional) {
       notionalValue = maxNotional;
       quantity = options.stepSize ? roundStep(notionalValue / entry, options.stepSize) : (notionalValue / entry);
+      if (quantity === 0 && options.stepSize) quantity = options.stepSize;
       notionalValue = quantity * entry;
+      if (notionalValue > maxNotional) {
+        logger.debug(`[RR] SHORT: Min quantity notional ${notionalValue} > max cap ${maxNotional}`);
+        return makeFailure(`Min quantity exceeds max position cap (${notionalValue.toFixed(2)} > ${maxNotional.toFixed(2)})`, {
+          failureType: 'NOTIONAL_BELOW_MIN_AFTER_CAP',
+          sl,
+          tp,
+          rr,
+          debug: {
+            balance: ACCOUNT_BALANCE,
+            calculatedNotional: notionalValue,
+            minNotional: rawMinNotional,
+            effectiveMinNotional: minRequired,
+            maxNotional,
+            minTradableNotional: notionalValue,
+            stepSize: options.stepSize,
+            riskPct: RISK_PCT,
+            leverage: LEVERAGE,
+            cappedByBalance: true,
+          },
+        });
+      }
       if (notionalValue < minRequired) {
         logger.debug(`[RR] SHORT: Notional ${notionalValue} < min ${minRequired} after cap`);
         return makeFailure(`Notional below min after cap (${notionalValue.toFixed(2)} < ${minRequired.toFixed(2)})`, {
